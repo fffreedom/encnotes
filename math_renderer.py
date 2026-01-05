@@ -66,7 +66,7 @@ class MathRenderer:
             fig.text(
                 0.5, 0.5, f'${latex_code}$',
                 fontsize=self.fontsize,
-                verticalalignment='center',
+                verticalalignment='bottom',
                 horizontalalignment='center'
             )
             
@@ -97,68 +97,176 @@ class MathRenderer:
     def render_mathml(self, mathml_code):
         """
         渲染MathML公式
-        使用简单的方法将MathML转换为图片
+        将MathML转换为LaTeX后渲染
         """
         try:
             # 尝试使用lxml解析MathML
             from lxml import etree
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
             
             # 解析MathML
             root = etree.fromstring(mathml_code.encode('utf-8'))
             
-            # 简单提取文本内容（实际应用中需要更复杂的转换）
-            text = self._extract_mathml_text(root)
+            # 将MathML转换为LaTeX
+            latex_code = self._mathml_to_latex(root)
             
-            # 创建图形（调整大小以匹配文字）
-            fig, ax = plt.subplots(figsize=(2, 0.4))
-            ax.axis('off')
-            ax.text(
-                0.5, 0.5, text,
-                fontsize=self.fontsize,
-                ha='center',
-                va='center',
-                family='serif'
-            )
-            
-            # 保存到内存（最小边距）
-            buf = io.BytesIO()
-            plt.savefig(
-                buf,
-                format='png',
-                dpi=self.dpi,
-                bbox_inches='tight',
-                pad_inches=0.01,  # 最小边距
-                facecolor='white'
-            )
-            plt.close(fig)
-            
-            # 转换为QImage
-            buf.seek(0)
-            image = QImage()
-            image.loadFromData(buf.read())
-            
-            return image
+            # 使用LaTeX渲染器渲染
+            return self.render_latex(latex_code)
             
         except Exception as e:
             print(f"MathML渲染失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
             
-    def _extract_mathml_text(self, element):
-        """从MathML元素中提取文本"""
-        text_parts = []
+    def _mathml_to_latex(self, element):
+        """
+        将MathML元素转换为LaTeX代码
+        支持常用的MathML标签
+        """
+        tag = element.tag
         
-        # 递归提取文本
-        if element.text:
-            text_parts.append(element.text)
+        # 移除命名空间
+        if '}' in tag:
+            tag = tag.split('}')[1]
+        
+        # 处理不同的MathML标签
+        if tag == 'math':
+            # 根元素，处理子元素
+            return ''.join(self._mathml_to_latex(child) for child in element)
+        
+        elif tag == 'mi':  # 标识符（变量）
+            return element.text or ''
+        
+        elif tag == 'mn':  # 数字
+            return element.text or ''
+        
+        elif tag == 'mo':  # 运算符
+            op = element.text or ''
+            # 特殊运算符映射
+            op_map = {
+                '×': r'\times',
+                '÷': r'\div',
+                '≤': r'\leq',
+                '≥': r'\geq',
+                '≠': r'\neq',
+                '∞': r'\infty',
+                '∑': r'\sum',
+                '∏': r'\prod',
+                '∫': r'\int',
+            }
+            return op_map.get(op, op)
+        
+        elif tag == 'mfrac':  # 分数
+            if len(element) >= 2:
+                numerator = self._mathml_to_latex(element[0])
+                denominator = self._mathml_to_latex(element[1])
+                return rf'\frac{{{numerator}}}{{{denominator}}}'
+            return ''
+        
+        elif tag == 'msqrt':  # 平方根
+            content = ''.join(self._mathml_to_latex(child) for child in element)
+            return rf'\sqrt{{{content}}}'
+        
+        elif tag == 'mroot':  # n次根
+            if len(element) >= 2:
+                base = self._mathml_to_latex(element[0])
+                index = self._mathml_to_latex(element[1])
+                return rf'\sqrt[{index}]{{{base}}}'
+            return ''
+        
+        elif tag == 'msup':  # 上标
+            if len(element) >= 2:
+                base = self._mathml_to_latex(element[0])
+                superscript = self._mathml_to_latex(element[1])
+                return rf'{base}^{{{superscript}}}'
+            return ''
+        
+        elif tag == 'msub':  # 下标
+            if len(element) >= 2:
+                base = self._mathml_to_latex(element[0])
+                subscript = self._mathml_to_latex(element[1])
+                return rf'{base}_{{{subscript}}}'
+            return ''
+        
+        elif tag == 'msubsup':  # 上下标
+            if len(element) >= 3:
+                base = self._mathml_to_latex(element[0])
+                subscript = self._mathml_to_latex(element[1])
+                superscript = self._mathml_to_latex(element[2])
+                return rf'{base}_{{{subscript}}}^{{{superscript}}}'
+            return ''
+        
+        elif tag == 'mrow':  # 行（组合元素）
+            return ''.join(self._mathml_to_latex(child) for child in element)
+        
+        elif tag == 'mtext':  # 文本
+            return rf'\text{{{element.text or ""}}}'
+        
+        elif tag == 'mspace':  # 空格
+            return r'\,'
+        
+        elif tag == 'mfenced':  # 括号
+            open_char = element.get('open', '(')
+            close_char = element.get('close', ')')
+            content = ''.join(self._mathml_to_latex(child) for child in element)
             
-        for child in element:
-            child_text = self._extract_mathml_text(child)
-            if child_text:
-                text_parts.append(child_text)
-            if child.tail:
-                text_parts.append(child.tail)
-                
-        return ''.join(text_parts)
+            # LaTeX括号映射
+            bracket_map = {
+                '(': r'\left(',
+                ')': r'\right)',
+                '[': r'\left[',
+                ']': r'\right]',
+                '{': r'\left\{',
+                '}': r'\right\}',
+                '|': r'\left|',
+            }
+            
+            left = bracket_map.get(open_char, open_char)
+            right = bracket_map.get(close_char, close_char)
+            return f'{left}{content}{right}'
+        
+        elif tag == 'mtable':  # 矩阵/表格
+            rows = []
+            for row in element:
+                if row.tag.endswith('mtr'):
+                    cells = []
+                    for cell in row:
+                        if cell.tag.endswith('mtd'):
+                            cells.append(self._mathml_to_latex(cell))
+                    rows.append(' & '.join(cells))
+            return r'\begin{matrix}' + r'\\'.join(rows) + r'\end{matrix}'
+        
+        elif tag == 'munderover':  # 上下限（如求和）
+            if len(element) >= 3:
+                base = self._mathml_to_latex(element[0])
+                under = self._mathml_to_latex(element[1])
+                over = self._mathml_to_latex(element[2])
+                return rf'{base}_{{{under}}}^{{{over}}}'
+            return ''
+        
+        elif tag == 'munder':  # 下限
+            if len(element) >= 2:
+                base = self._mathml_to_latex(element[0])
+                under = self._mathml_to_latex(element[1])
+                return rf'{base}_{{{under}}}'
+            return ''
+        
+        elif tag == 'mover':  # 上限
+            if len(element) >= 2:
+                base = self._mathml_to_latex(element[0])
+                over = self._mathml_to_latex(element[1])
+                # 检查是否是帽子、波浪线等
+                over_text = element[1].text or ''
+                if over_text == '¯':
+                    return rf'\overline{{{base}}}'
+                elif over_text == '^':
+                    return rf'\hat{{{base}}}'
+                elif over_text == '~':
+                    return rf'\tilde{{{base}}}'
+                else:
+                    return rf'{base}^{{{over}}}'
+            return ''
+        
+        else:
+            # 未知标签，尝试处理子元素
+            return ''.join(self._mathml_to_latex(child) for child in element)

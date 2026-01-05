@@ -1,5 +1,54 @@
 # 更新日志
 
+## v3.4.4 (2026-01-05)
+
+### 🐛 Bug修复
+
+#### 公式对齐一致性修复
+- 🔧 **修复编辑时公式对齐不一致的问题**
+  - 问题：编辑时插入的公式位于文本上部，重新打开后公式与文本在行高中间对齐
+  - 原因：`insert_math_formula()` 生成的HTML缺少 `vertical-align: middle` 样式，而 `rerender_formulas()` 有此样式
+  - 解决：在插入公式时也添加 `vertical-align: middle` 样式
+  - 影响：现在编辑时和重新打开后的公式对齐效果完全一致
+
+---
+
+## v3.4.3 (2026-01-05)
+
+### 🐛 重要Bug修复
+
+#### MathML公式渲染修复
+- 🔧 **修复MathML公式无法正确显示的问题**
+  - 问题：MathML公式只显示纯文本，无法显示数学结构（分数、根号、上下标等）
+  - 原因：旧实现只是简单提取文本，忽略了MathML的结构信息
+  - 解决：实现完整的MathML到LaTeX转换器，支持常用数学结构
+  - 影响：所有MathML公式现在都能正确渲染为数学公式图片
+
+#### 技术改进
+- ✨ **完整的MathML支持** - 新增 `_mathml_to_latex()` 方法
+  - 支持基本元素：`<mi>`, `<mn>`, `<mo>` (变量、数字、运算符)
+  - 支持分数：`<mfrac>` → `\frac{}{}`
+  - 支持根号：`<msqrt>`, `<mroot>` → `\sqrt{}`, `\sqrt[n]{}`
+  - 支持上下标：`<msup>`, `<msub>`, `<msubsup>` → `^{}`, `_{}`, `_{}^{}`
+  - 支持括号：`<mfenced>` → `\left( \right)`
+  - 支持矩阵：`<mtable>` → `\begin{matrix}...\end{matrix}`
+  - 支持上下限：`<munder>`, `<mover>`, `<munderover>` → 求和、积分等
+  - 支持特殊符号：×, ÷, ≤, ≥, ≠, ∞, ∑, ∏, ∫ 等
+
+- ✨ **统一渲染引擎** - MathML和LaTeX使用相同的渲染引擎
+  - MathML先转换为LaTeX
+  - 使用matplotlib的LaTeX渲染器
+  - 保证渲染质量和一致性
+
+#### 支持的MathML示例
+- 分数：`<math><mfrac><mi>a</mi><mi>b</mi></mfrac></math>` → a/b
+- 根号：`<math><msqrt><mi>x</mi></msqrt></math>` → √x
+- 上标：`<math><msup><mi>x</mi><mn>2</mn></msup></math>` → x²
+- 下标：`<math><msub><mi>x</mi><mn>1</mn></msub></math>` → x₁
+- 求和：`<math><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover></math>` → Σ(i=1 to n)
+
+---
+
 ## v3.4.2 (2026-01-05)
 
 ### 🎨 公式显示优化

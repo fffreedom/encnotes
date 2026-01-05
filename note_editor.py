@@ -529,8 +529,8 @@ class NoteEditor(QWidget):
             escaped_code = html.escape(code)
             alt_text = f"MATH:{formula_type}:{escaped_code}"
             
-            # 公式图片添加样式
-            formula_html = f'<img src="data:image/png;base64,{image_base64}" alt="{alt_text}" />'
+            # 公式图片添加样式（vertical-align: middle 使公式与文本在行高中间对齐）
+            formula_html = f'<img src="data:image/png;base64,{image_base64}" alt="{alt_text}" style="vertical-align: bottom;" />'
             cursor.insertHtml(formula_html)
         else:
             # 如果渲染失败，插入原始代码
