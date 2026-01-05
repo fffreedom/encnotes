@@ -47,3 +47,17 @@ htmlcov/
 # Temporary files
 *.tmp
 *.bak
+
+# Build artifacts
+build/
+dist/
+*.spec
+dmg_build/
+*.dmg
+*.app
+*.iconset
+temp_icon.png
+
+# PyInstaller
+*.manifest
+*.spec

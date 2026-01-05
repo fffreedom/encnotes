@@ -15,7 +15,8 @@ class MathRenderer:
     """数学公式渲染器"""
     
     def __init__(self):
-        self.dpi = 150  # 渲染分辨率
+        self.dpi = 72  # 渲染分辨率（72 DPI匹配屏幕显示）
+        self.fontsize = 12  # 公式字体大小（略小于正文以匹配行高）
         
     def render(self, code, formula_type):
         """
@@ -58,14 +59,15 @@ class MathRenderer:
             )
             
             # 调整图形大小
-            fig.set_size_inches(width / self.dpi, height / self.dpi)
+            total_height = height + depth
+            fig.set_size_inches(width / self.dpi, total_height / self.dpi)
             
-            # 添加文本
+            # 添加文本（使用center对齐，让公式在图片中居中）
             fig.text(
-                0, 0, f'${latex_code}$',
-                fontsize=20,
-                verticalalignment='bottom',
-                horizontalalignment='left'
+                0.5, 0.5, f'${latex_code}$',
+                fontsize=self.fontsize,
+                verticalalignment='center',
+                horizontalalignment='center'
             )
             
             # 保存到内存
@@ -75,7 +77,7 @@ class MathRenderer:
                 format='png',
                 dpi=self.dpi,
                 bbox_inches='tight',
-                pad_inches=0.1,
+                pad_inches=0.05,
                 facecolor='white',
                 edgecolor='none'
             )
@@ -110,25 +112,25 @@ class MathRenderer:
             # 简单提取文本内容（实际应用中需要更复杂的转换）
             text = self._extract_mathml_text(root)
             
-            # 创建图形
-            fig, ax = plt.subplots(figsize=(4, 1))
+            # 创建图形（调整大小以匹配文字）
+            fig, ax = plt.subplots(figsize=(2, 0.4))
             ax.axis('off')
             ax.text(
                 0.5, 0.5, text,
-                fontsize=16,
+                fontsize=self.fontsize,
                 ha='center',
                 va='center',
                 family='serif'
             )
             
-            # 保存到内存
+            # 保存到内存（最小边距）
             buf = io.BytesIO()
             plt.savefig(
                 buf,
                 format='png',
                 dpi=self.dpi,
                 bbox_inches='tight',
-                pad_inches=0.1,
+                pad_inches=0.01,  # 最小边距
                 facecolor='white'
             )
             plt.close(fig)
