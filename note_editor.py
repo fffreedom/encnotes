@@ -33,6 +33,66 @@ class PasteImageTextEdit(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_editor = parent
+        self.setMouseTracking(True)
+        self.resizing_image = None
+        self.resize_start_pos = None
+        self.resize_start_size = None
+    
+    def mousePressEvent(self, event):
+        """鼠标按下事件 - 检测是否点击图片"""
+        cursor = self.cursorForPosition(event.pos())
+        char_format = cursor.charFormat()
+        
+        # 检查是否点击了图片
+        if char_format.isImageFormat():
+            self.resizing_image = char_format.toImageFormat()
+            self.resize_start_pos = event.pos()
+            self.resize_start_size = (self.resizing_image.width(), self.resizing_image.height())
+            event.accept()
+            return
+        
+        super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件 - 调整图片大小"""
+        if self.resizing_image and self.resize_start_pos:
+            # 计算新的大小
+            delta = event.pos() - self.resize_start_pos
+            new_width = max(50, self.resize_start_size[0] + delta.x())
+            new_height = max(50, self.resize_start_size[1] + delta.y())
+            
+            # 保持宽高比
+            aspect_ratio = self.resize_start_size[0] / self.resize_start_size[1]
+            new_height = int(new_width / aspect_ratio)
+            
+            # 更新图片大小
+            self.resizing_image.setWidth(new_width)
+            self.resizing_image.setHeight(new_height)
+            
+            event.accept()
+            return
+        
+        # 检查鼠标是否悬停在图片上，改变光标
+        cursor = self.cursorForPosition(event.pos())
+        char_format = cursor.charFormat()
+        
+        if char_format.isImageFormat():
+            self.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+        else:
+            self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+        
+        super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        """鼠标释放事件 - 完成调整"""
+        if self.resizing_image:
+            self.resizing_image = None
+            self.resize_start_pos = None
+            self.resize_start_size = None
+            event.accept()
+            return
+        
+        super().mouseReleaseEvent(event)
     
     def canInsertFromMimeData(self, source):
         """检查是否可以从MIME数据插入"""
@@ -110,17 +170,36 @@ class NoteEditor(QWidget):
         # 启用富文本
         self.text_edit.setAcceptRichText(True)
         
+        # 监听光标位置变化，自动格式化第一行
+        self.text_edit.cursorPositionChanged.connect(self.auto_format_first_line)
+        
         layout.addWidget(self.text_edit)
         
     def create_format_toolbar(self):
         """创建格式工具栏（模仿Mac备忘录）"""
+        # 创建容器widget来实现居中
+        toolbar_container = QWidget()
+        toolbar_container.setStyleSheet("""
+            QWidget {
+                background-color: #f5f5f5;
+                border-bottom: 1px solid #d0d0d0;
+            }
+        """)
+        
+        container_layout = QHBoxLayout(toolbar_container)
+        container_layout.setContentsMargins(0, 4, 0, 4)
+        
+        # 添加左侧弹簧
+        container_layout.addStretch()
+        
+        # 创建工具栏
         toolbar = QToolBar()
         toolbar.setMovable(False)
         toolbar.setStyleSheet("""
             QToolBar {
-                background-color: #f5f5f5;
-                border-bottom: 1px solid #d0d0d0;
-                padding: 4px;
+                background-color: transparent;
+                border: none;
+                padding: 0px;
                 spacing: 2px;
             }
             QToolButton {
@@ -133,6 +212,19 @@ class NoteEditor(QWidget):
                 background-color: #e0e0e0;
             }
             QToolButton:pressed {
+                background-color: #d0d0d0;
+            }
+            QPushButton {
+                border: none;
+                border-radius: 4px;
+                padding: 4px 8px;
+                margin: 2px;
+                background-color: transparent;
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+            QPushButton:pressed {
                 background-color: #d0d0d0;
             }
         """)
@@ -235,7 +327,13 @@ class NoteEditor(QWidget):
         mathml_button.clicked.connect(self.insert_mathml)
         toolbar.addWidget(mathml_button)
         
-        return toolbar
+        # 将工具栏添加到容器
+        container_layout.addWidget(toolbar)
+        
+        # 添加右侧弹簧
+        container_layout.addStretch()
+        
+        return toolbar_container
     
     # 代理属性和方法，使NoteEditor表现得像QTextEdit
     @property
@@ -269,6 +367,42 @@ class NoteEditor(QWidget):
     
     def setTextCursor(self, cursor):
         self.text_edit.setTextCursor(cursor)
+    
+    def auto_format_first_line(self):
+        """自动将第一行格式化为大标题"""
+        # 获取文档
+        document = self.text_edit.document()
+        if document.isEmpty():
+            return
+        
+        # 获取第一个文本块（第一行）
+        first_block = document.firstBlock()
+        if not first_block.isValid():
+            return
+        
+        # 创建光标指向第一行
+        cursor = QTextCursor(first_block)
+        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        
+        # 检查第一行是否已经是标题格式
+        char_fmt = cursor.charFormat()
+        current_size = char_fmt.fontPointSize()
+        
+        # 如果第一行不是大标题格式（22号字体），则应用格式
+        if current_size != 22:
+            # 阻止信号，避免递归
+            self.text_edit.blockSignals(True)
+            
+            # 设置字符格式
+            new_char_fmt = QTextCharFormat()
+            new_char_fmt.setFontPointSize(22)
+            new_char_fmt.setFontWeight(QFont.Weight.Bold)
+            
+            # 应用格式到第一行
+            cursor.mergeCharFormat(new_char_fmt)
+            
+            # 恢复信号
+            self.text_edit.blockSignals(False)
     
     # 格式化方法
     def apply_heading(self, level):
@@ -469,6 +603,9 @@ class NoteEditor(QWidget):
         """插入图片到编辑器"""
         # 限制图片大小
         max_width = 800
+        original_width = image.width()
+        original_height = image.height()
+        
         if image.width() > max_width:
             image = image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
         
@@ -486,8 +623,14 @@ class NoteEditor(QWidget):
         # 创建图片格式
         cursor = self.text_edit.textCursor()
         
-        # 使用data URI插入图片
-        image_html = f'<img src="data:image/png;base64,{image_data}" alt="{image_name}" />'
+        # 使用data URI插入图片，添加样式使其可调整大小
+        # 添加 contenteditable="false" 使图片可以被选中
+        # 添加 style 使图片可以通过拖动边角调整大小
+        image_html = f'''<img src="data:image/png;base64,{image_data}" 
+                         alt="{image_name}" 
+                         width="{image.width()}" 
+                         height="{image.height()}"
+                         style="max-width: 100%; cursor: move; display: block; margin: 10px 0;" />'''
         cursor.insertHtml(image_html)
         cursor.insertBlock()  # 添加新行
         

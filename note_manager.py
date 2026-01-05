@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
+from encryption_manager import EncryptionManager
 
 
 class NoteManager:
@@ -21,6 +22,10 @@ class NoteManager:
         
         self.db_path = self.data_dir / "NoteStore.sqlite"
         self.conn = None
+        
+        # 初始化加密管理器
+        self.encryption_manager = EncryptionManager()
+        
         self.init_database()
         
     def init_database(self):
@@ -111,6 +116,47 @@ class NoteManager:
             )
         ''')
         
+        # 创建标签表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ZTAG (
+                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
+                Z_ENT INTEGER DEFAULT 3,
+                Z_OPT INTEGER DEFAULT 1,
+                ZIDENTIFIER TEXT UNIQUE NOT NULL,
+                ZNAME TEXT NOT NULL,
+                ZCREATIONDATE REAL,
+                ZMODIFICATIONDATE REAL
+            )
+        ''')
+        
+        # 创建笔记-标签关联表（多对多关系）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ZNOTETAG (
+                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
+                ZNOTEID TEXT NOT NULL,
+                ZTAGID TEXT NOT NULL,
+                FOREIGN KEY (ZNOTEID) REFERENCES ZNOTE(ZIDENTIFIER),
+                FOREIGN KEY (ZTAGID) REFERENCES ZTAG(ZIDENTIFIER),
+                UNIQUE(ZNOTEID, ZTAGID)
+            )
+        ''')
+        
+        # 创建标签索引
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS ZTAG_IDENTIFIER_INDEX 
+            ON ZTAG(ZIDENTIFIER)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS ZNOTETAG_NOTEID_INDEX 
+            ON ZNOTETAG(ZNOTEID)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS ZNOTETAG_TAGID_INDEX 
+            ON ZNOTETAG(ZTAGID)
+        ''')
+        
         self.conn.commit()
         
     def _timestamp_to_cocoa(self, dt: datetime) -> float:
@@ -133,6 +179,9 @@ class NoteManager:
         now = datetime.now()
         cocoa_time = self._timestamp_to_cocoa(now)
         
+        # 加密内容
+        encrypted_content = self._encrypt_content(content)
+        
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT INTO ZNOTE (
@@ -140,7 +189,7 @@ class NoteManager:
                 ZCREATIONDATE, ZMODIFICATIONDATE,
                 ZISFAVORITE, ZISDELETED
             ) VALUES (?, ?, ?, ?, ?, ?, 0, 0)
-        ''', (note_id, folder_id, title, content, cocoa_time, cocoa_time))
+        ''', (note_id, folder_id, title, encrypted_content, cocoa_time, cocoa_time))
         
         self.conn.commit()
         return note_id
@@ -174,9 +223,11 @@ class NoteManager:
             ''', (title, note_id))
             
         if content is not None:
+            # 加密内容
+            encrypted_content = self._encrypt_content(content)
             cursor.execute('''
                 UPDATE ZNOTE SET ZCONTENT = ? WHERE ZIDENTIFIER = ?
-            ''', (content, note_id))
+            ''', (encrypted_content, note_id))
             
         # 更新修改时间
         cocoa_time = self._timestamp_to_cocoa(datetime.now())
@@ -294,11 +345,15 @@ class NoteManager:
         created_at = self._cocoa_to_datetime(row['ZCREATIONDATE'])
         updated_at = self._cocoa_to_datetime(row['ZMODIFICATIONDATE'])
         
+        # 解密内容
+        encrypted_content = row['ZCONTENT'] or ''
+        decrypted_content = self._decrypt_content(encrypted_content)
+        
         return {
             'id': row['ZIDENTIFIER'],
             'folder_id': row['ZFOLDERID'],
             'title': row['ZTITLE'] or '无标题',
-            'content': row['ZCONTENT'] or '',
+            'content': decrypted_content,
             'created_at': created_at.isoformat(),
             'updated_at': updated_at.isoformat(),
             'is_favorite': bool(row['ZISFAVORITE']),
@@ -458,6 +513,227 @@ class NoteManager:
             '_cocoa_created': row['ZCREATIONDATE'],
             '_cocoa_modified': row['ZMODIFICATIONDATE']
         }
+    
+    # ========== 标签管理方法 ==========
+    
+    def create_tag(self, name: str) -> str:
+        """创建新标签"""
+        tag_id = str(uuid.uuid4())
+        now = datetime.now()
+        cocoa_time = self._timestamp_to_cocoa(now)
+        
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT INTO ZTAG (
+                ZIDENTIFIER, ZNAME, ZCREATIONDATE, ZMODIFICATIONDATE
+            ) VALUES (?, ?, ?, ?)
+        ''', (tag_id, name, cocoa_time, cocoa_time))
+        
+        self.conn.commit()
+        return tag_id
+        
+    def get_tag(self, tag_id: str) -> Optional[Dict]:
+        """获取标签"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT * FROM ZTAG WHERE ZIDENTIFIER = ?
+        ''', (tag_id,))
+        
+        row = cursor.fetchone()
+        if row:
+            return self._tag_row_to_dict(row)
+        return None
+        
+    def get_all_tags(self) -> List[Dict]:
+        """获取所有标签"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT * FROM ZTAG 
+            ORDER BY ZNAME ASC
+        ''')
+        
+        return [self._tag_row_to_dict(row) for row in cursor.fetchall()]
+        
+    def update_tag(self, tag_id: str, name: str):
+        """更新标签名称"""
+        cursor = self.conn.cursor()
+        cocoa_time = self._timestamp_to_cocoa(datetime.now())
+        
+        cursor.execute('''
+            UPDATE ZTAG 
+            SET ZNAME = ?, ZMODIFICATIONDATE = ?
+            WHERE ZIDENTIFIER = ?
+        ''', (name, cocoa_time, tag_id))
+        
+        self.conn.commit()
+        
+    def delete_tag(self, tag_id: str):
+        """删除标签（同时删除关联关系）"""
+        cursor = self.conn.cursor()
+        
+        # 删除笔记-标签关联
+        cursor.execute('''
+            DELETE FROM ZNOTETAG WHERE ZTAGID = ?
+        ''', (tag_id,))
+        
+        # 删除标签
+        cursor.execute('''
+            DELETE FROM ZTAG WHERE ZIDENTIFIER = ?
+        ''', (tag_id,))
+        
+        self.conn.commit()
+        
+    def add_tag_to_note(self, note_id: str, tag_id: str):
+        """为笔记添加标签"""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO ZNOTETAG (ZNOTEID, ZTAGID)
+                VALUES (?, ?)
+            ''', (note_id, tag_id))
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            # 关联已存在，忽略
+            pass
+            
+    def remove_tag_from_note(self, note_id: str, tag_id: str):
+        """从笔记移除标签"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            DELETE FROM ZNOTETAG 
+            WHERE ZNOTEID = ? AND ZTAGID = ?
+        ''', (note_id, tag_id))
+        
+        self.conn.commit()
+        
+    def get_note_tags(self, note_id: str) -> List[Dict]:
+        """获取笔记的所有标签"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT t.* FROM ZTAG t
+            INNER JOIN ZNOTETAG nt ON t.ZIDENTIFIER = nt.ZTAGID
+            WHERE nt.ZNOTEID = ?
+            ORDER BY t.ZNAME ASC
+        ''', (note_id,))
+        
+        return [self._tag_row_to_dict(row) for row in cursor.fetchall()]
+        
+    def get_notes_by_tag(self, tag_id: str) -> List[Dict]:
+        """获取带有指定标签的所有笔记"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT n.* FROM ZNOTE n
+            INNER JOIN ZNOTETAG nt ON n.ZIDENTIFIER = nt.ZNOTEID
+            WHERE nt.ZTAGID = ? AND n.ZISDELETED = 0
+            ORDER BY n.ZMODIFICATIONDATE DESC
+        ''', (tag_id,))
+        
+        return [self._row_to_dict(row) for row in cursor.fetchall()]
+        
+    def get_tag_count(self, tag_id: str) -> int:
+        """获取标签下的笔记数量"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) as count FROM ZNOTETAG nt
+            INNER JOIN ZNOTE n ON nt.ZNOTEID = n.ZIDENTIFIER
+            WHERE nt.ZTAGID = ? AND n.ZISDELETED = 0
+        ''', (tag_id,))
+        
+        row = cursor.fetchone()
+        return row['count'] if row else 0
+        
+    def _tag_row_to_dict(self, row: sqlite3.Row) -> Dict:
+        """将标签数据库行转换为字典"""
+        if not row:
+            return None
+            
+        created_at = self._cocoa_to_datetime(row['ZCREATIONDATE'])
+        updated_at = self._cocoa_to_datetime(row['ZMODIFICATIONDATE'])
+        
+        return {
+            'id': row['ZIDENTIFIER'],
+            'name': row['ZNAME'],
+            'created_at': created_at.isoformat(),
+            'updated_at': updated_at.isoformat(),
+            '_pk': row['Z_PK'],
+            '_cocoa_created': row['ZCREATIONDATE'],
+            '_cocoa_modified': row['ZMODIFICATIONDATE']
+        }
+    
+    def _encrypt_content(self, content: str) -> str:
+        """
+        加密笔记内容
+        
+        Args:
+            content: 明文内容
+            
+        Returns:
+            加密后的内容（如果加密已启用）或原内容
+        """
+        if self.encryption_manager.is_unlocked:
+            try:
+                return self.encryption_manager.encrypt(content)
+            except Exception as e:
+                print(f"加密内容失败: {e}")
+                return content
+        return content
+        
+    def _decrypt_content(self, encrypted_content: str) -> str:
+        """
+        解密笔记内容
+        
+        Args:
+            encrypted_content: 加密的内容
+            
+        Returns:
+            解密后的内容（如果加密已启用）或原内容
+        """
+        if not encrypted_content:
+            return ''
+            
+        if self.encryption_manager.is_unlocked:
+            try:
+                return self.encryption_manager.decrypt(encrypted_content)
+            except Exception as e:
+                # 如果解密失败，可能是未加密的旧数据
+                print(f"解密内容失败，返回原内容: {e}")
+                return encrypted_content
+        return encrypted_content
+        
+    def re_encrypt_all_notes(self):
+        """
+        重新加密所有笔记（用于修改密码后）
+        
+        Returns:
+            重新加密的笔记数量
+        """
+        if not self.encryption_manager.is_unlocked:
+            return 0
+            
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM ZNOTE')
+        
+        count = 0
+        for row in cursor.fetchall():
+            try:
+                # 获取笔记内容（已解密）
+                note = self._row_to_dict(row)
+                content = note['content']
+                
+                # 重新加密
+                encrypted_content = self._encrypt_content(content)
+                
+                # 更新数据库
+                cursor.execute('''
+                    UPDATE ZNOTE SET ZCONTENT = ? WHERE ZIDENTIFIER = ?
+                ''', (encrypted_content, note['id']))
+                
+                count += 1
+            except Exception as e:
+                print(f"重新加密笔记失败 {row['ZIDENTIFIER']}: {e}")
+                
+        self.conn.commit()
+        return count
     
     def __del__(self):
         """析构函数，确保数据库连接关闭"""

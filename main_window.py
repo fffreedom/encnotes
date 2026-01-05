@@ -17,6 +17,7 @@ from note_editor import NoteEditor
 from note_manager import NoteManager
 from export_manager import ExportManager
 from icloud_sync import CloudKitSyncManager
+from password_dialog import UnlockDialog, SetupPasswordDialog, ChangePasswordDialog
 import datetime
 
 
@@ -30,7 +31,19 @@ class MainWindow(QMainWindow):
         self.sync_manager = CloudKitSyncManager(self.note_manager)
         self.current_note_id = None
         self.current_folder_id = None  # 当前选中的文件夹ID
+        self.current_tag_id = None  # 当前选中的标签ID
         self.custom_folders = []  # 自定义文件夹列表
+        self.tags = []  # 标签列表
+        
+        # 加密管理器
+        self.encryption_manager = self.note_manager.encryption_manager
+        
+        # 检查是否需要设置密码或解锁
+        if not self._handle_encryption_setup():
+            # 用户取消了密码设置或解锁，退出应用
+            import sys
+            sys.exit(0)
+        
         self.init_ui()
         self.load_folders()  # 加载文件夹
         self.load_notes()
@@ -59,9 +72,24 @@ class MainWindow(QMainWindow):
         # 左侧：文件夹列表
         self.folder_list = QListWidget()
         self.folder_list.setMaximumWidth(200)
-        self.folder_list.addItem("📝 所有笔记")
-        self.folder_list.addItem("⭐ 收藏")
-        self.folder_list.addItem("🗑️ 最近删除")
+        self.folder_list.setStyleSheet("""
+            QListWidget {
+                border: none;
+                background-color: #f5f5f5;
+                font-size: 13px;
+            }
+            QListWidget::item {
+                padding: 6px 10px;
+                border: none;
+            }
+            QListWidget::item:selected {
+                background-color: #FFE066;
+                color: #000000;
+            }
+            QListWidget::item:hover {
+                background-color: #FFF4CC;
+            }
+        """)
         self.folder_list.setCurrentRow(0)
         self.folder_list.currentRowChanged.connect(self.on_folder_changed)
         
@@ -72,6 +100,39 @@ class MainWindow(QMainWindow):
         # 中间：笔记列表
         self.note_list = QListWidget()
         self.note_list.setMaximumWidth(300)
+        self.note_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 去掉焦点边框
+        self.note_list.setStyleSheet("""
+            QListWidget {
+                border: none;
+                background-color: #ffffff;
+                font-size: 15px;
+                outline: none;
+            }
+            QListWidget::item {
+                padding: 10px 12px;
+                border-bottom: 1px solid #e0e0e0;
+                border-left: none;
+                border-right: none;
+                border-top: none;
+                line-height: 1.4;
+                outline: none;
+            }
+            QListWidget::item:selected {
+                background-color: #FFE066;
+                color: #000000;
+                border: none;
+                outline: none;
+            }
+            QListWidget::item:hover {
+                background-color: #FFF4CC;
+                border: none;
+                outline: none;
+            }
+            QListWidget::item:focus {
+                border: none;
+                outline: none;
+            }
+        """)
         self.note_list.currentItemChanged.connect(self.on_note_selected)
         
         # 右侧：编辑器
@@ -113,6 +174,12 @@ class MainWindow(QMainWindow):
         new_folder_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
         new_folder_action.triggered.connect(self.create_new_folder)
         toolbar.addAction(new_folder_action)
+        
+        # 新建标签按钮
+        new_tag_action = QAction("🏷️ 新建标签", self)
+        new_tag_action.setShortcut(QKeySequence("Ctrl+T"))
+        new_tag_action.triggered.connect(self.create_new_tag)
+        toolbar.addAction(new_tag_action)
         
         toolbar.addSeparator()
         
@@ -219,57 +286,237 @@ class MainWindow(QMainWindow):
         sync_status_action.triggered.connect(self.show_sync_status)
         sync_menu.addAction(sync_status_action)
         
+        # 安全菜单
+        security_menu = menubar.addMenu("安全")
+        
+        change_password_action = QAction("修改密码", self)
+        change_password_action.triggered.connect(self.change_password)
+        security_menu.addAction(change_password_action)
+        
+        security_menu.addSeparator()
+        
+        lock_action = QAction("锁定笔记", self)
+        lock_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        lock_action.triggered.connect(self.lock_notes)
+        security_menu.addAction(lock_action)
+        
     def load_notes(self):
         """加载笔记列表"""
+        # 手动删除所有自定义widget，避免重叠
+        # 必须在clear()之前删除所有widget
+        widgets_to_delete = []
+        for i in range(self.note_list.count()):
+            item = self.note_list.item(i)
+            widget = self.note_list.itemWidget(item)
+            if widget:
+                # 先解除widget与item的关联
+                self.note_list.setItemWidget(item, None)
+                # 收集需要删除的widget
+                widgets_to_delete.append(widget)
+        
+        # 删除所有widget
+        for widget in widgets_to_delete:
+            widget.setParent(None)
+            widget.deleteLater()
+        
+        # 强制处理待删除的事件，确保widget立即删除
+        from PyQt6.QtWidgets import QApplication
+        QApplication.processEvents()
+        
+        # 清空列表
         self.note_list.clear()
         
-        # 根据当前选中的文件夹加载笔记
+        # 根据当前选中的文件夹/标签加载笔记
         current_row = self.folder_list.currentRow()
         
-        if current_row == 0:  # 所有笔记
+        # 计算实际的索引（考虑不可选中的标题项）
+        # 索引布局：
+        # 0: iCloud标题（不可选）
+        # 1: 所有笔记
+        # 2~(2+n-1): 自定义文件夹
+        # (2+n): 最近删除
+        # (2+n+1): 标签标题（不可选）
+        # (2+n+2)~: 标签
+        
+        folder_count = len(self.custom_folders)
+        deleted_row = 2 + folder_count
+        tag_header_row = deleted_row + 1
+        first_tag_row = tag_header_row + 1
+        
+        if current_row == 1:  # 所有笔记
             notes = self.note_manager.get_all_notes()
-        elif current_row == 1:  # 收藏
-            notes = self.note_manager.get_favorite_notes()
-        elif current_row == 2:  # 最近删除
+            self.current_folder_id = None
+            self.current_tag_id = None
+        elif current_row == deleted_row:  # 最近删除
             notes = self.note_manager.get_deleted_notes()
-        else:  # 自定义文件夹
-            folder_index = current_row - 3
+            self.current_folder_id = None
+            self.current_tag_id = None
+        elif 2 <= current_row < deleted_row:  # 自定义文件夹
+            folder_index = current_row - 2
             if 0 <= folder_index < len(self.custom_folders):
                 folder_id = self.custom_folders[folder_index]['id']
                 notes = self.note_manager.get_notes_by_folder(folder_id)
+                self.current_folder_id = folder_id
+                self.current_tag_id = None
             else:
                 notes = []
+        elif current_row >= first_tag_row:  # 标签
+            tag_index = current_row - first_tag_row
+            if 0 <= tag_index < len(self.tags):
+                tag_id = self.tags[tag_index]['id']
+                notes = self.note_manager.get_notes_by_tag(tag_id)
+                self.current_folder_id = None
+                self.current_tag_id = tag_id
+            else:
+                notes = []
+        else:
+            notes = []
         
         for note in notes:
-            item = QListWidgetItem(note['title'])
+            # 获取笔记的纯文本内容
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(note['content'], 'html.parser')
+            plain_text = soup.get_text(separator='\n')
+
+            # 提取正文第一行作为预览（排除标题）
+            # 注意：HTML转纯文本时可能不会产生换行，这里用separator强制换行；并做多种分隔兜底。
+            title_text = (note.get('title') or '').strip()
+
+            candidates = []
+            lines = [l.strip() for l in plain_text.split('\n') if l.strip()]
+            if len(lines) >= 2:
+                candidates = lines[1:]
+            else:
+                # 兜底：有些内容可能只有空白分隔
+                candidates = [l.strip() for l in plain_text.splitlines() if l.strip()]
+
+            preview_text = ''
+            for c in candidates:
+                if not c:
+                    continue
+                # 避免预览再次显示标题（旧逻辑问题）
+                if title_text and c == title_text:
+                    continue
+                preview_text = c
+                break
+
+            # 限制预览长度
+            if len(preview_text) > 35:
+                preview_text = preview_text[:35] + '...'
+
+            
+            # 格式化修改时间
+            from datetime import datetime
+            try:
+                updated_at = datetime.fromisoformat(note['updated_at'])
+                time_str = updated_at.strftime('%Y/%m/%d')
+            except:
+                time_str = ''
+            
+            # 创建列表项
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, note['id'])
+            
+            # 使用自定义widget显示两行内容
+            widget = QWidget()
+            widget_layout = QVBoxLayout(widget)
+            widget_layout.setContentsMargins(8, 6, 8, 6)
+            widget_layout.setSpacing(2)  # 减小间距，从4改为2
+            
+            # 第一行：标题
+            title_label = QLabel(note['title'])
+            title_label.setStyleSheet("""
+                font-size: 15px; 
+                font-weight: normal; 
+                color: #000000;
+                border: none;
+                background: transparent;
+                padding: 0px;
+                margin: 0px;
+            """)
+            title_label.setWordWrap(False)
+            title_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            widget_layout.addWidget(title_label)
+            
+            # 第二行：时间 + 预览
+            info_text = f"{time_str}    {preview_text}"
+            info_label = QLabel(info_text)
+            info_label.setStyleSheet("""
+                font-size: 12px; 
+                color: #888888;
+                border: none;
+                background: transparent;
+                padding: 0px;
+                margin: 0px;
+            """)
+            info_label.setWordWrap(False)
+            info_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            widget_layout.addWidget(info_label)
+            
+            # 设置widget固定高度
+            widget.setFixedHeight(60)
+            
             self.note_list.addItem(item)
+            self.note_list.setItemWidget(item, widget)
+            
+            # 设置item高度
+            item.setSizeHint(QSize(280, 60))
             
         if notes:
             self.note_list.setCurrentRow(0)
             
     def load_folders(self):
-        """加载文件夹列表"""
+        """加载文件夹列表（新布局：iCloud分组）"""
         # 保存当前选中的行
         current_row = self.folder_list.currentRow()
         
-        # 清空并重新添加系统文件夹
+        # 清空列表
         self.folder_list.clear()
-        self.folder_list.addItem("📝 所有笔记")
-        self.folder_list.addItem("⭐ 收藏")
-        self.folder_list.addItem("🗑️ 最近删除")
         
-        # 加载自定义文件夹
+        # 添加iCloud标题（不可选中）
+        icloud_header = QListWidgetItem("☁️ iCloud")
+        icloud_header.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
+        font = icloud_header.font()
+        font.setBold(True)
+        icloud_header.setFont(font)
+        self.folder_list.addItem(icloud_header)
+        
+        # 添加系统文件夹（缩进显示）
+        self.folder_list.addItem("    📝 所有笔记")
+        
+        # 加载自定义文件夹（缩进显示）
         self.custom_folders = self.note_manager.get_all_folders()
         for folder in self.custom_folders:
-            item_text = f"📁 {folder['name']}"
+            item_text = f"    📁 {folder['name']}"
+            self.folder_list.addItem(item_text)
+        
+        # 添加最近删除（缩进显示，在iCloud下面）
+        self.folder_list.addItem("    🗑️ 最近删除")
+        
+        # 添加标签标题（与iCloud并列）
+        tag_header = QListWidgetItem("🏷️ 标签")
+        tag_header.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
+        font = tag_header.font()
+        font.setBold(True)
+        tag_header.setFont(font)
+        self.folder_list.addItem(tag_header)
+        
+        # 加载标签（缩进显示）
+        self.tags = self.note_manager.get_all_tags()
+        for tag in self.tags:
+            count = self.note_manager.get_tag_count(tag['id'])
+            item_text = f"    # {tag['name']} ({count})"
             self.folder_list.addItem(item_text)
         
         # 恢复选中状态
         if current_row >= 0 and current_row < self.folder_list.count():
-            self.folder_list.setCurrentRow(current_row)
+            item = self.folder_list.item(current_row)
+            if item and item.flags() & Qt.ItemFlag.ItemIsEnabled:
+                self.folder_list.setCurrentRow(current_row)
+            else:
+                self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
         else:
-            self.folder_list.setCurrentRow(0)
+            self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
             
     def create_new_folder(self):
         """创建新文件夹"""
@@ -281,10 +528,10 @@ class MainWindow(QMainWindow):
             folder_id = self.note_manager.create_folder(name.strip())
             self.load_folders()
             
-            # 选中新创建的文件夹
+            # 选中新创建的文件夹（索引从2开始）
             for i, folder in enumerate(self.custom_folders):
                 if folder['id'] == folder_id:
-                    self.folder_list.setCurrentRow(3 + i)
+                    self.folder_list.setCurrentRow(2 + i)
                     break
                     
     def rename_folder(self, folder_id: str):
@@ -320,6 +567,51 @@ class MainWindow(QMainWindow):
             self.load_folders()
             self.load_notes()
             
+    # ========== 标签管理方法 ==========
+    
+    def create_new_tag(self):
+        """创建新标签"""
+        name, ok = QInputDialog.getText(
+            self, "新建标签", "请输入标签名称:"
+        )
+        
+        if ok and name.strip():
+            self.note_manager.create_tag(name.strip())
+            self.load_folders()
+            
+    def rename_tag(self, tag_id: str):
+        """重命名标签"""
+        tag = self.note_manager.get_tag(tag_id)
+        if not tag:
+            return
+            
+        name, ok = QInputDialog.getText(
+            self, "重命名标签", 
+            "请输入新名称:",
+            text=tag['name']
+        )
+        
+        if ok and name.strip():
+            self.note_manager.update_tag(tag_id, name.strip())
+            self.load_folders()
+            
+    def delete_tag_confirm(self, tag_id: str):
+        """删除标签（确认）"""
+        tag = self.note_manager.get_tag(tag_id)
+        if not tag:
+            return
+            
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定要删除标签 '{tag['name']}' 吗？\n\n标签将从所有笔记中移除。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.note_manager.delete_tag(tag_id)
+            self.load_folders()
+            self.load_notes()
+            
     def show_folder_context_menu(self, position):
         """显示文件夹右键菜单"""
         item = self.folder_list.itemAt(position)
@@ -328,29 +620,55 @@ class MainWindow(QMainWindow):
             
         row = self.folder_list.row(item)
         
-        # 只为自定义文件夹显示菜单
-        if row < 3:
-            return
+        # 计算索引范围
+        folder_count = len(self.custom_folders)
+        deleted_row = 2 + folder_count
+        tag_header_row = deleted_row + 1
+        first_tag_row = tag_header_row + 1
+        
+        # 为自定义文件夹显示菜单
+        if 2 <= row < deleted_row:
+            folder_index = row - 2
+            if folder_index >= len(self.custom_folders):
+                return
+                
+            folder = self.custom_folders[folder_index]
             
-        folder_index = row - 3
-        if folder_index >= len(self.custom_folders):
-            return
+            # 创建菜单
+            menu = QMenu(self)
             
-        folder = self.custom_folders[folder_index]
-        
-        # 创建菜单
-        menu = QMenu(self)
-        
-        rename_action = QAction("重命名", self)
-        rename_action.triggered.connect(lambda: self.rename_folder(folder['id']))
-        menu.addAction(rename_action)
-        
-        delete_action = QAction("删除", self)
-        delete_action.triggered.connect(lambda: self.delete_folder_confirm(folder['id']))
-        menu.addAction(delete_action)
-        
-        # 显示菜单
-        menu.exec(self.folder_list.mapToGlobal(position))
+            rename_action = QAction("重命名", self)
+            rename_action.triggered.connect(lambda: self.rename_folder(folder['id']))
+            menu.addAction(rename_action)
+            
+            delete_action = QAction("删除", self)
+            delete_action.triggered.connect(lambda: self.delete_folder_confirm(folder['id']))
+            menu.addAction(delete_action)
+            
+            # 显示菜单
+            menu.exec(self.folder_list.mapToGlobal(position))
+            
+        # 为标签显示菜单
+        elif row >= first_tag_row:
+            tag_index = row - first_tag_row
+            if tag_index >= len(self.tags):
+                return
+                
+            tag = self.tags[tag_index]
+            
+            # 创建菜单
+            menu = QMenu(self)
+            
+            rename_action = QAction("重命名", self)
+            rename_action.triggered.connect(lambda: self.rename_tag(tag['id']))
+            menu.addAction(rename_action)
+            
+            delete_action = QAction("删除", self)
+            delete_action.triggered.connect(lambda: self.delete_tag_confirm(tag['id']))
+            menu.addAction(delete_action)
+            
+            # 显示菜单
+            menu.exec(self.folder_list.mapToGlobal(position))
             
     def create_new_note(self):
         """创建新笔记"""
@@ -358,8 +676,11 @@ class MainWindow(QMainWindow):
         current_row = self.folder_list.currentRow()
         folder_id = None
         
-        if current_row >= 3:  # 自定义文件夹
-            folder_index = current_row - 3
+        folder_count = len(self.custom_folders)
+        deleted_row = 2 + folder_count
+        
+        if 2 <= current_row < deleted_row:  # 自定义文件夹
+            folder_index = current_row - 2
             if 0 <= folder_index < len(self.custom_folders):
                 folder_id = self.custom_folders[folder_index]['id']
         
@@ -434,10 +755,20 @@ class MainWindow(QMainWindow):
                 content=content
             )
             
-            # 更新列表中的标题
-            current_item = self.note_list.currentItem()
-            if current_item:
-                current_item.setText(title)
+            # 更新列表中的标题（根据note_id查找对应的item）
+            for i in range(self.note_list.count()):
+                item = self.note_list.item(i)
+                if item and item.data(Qt.ItemDataRole.UserRole) == self.current_note_id:
+                    # 获取自定义widget
+                    widget = self.note_list.itemWidget(item)
+                    if widget:
+                        # 获取widget中的第一个QLabel（标题）
+                        layout = widget.layout()
+                        if layout and layout.count() > 0:
+                            title_label = layout.itemAt(0).widget()
+                            if isinstance(title_label, QLabel):
+                                title_label.setText(title)
+                    break
                 
     def export_to_pdf(self):
         """导出当前笔记为PDF"""
@@ -622,6 +953,135 @@ class MainWindow(QMainWindow):
         status_text += f"上次同步: {status['last_sync_time'] or '从未同步'}\n"
         
         QMessageBox.information(self, "同步状态", status_text)
+    
+    def _handle_encryption_setup(self) -> bool:
+        """
+        处理加密设置和解锁
+        
+        Returns:
+            是否成功设置/解锁
+        """
+        # 检查是否已设置密码
+        if not self.encryption_manager.is_password_set():
+            # 首次使用，设置密码
+            dialog = SetupPasswordDialog(self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                password = dialog.get_password()
+                success, message = self.encryption_manager.setup_password(password)
+                
+                if success:
+                    QMessageBox.information(
+                        self, "设置成功",
+                        "密码设置成功！\n\n您的笔记将使用端到端加密保护。\n密码已保存到系统钥匙串，下次启动时可自动解锁。"
+                    )
+                    return True
+                else:
+                    QMessageBox.critical(self, "设置失败", message)
+                    return False
+            else:
+                # 用户取消设置密码
+                reply = QMessageBox.question(
+                    self, "确认退出",
+                    "未设置密码将无法使用笔记应用。\n\n确定要退出吗？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                return reply == QMessageBox.StandardButton.No
+        else:
+            # 尝试自动解锁
+            if self.encryption_manager.try_auto_unlock():
+                return True
+                
+            # 自动解锁失败，显示密码输入对话框（不限制输错次数）
+            attempts = 0
+            
+            while True:
+                dialog = UnlockDialog(self, allow_cancel=(attempts > 0))
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    password = dialog.get_password()
+                    success, message = self.encryption_manager.verify_password(password)
+                    
+                    if success:
+                        return True
+                    
+                    attempts += 1
+                    QMessageBox.warning(
+                        self, "密码错误",
+                        message
+                    )
+                else:
+                    # 用户取消/退出解锁
+                    if hasattr(dialog, "should_exit") and dialog.should_exit():
+                        from PyQt6.QtWidgets import QApplication
+                        QApplication.quit()
+                        return False
+                    return False
+            
+    def change_password(self):
+        """修改密码"""
+        dialog = ChangePasswordDialog(self)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            old_password, new_password = dialog.get_passwords()
+            
+            # 显示进度对话框
+            progress = QMessageBox(self)
+            progress.setWindowTitle("修改密码")
+            progress.setText("正在修改密码，请稍候...")
+            progress.setStandardButtons(QMessageBox.StandardButton.NoButton)
+            progress.show()
+            
+            # 处理事件，显示对话框
+            from PyQt6.QtWidgets import QApplication
+            QApplication.processEvents()
+            
+            try:
+                # 修改密码
+                success, message = self.encryption_manager.change_password(old_password, new_password)
+                
+                if success:
+                    # 重新加密所有笔记
+                    count = self.note_manager.re_encrypt_all_notes()
+                    
+                    progress.close()
+                    
+                    QMessageBox.information(
+                        self, "修改成功",
+                        f"密码修改成功！\n\n已使用新密码重新加密{count}条笔记。"
+                    )
+                else:
+                    progress.close()
+                    QMessageBox.warning(self, "修改失败", message)
+                    
+            except Exception as e:
+                progress.close()
+                QMessageBox.critical(self, "修改失败", f"修改密码时发生错误：{e}")
+                
+    def lock_notes(self):
+        """锁定笔记"""
+        reply = QMessageBox.question(
+            self, "确认锁定",
+            "锁定后需要重新输入密码才能访问笔记。\n\n确定要锁定吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # 保存当前笔记
+            self.save_current_note()
+            
+            # 锁定加密管理器
+            self.encryption_manager.lock()
+            
+            # 清空编辑器
+            self.editor.clear()
+            self.current_note_id = None
+            
+            # 清空笔记列表
+            self.note_list.clear()
+            
+            QMessageBox.information(self, "已锁定", "笔记已锁定，请重新启动应用并输入密码解锁。")
+            
+            # 退出应用
+            self.close()
     
     def closeEvent(self, event):
         """关闭事件"""

@@ -4,3 +4,5 @@ lxml>=4.9.0
 python-docx>=0.8.11
 beautifulsoup4>=4.11.0
 html2text>=2020.1.16
+cryptography>=41.0.0
+keyring>=24.0.0
