@@ -95,6 +95,26 @@ class MainWindow(QMainWindow):
                     return True
             except Exception:
                 pass
+
+        # 空文件夹：点击编辑器自动新建笔记
+        try:
+            from PyQt6.QtCore import QEvent
+            from PyQt6.QtCore import Qt
+            if (
+                getattr(self, "_editor_click_to_create_note_enabled", False)
+                and obj is getattr(getattr(self.editor, "text_edit", None), "viewport", lambda: None)()
+                and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton
+
+            ):
+                # 只有“选中了某个自定义文件夹 + 当前没有选中笔记”才自动创建
+                if self.current_folder_id and self.current_note_id is None:
+                    self.create_note_in_folder(self.current_folder_id, default_title="新笔记")
+                    event.accept()
+                    return True
+        except Exception:
+            pass
+
         return super().eventFilter(obj, event)
 
     
@@ -325,6 +345,19 @@ class MainWindow(QMainWindow):
         # 右侧：编辑器
         self.editor = NoteEditor(self.note_manager)
         self.editor.textChanged.connect(self.on_text_changed)
+
+        # 空文件夹点击编辑器：自动新建笔记（仿备忘录行为）
+        self._editor_click_to_create_note_enabled = True
+        try:
+            # QTextEdit 的鼠标事件通常由 viewport() 接收；
+            # 如果只装在 QTextEdit 本体上，可能收不到 MouseButtonPress。
+            self.editor.text_edit.viewport().installEventFilter(self)
+        except Exception:
+            try:
+                self.editor.text_edit.installEventFilter(self)
+            except Exception:
+                pass
+
         
         # 添加到分割器
         splitter.addWidget(self.folder_list)
@@ -692,6 +725,16 @@ class MainWindow(QMainWindow):
                 if item.flags() & Qt.ItemFlag.ItemIsSelectable:
                     self.note_list.setCurrentRow(i)
                     break
+        else:
+            # 空列表：保持编辑器“不可编辑/无光标闪烁”的观感
+            self.current_note_id = None
+            self.editor.current_note_id = None
+            self.editor.clear()
+            try:
+                self.editor.text_edit.clearFocus()
+            except Exception:
+                pass
+
     
     def _show_note_scrollbar_temporarily(self):
         """用户滚动笔记列表时临时显示滚动条，停止滚动一段时间后隐藏"""
@@ -1510,10 +1553,16 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.rename_folder(folder_id))
 
     
-    def create_note_in_folder(self, folder_id: str):
+    def create_note_in_folder(self, folder_id: str, default_title: str | None = None):
         """在指定文件夹下创建笔记"""
         # 创建笔记
         note_id = self.note_manager.create_note(folder_id=folder_id)
+        if default_title:
+            try:
+                self.note_manager.update_note(note_id, title=default_title)
+            except Exception:
+                pass
+
         
         # 刷新笔记列表
         self.load_notes()
@@ -1731,6 +1780,14 @@ class MainWindow(QMainWindow):
             self.current_note_id = None
             self.editor.current_note_id = None
             self.editor.clear()
+            try:
+                self.editor.text_edit.clearFocus()
+            except Exception:
+                pass
+            
+
+            
+
             
 
             
