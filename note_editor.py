@@ -884,23 +884,28 @@ class NoteEditor(QWidget):
         self.text_edit.setTextCursor(cursor)
     
     def auto_format_first_line(self):
-        """自动将第一行格式化为大标题"""
+        """自动将第一行格式化为大标题，其他行为正文格式"""
         # 获取文档
         document = self.text_edit.document()
         if document.isEmpty():
             return
+        
+        # 获取当前光标
+        current_cursor = self.text_edit.textCursor()
+        current_block = current_cursor.block()
+        current_block_number = current_block.blockNumber()
         
         # 获取第一个文本块（第一行）
         first_block = document.firstBlock()
         if not first_block.isValid():
             return
         
-        # 创建光标指向第一行
-        cursor = QTextCursor(first_block)
-        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        # 只在必要时格式化第一行
+        first_cursor = QTextCursor(first_block)
+        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
         
         # 检查第一行是否已经是标题格式
-        char_fmt = cursor.charFormat()
+        char_fmt = first_cursor.charFormat()
         current_size = char_fmt.fontPointSize()
         
         # 如果第一行不是大标题格式（22号字体），则应用格式
@@ -914,10 +919,26 @@ class NoteEditor(QWidget):
             new_char_fmt.setFontWeight(QFont.Weight.Bold)
             
             # 应用格式到第一行
-            cursor.mergeCharFormat(new_char_fmt)
+            first_cursor.mergeCharFormat(new_char_fmt)
             
             # 恢复信号
             self.text_edit.blockSignals(False)
+        
+        # 如果当前光标在第二行或之后，确保使用正文格式
+        if current_block_number >= 1:
+            # 获取当前字符格式
+            current_char_fmt = current_cursor.charFormat()
+            current_font_size = current_char_fmt.fontPointSize()
+            
+            # 只有当字体不是14号时才修改
+            if current_font_size != 14:
+                # 设置正文格式
+                body_fmt = QTextCharFormat()
+                body_fmt.setFontPointSize(14)
+                body_fmt.setFontWeight(QFont.Weight.Normal)
+                
+                # 设置当前输入格式
+                self.text_edit.setCurrentCharFormat(body_fmt)
     
     # 格式化方法
     def apply_heading(self, level):

@@ -99,6 +99,9 @@ class MainWindow(QMainWindow):
         
         # 中间：笔记列表
         self.note_list = QListWidget()
+        # 为笔记列表添加右键菜单
+        self.note_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.note_list.customContextMenuRequested.connect(self.show_note_context_menu)
         self.note_list.setMaximumWidth(300)
         self.note_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 去掉焦点边框
         self.note_list.setStyleSheet("""
@@ -109,12 +112,8 @@ class MainWindow(QMainWindow):
                 outline: none;
             }
             QListWidget::item {
-                padding: 10px 12px;
-                border-bottom: 1px solid #e0e0e0;
-                border-left: none;
-                border-right: none;
-                border-top: none;
-                line-height: 1.4;
+                padding: 0px;
+                border: none;
                 outline: none;
             }
             QListWidget::item:selected {
@@ -182,12 +181,6 @@ class MainWindow(QMainWindow):
         toolbar.addAction(new_tag_action)
         
         toolbar.addSeparator()
-        
-        # 删除笔记按钮
-        delete_note_action = QAction("🗑️ 删除", self)
-        delete_note_action.setShortcut(QKeySequence("Ctrl+D"))
-        delete_note_action.triggered.connect(self.delete_note)
-        toolbar.addAction(delete_note_action)
         
     def create_menubar(self):
         """创建菜单栏"""
@@ -314,6 +307,81 @@ class MainWindow(QMainWindow):
         lock_action.triggered.connect(self.lock_notes)
         security_menu.addAction(lock_action)
         
+    def _get_time_group(self, note_date):
+        """根据笔记创建时间获取时间分组名称"""
+        from datetime import datetime, timedelta
+        
+        try:
+            # 解析笔记的创建时间
+            if isinstance(note_date, str):
+                note_dt = datetime.fromisoformat(note_date)
+            else:
+                note_dt = note_date
+            
+            # 获取当前时间（去掉时分秒，只保留日期）
+            now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            note_date_only = note_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # 计算时间差
+            delta = now - note_date_only
+            days = delta.days
+            
+            # 根据时间差返回分组名称
+            if days == 0:
+                return "今天"
+            elif days == 1:
+                return "昨天"
+            elif days <= 7:
+                return "过去一周"
+            elif days <= 30:
+                return "过去30天"
+            else:
+                # 按年份分组
+                return f"{note_dt.year}年"
+        except Exception as e:
+            print(f"解析时间失败: {e}")
+            return "其他"
+    
+    def _add_group_header(self, group_name):
+        """添加分组标题"""
+        item = QListWidgetItem()
+        item.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
+        
+        # 创建分组标题widget
+        widget = QWidget()
+        widget_layout = QVBoxLayout(widget)
+        widget_layout.setContentsMargins(16, 12, 8, 8)  # 分组标识缩进16px（比笔记更靠左）
+        widget_layout.setSpacing(0)
+        
+        # 分组标题（加粗）
+        header_label = QLabel(group_name)
+        header_label.setStyleSheet("""
+            font-size: 16px; 
+            font-weight: bold; 
+            color: #666666;
+            border: none;
+            background: transparent;
+            padding: 0px;
+            margin: 0px;
+        """)
+        widget_layout.addWidget(header_label)
+
+        # 分组标题与下方列表的分隔线：左侧对齐分组文字(16px)，右侧对齐笔记分隔线(8px)
+        group_separator = QWidget()
+        group_separator.setFixedHeight(1)
+        group_separator.setStyleSheet("""
+            background-color: #e0e0e0;
+            margin-left: 0px;
+            margin-right: 8px;
+        """)
+        widget_layout.addWidget(group_separator)
+
+        widget.setFixedHeight(41)  # 40 + 1px分隔线
+        
+        self.note_list.addItem(item)
+        self.note_list.setItemWidget(item, widget)
+        item.setSizeHint(QSize(280, 41))
+    
     def load_notes(self):
         """加载笔记列表"""
         # 手动删除所有自定义widget，避免重叠
@@ -386,101 +454,159 @@ class MainWindow(QMainWindow):
         else:
             notes = []
         
+        # 将笔记分为置顶和普通笔记
+        pinned_notes = []
+        normal_notes = []
+        
         for note in notes:
-            # 获取笔记的纯文本内容
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(note['content'], 'html.parser')
-            plain_text = soup.get_text(separator='\n')
-
-            # 提取正文第一行作为预览（排除标题）
-            # 注意：HTML转纯文本时可能不会产生换行，这里用separator强制换行；并做多种分隔兜底。
-            title_text = (note.get('title') or '').strip()
-
-            candidates = []
-            lines = [l.strip() for l in plain_text.split('\n') if l.strip()]
-            if len(lines) >= 2:
-                candidates = lines[1:]
+            if self.note_manager.is_note_pinned(note['id']):
+                pinned_notes.append(note)
             else:
-                # 兜底：有些内容可能只有空白分隔
-                candidates = [l.strip() for l in plain_text.splitlines() if l.strip()]
-
-            preview_text = ''
-            for c in candidates:
-                if not c:
-                    continue
-                # 避免预览再次显示标题（旧逻辑问题）
-                if title_text and c == title_text:
-                    continue
-                preview_text = c
-                break
-
-            # 限制预览长度
-            if len(preview_text) > 35:
-                preview_text = preview_text[:35] + '...'
-
-            
-            # 格式化修改时间
-            from datetime import datetime
-            try:
-                updated_at = datetime.fromisoformat(note['updated_at'])
-                time_str = updated_at.strftime('%Y/%m/%d')
-            except:
-                time_str = ''
-            
-            # 创建列表项
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, note['id'])
-            
-            # 使用自定义widget显示两行内容
-            widget = QWidget()
-            widget_layout = QVBoxLayout(widget)
-            widget_layout.setContentsMargins(8, 6, 8, 6)
-            widget_layout.setSpacing(2)  # 减小间距，从4改为2
-            
-            # 第一行：标题
-            title_label = QLabel(note['title'])
-            title_label.setStyleSheet("""
-                font-size: 15px; 
-                font-weight: normal; 
-                color: #000000;
-                border: none;
-                background: transparent;
-                padding: 0px;
-                margin: 0px;
-            """)
-            title_label.setWordWrap(False)
-            title_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-            widget_layout.addWidget(title_label)
-            
-            # 第二行：时间 + 预览
-            info_text = f"{time_str}    {preview_text}"
-            info_label = QLabel(info_text)
-            info_label.setStyleSheet("""
-                font-size: 12px; 
-                color: #888888;
-                border: none;
-                background: transparent;
-                padding: 0px;
-                margin: 0px;
-            """)
-            info_label.setWordWrap(False)
-            info_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-            widget_layout.addWidget(info_label)
-            
-            # 设置widget固定高度
-            widget.setFixedHeight(60)
-            
-            self.note_list.addItem(item)
-            self.note_list.setItemWidget(item, widget)
-            
-            # 设置item高度
-            item.setSizeHint(QSize(280, 60))
-            
+                normal_notes.append(note)
+        
+        # 按时间分组普通笔记
+        time_groups = {}
+        for note in normal_notes:
+            group_name = self._get_time_group(note['created_at'])
+            if group_name not in time_groups:
+                time_groups[group_name] = []
+            time_groups[group_name].append(note)
+        
+        # 定义分组顺序
+        group_order = ["今天", "昨天", "过去一周", "过去30天"]
+        
+        # 添加年份分组（按年份降序）
+        year_groups = sorted([g for g in time_groups.keys() if g.endswith("年")], reverse=True)
+        group_order.extend(year_groups)
+        
+        # 添加"其他"分组
+        if "其他" in time_groups:
+            group_order.append("其他")
+        
+        # 显示置顶笔记
+        if pinned_notes:
+            self._add_group_header("置顶")
+            for note in pinned_notes:
+                self._add_note_item(note)
+        
+        # 显示按时间分组的普通笔记
+        for group_name in group_order:
+            if group_name in time_groups and time_groups[group_name]:
+                self._add_group_header(group_name)
+                for note in time_groups[group_name]:
+                    self._add_note_item(note)
+        
         if notes:
-            self.note_list.setCurrentRow(0)
+            # 选中第一个可选中的笔记项（跳过分组标题）
+            for i in range(self.note_list.count()):
+                item = self.note_list.item(i)
+                if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                    self.note_list.setCurrentRow(i)
+                    break
+    
+    def _add_note_item(self, note):
+        """添加笔记项到列表"""
+        # 获取笔记的纯文本内容
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(note['content'], 'html.parser')
+        plain_text = soup.get_text(separator='\n')
+
+        # 提取正文第一行作为预览（排除标题）
+        # 注意：HTML转纯文本时可能不会产生换行，这里用separator强制换行；并做多种分隔兜底。
+        title_text = (note.get('title') or '').strip()
+
+        candidates = []
+        lines = [l.strip() for l in plain_text.split('\n') if l.strip()]
+        if len(lines) >= 2:
+            candidates = lines[1:]
+        else:
+            # 兜底：有些内容可能只有空白分隔
+            candidates = [l.strip() for l in plain_text.splitlines() if l.strip()]
+
+        preview_text = ''
+        for c in candidates:
+            if not c:
+                continue
+            # 避免预览再次显示标题（旧逻辑问题）
+            if title_text and c == title_text:
+                continue
+            preview_text = c
+            break
+
+        # 限制预览长度
+        if len(preview_text) > 35:
+            preview_text = preview_text[:35] + '...'
+
+        
+        # 格式化修改时间
+        from datetime import datetime
+        try:
+            updated_at = datetime.fromisoformat(note['updated_at'])
+            time_str = updated_at.strftime('%Y/%m/%d')
+        except:
+            time_str = ''
+        
+        # 创建列表项
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, note['id'])
+        
+        # 使用自定义widget显示两行内容
+        widget = QWidget()
+        widget_layout = QVBoxLayout(widget)
+        widget_layout.setContentsMargins(32, 6, 8, 6)  # 笔记内容缩进32px（相对分组标识再缩进一层）
+        widget_layout.setSpacing(2)  # 减小间距，从4改为2
+        
+        # 第一行：标题
+        title_label = QLabel(note['title'])
+        title_label.setStyleSheet("""
+            font-size: 15px; 
+            font-weight: normal; 
+            color: #000000;
+            border: none;
+            background: transparent;
+            padding: 0px;
+            margin: 0px;
+        """)
+        title_label.setWordWrap(False)
+        title_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        widget_layout.addWidget(title_label)
+        
+        # 第二行：时间 + 预览
+        info_text = f"{time_str}    {preview_text}"
+        info_label = QLabel(info_text)
+        info_label.setStyleSheet("""
+            font-size: 12px; 
+            color: #888888;
+            border: none;
+            background: transparent;
+            padding: 0px;
+            margin: 0px;
+        """)
+        info_label.setWordWrap(False)
+        info_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        widget_layout.addWidget(info_label)
+        
+        # 添加底部分隔线（缩进显示）
+        separator = QWidget()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet("""
+            background-color: #e0e0e0;
+            margin-left: 0px;
+            margin-right: 8px;
+        """)
+        widget_layout.addWidget(separator)
+        
+        # 设置widget固定高度
+        widget.setFixedHeight(61)  # 增加1px以容纳分隔线
+        
+        self.note_list.addItem(item)
+        self.note_list.setItemWidget(item, widget)
+        
+        # 设置item高度
+        item.setSizeHint(QSize(280, 61))  # 增加1px以容纳分隔线
             
     def load_folders(self):
-        """加载文件夹列表（新布局：iCloud分组）"""
+        """加载文件夹列表（新布局：iCloud分组，支持多级文件夹）"""
         # 保存当前选中的行
         current_row = self.folder_list.currentRow()
         
@@ -498,11 +624,12 @@ class MainWindow(QMainWindow):
         # 添加系统文件夹（缩进显示）
         self.folder_list.addItem("    📝 所有笔记")
         
-        # 加载自定义文件夹（缩进显示）
-        self.custom_folders = self.note_manager.get_all_folders()
-        for folder in self.custom_folders:
-            item_text = f"    📁 {folder['name']}"
-            self.folder_list.addItem(item_text)
+        # 加载自定义文件夹（支持层级显示）
+        all_folders = self.note_manager.get_all_folders()
+        
+        # 构建文件夹树结构
+        self.custom_folders = []
+        self._add_folders_recursive(all_folders, None, 1, self.custom_folders)
         
         # 添加最近删除（缩进显示，在iCloud下面）
         self.folder_list.addItem("    🗑️ 最近删除")
@@ -531,6 +658,37 @@ class MainWindow(QMainWindow):
                 self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
         else:
             self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
+    
+    def _add_folders_recursive(self, all_folders, parent_id, level, flat_list):
+        """递归添加文件夹，支持多级层级显示
+        
+        Args:
+            all_folders: 所有文件夹列表
+            parent_id: 父文件夹ID，None表示顶级文件夹
+            level: 当前层级（1为顶级，2为二级，以此类推）
+            flat_list: 扁平化的文件夹列表（用于保持与原有逻辑兼容）
+        """
+        # 找出当前层级的文件夹
+        current_level_folders = [
+            f for f in all_folders 
+            if f.get('parent_folder_id') == parent_id
+        ]
+        
+        # 按order_index排序
+        current_level_folders.sort(key=lambda x: x.get('order_index', 0))
+        
+        # 添加到列表
+        for folder in current_level_folders:
+            # 计算缩进（每级增加4个空格）
+            indent = "    " * level
+            item_text = f"{indent}📁 {folder['name']}"
+            self.folder_list.addItem(item_text)
+            
+            # 添加到扁平列表（保持与原有逻辑兼容）
+            flat_list.append(folder)
+            
+            # 递归添加子文件夹
+            self._add_folders_recursive(all_folders, folder['id'], level + 1, flat_list)
             
     def create_new_folder(self):
         """创建新文件夹"""
@@ -626,64 +784,6 @@ class MainWindow(QMainWindow):
             self.load_folders()
             self.load_notes()
             
-    def show_folder_context_menu(self, position):
-        """显示文件夹右键菜单"""
-        item = self.folder_list.itemAt(position)
-        if not item:
-            return
-            
-        row = self.folder_list.row(item)
-        
-        # 计算索引范围
-        folder_count = len(self.custom_folders)
-        deleted_row = 2 + folder_count
-        tag_header_row = deleted_row + 1
-        first_tag_row = tag_header_row + 1
-        
-        # 为自定义文件夹显示菜单
-        if 2 <= row < deleted_row:
-            folder_index = row - 2
-            if folder_index >= len(self.custom_folders):
-                return
-                
-            folder = self.custom_folders[folder_index]
-            
-            # 创建菜单
-            menu = QMenu(self)
-            
-            rename_action = QAction("重命名", self)
-            rename_action.triggered.connect(lambda: self.rename_folder(folder['id']))
-            menu.addAction(rename_action)
-            
-            delete_action = QAction("删除", self)
-            delete_action.triggered.connect(lambda: self.delete_folder_confirm(folder['id']))
-            menu.addAction(delete_action)
-            
-            # 显示菜单
-            menu.exec(self.folder_list.mapToGlobal(position))
-            
-        # 为标签显示菜单
-        elif row >= first_tag_row:
-            tag_index = row - first_tag_row
-            if tag_index >= len(self.tags):
-                return
-                
-            tag = self.tags[tag_index]
-            
-            # 创建菜单
-            menu = QMenu(self)
-            
-            rename_action = QAction("重命名", self)
-            rename_action.triggered.connect(lambda: self.rename_tag(tag['id']))
-            menu.addAction(rename_action)
-            
-            delete_action = QAction("删除", self)
-            delete_action.triggered.connect(lambda: self.delete_tag_confirm(tag['id']))
-            menu.addAction(delete_action)
-            
-            # 显示菜单
-            menu.exec(self.folder_list.mapToGlobal(position))
-            
     def create_new_note(self):
         """创建新笔记"""
         # 获取当前文件夹ID
@@ -707,12 +807,169 @@ class MainWindow(QMainWindow):
             if item.data(Qt.ItemDataRole.UserRole) == note_id:
                 self.note_list.setCurrentItem(item)
                 break
+        
+        # 设置焦点到编辑器，让光标闪烁
+        self.editor.text_edit.setFocus()
                 
-    def delete_note(self):
-        """删除当前笔记"""
-        if self.current_note_id is None:
-            return
+    def show_folder_context_menu(self, position):
+        """显示文件夹列表的右键菜单"""
+        item = self.folder_list.itemAt(position)
+        menu = QMenu(self)
+        
+        # 获取当前行
+        current_row = self.folder_list.currentRow()
+        folder_count = len(self.custom_folders)
+        
+        # 判断是否点击在自定义文件夹上（索引从2开始，到2+folder_count-1）
+        if item and 2 <= current_row < 2 + folder_count:
+            # 点击在文件夹上
+            folder_index = current_row - 2
+            if 0 <= folder_index < len(self.custom_folders):
+                folder_id = self.custom_folders[folder_index]['id']
+                
+                # 新建笔记
+                new_note_action = QAction("新建笔记", self)
+                new_note_action.triggered.connect(lambda: self.create_note_in_folder(folder_id))
+                menu.addAction(new_note_action)
+                
+                # 新建子文件夹
+                new_subfolder_action = QAction("新建文件夹", self)
+                new_subfolder_action.triggered.connect(lambda: self.create_subfolder(folder_id))
+                menu.addAction(new_subfolder_action)
+                
+                menu.addSeparator()
+                
+                # 重命名文件夹
+                rename_action = QAction("重命名文件夹", self)
+                rename_action.triggered.connect(lambda: self.rename_folder(folder_id))
+                menu.addAction(rename_action)
+                
+                # 删除文件夹
+                delete_action = QAction("删除文件夹", self)
+                delete_action.triggered.connect(lambda: self.delete_folder_confirm(folder_id))
+                menu.addAction(delete_action)
+        else:
+            # 点击在空白区域或其他位置，只显示新建文件夹
+            new_folder_action = QAction("新建文件夹", self)
+            new_folder_action.triggered.connect(self.create_new_folder)
+            menu.addAction(new_folder_action)
+        
+        menu.exec(self.folder_list.mapToGlobal(position))
+    
+    def show_note_context_menu(self, position):
+        """显示笔记列表的右键菜单"""
+        item = self.note_list.itemAt(position)
+        menu = QMenu(self)
+        
+        if item:
+            # 点击在笔记上
+            note_id = item.data(Qt.ItemDataRole.UserRole)
             
+            # 新建笔记
+            new_note_action = QAction("新建笔记", self)
+            new_note_action.triggered.connect(self.create_new_note)
+            menu.addAction(new_note_action)
+            
+            menu.addSeparator()
+            
+            # 置顶/取消置顶
+            is_pinned = self.note_manager.is_note_pinned(note_id)
+            pin_text = "取消置顶" if is_pinned else "置顶"
+            pin_action = QAction(pin_text, self)
+            pin_action.triggered.connect(lambda: self.toggle_pin_note(note_id))
+            menu.addAction(pin_action)
+            
+            menu.addSeparator()
+            
+            # 重命名笔记
+            rename_action = QAction("重命名笔记", self)
+            rename_action.triggered.connect(lambda: self.rename_note(note_id))
+            menu.addAction(rename_action)
+            
+            # 删除笔记
+            delete_action = QAction("删除笔记", self)
+            delete_action.triggered.connect(lambda: self.delete_note_by_id(note_id))
+            menu.addAction(delete_action)
+        else:
+            # 点击在空白区域
+            new_note_action = QAction("新建笔记", self)
+            new_note_action.triggered.connect(self.create_new_note)
+            menu.addAction(new_note_action)
+        
+        menu.exec(self.note_list.mapToGlobal(position))
+    
+    def create_subfolder(self, parent_folder_id: str):
+        """在指定文件夹下创建子文件夹"""
+        name, ok = QInputDialog.getText(
+            self, "新建文件夹", "请输入文件夹名称:"
+        )
+        
+        if ok and name.strip():
+            # 创建子文件夹，传入父文件夹ID
+            folder_id = self.note_manager.create_folder(name.strip(), parent_folder_id)
+            self.load_folders()
+            
+            # 选中新创建的文件夹
+            for i, folder in enumerate(self.custom_folders):
+                if folder['id'] == folder_id:
+                    self.folder_list.setCurrentRow(2 + i)
+                    break
+    
+    def create_note_in_folder(self, folder_id: str):
+        """在指定文件夹下创建笔记"""
+        # 创建笔记
+        note_id = self.note_manager.create_note(folder_id=folder_id)
+        
+        # 刷新笔记列表
+        self.load_notes()
+        
+        # 选中新创建的笔记
+        for i in range(self.note_list.count()):
+            item = self.note_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == note_id:
+                self.note_list.setCurrentItem(item)
+                break
+        
+        # 设置焦点到编辑器，让光标闪烁
+        self.editor.text_edit.setFocus()
+    
+    def rename_note(self, note_id: str):
+        """重命名笔记"""
+        note = self.note_manager.get_note(note_id)
+        if not note:
+            return
+        
+        # 获取当前标题（从HTML内容中提取第一行）
+        current_title = note.get('title', '无标题')
+        
+        name, ok = QInputDialog.getText(
+            self, "重命名笔记",
+            "请输入新标题:",
+            text=current_title
+        )
+        
+        if ok and name.strip():
+            # 更新笔记标题
+            self.note_manager.update_note(note_id, title=name.strip())
+            self.load_notes()
+            
+            # 如果是当前笔记，重新加载编辑器内容
+            if note_id == self.current_note_id:
+                self.load_note_content(note_id)
+    
+    def toggle_pin_note(self, note_id: str):
+        """切换笔记的置顶状态"""
+        is_pinned = self.note_manager.toggle_pin_note(note_id)
+        
+        # 重新加载笔记列表
+        self.load_notes()
+        
+        # 显示提示信息
+        status_text = "已置顶" if is_pinned else "已取消置顶"
+        self.statusBar().showMessage(status_text, 2000)
+    
+    def delete_note_by_id(self, note_id: str):
+        """根据ID删除笔记"""
         reply = QMessageBox.question(
             self, "确认删除",
             "确定要删除这条笔记吗？",
@@ -720,8 +977,20 @@ class MainWindow(QMainWindow):
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            self.note_manager.delete_note(self.current_note_id)
+            self.note_manager.delete_note(note_id)
             self.load_notes()
+            
+            # 如果删除的是当前笔记，清空编辑器
+            if note_id == self.current_note_id:
+                self.current_note_id = None
+                self.editor.clear()
+    
+    def delete_note(self):
+        """删除当前笔记（保留用于快捷键）"""
+        if self.current_note_id is None:
+            return
+        
+        self.delete_note_by_id(self.current_note_id)
             
     def on_folder_changed(self, index):
         """文件夹切换"""
@@ -743,6 +1012,16 @@ class MainWindow(QMainWindow):
                 self.editor.blockSignals(True)
                 self.editor.setHtml(note['content'])
                 self.editor.blockSignals(False)
+                
+                # 将光标移动到第一行（标题）的末尾
+                from PyQt6.QtGui import QTextCursor
+                cursor = self.editor.text_edit.textCursor()
+                cursor.movePosition(QTextCursor.MoveOperation.Start)  # 移动到文档开始
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)  # 移动到第一行末尾
+                self.editor.text_edit.setTextCursor(cursor)
+                
+                # 设置焦点到编辑器，让光标闪烁
+                self.editor.text_edit.setFocus()
         else:
             self.current_note_id = None
             self.editor.current_note_id = None

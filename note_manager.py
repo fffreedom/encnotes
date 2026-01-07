@@ -47,9 +47,11 @@ class NoteManager:
                 Z_OPT INTEGER DEFAULT 1,
                 ZIDENTIFIER TEXT UNIQUE NOT NULL,
                 ZNAME TEXT NOT NULL,
+                ZPARENTFOLDERID TEXT,
                 ZCREATIONDATE REAL,
                 ZMODIFICATIONDATE REAL,
-                ZORDERINDEX INTEGER DEFAULT 0
+                ZORDERINDEX INTEGER DEFAULT 0,
+                FOREIGN KEY (ZPARENTFOLDERID) REFERENCES ZFOLDER(ZIDENTIFIER)
             )
         ''')
         
@@ -67,6 +69,7 @@ class NoteManager:
                 ZMODIFICATIONDATE REAL,
                 ZISFAVORITE INTEGER DEFAULT 0,
                 ZISDELETED INTEGER DEFAULT 0,
+                ZISPINNED INTEGER DEFAULT 0,
                 ZCKRECORDID TEXT,
                 ZCKRECORDCHANGETAG TEXT,
                 ZCKRECORDSYSTEMFIELDS BLOB,
@@ -161,6 +164,36 @@ class NoteManager:
             ON ZNOTETAG(ZTAGID)
         ''')
         
+        # 数据库迁移：为现有数据库添加ZPARENTFOLDERID字段
+        try:
+            # 检查ZFOLDER表是否已有ZPARENTFOLDERID字段
+            cursor.execute("PRAGMA table_info(ZFOLDER)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'ZPARENTFOLDERID' not in columns:
+                # 添加ZPARENTFOLDERID字段
+                cursor.execute('''
+                    ALTER TABLE ZFOLDER ADD COLUMN ZPARENTFOLDERID TEXT
+                ''')
+                print("数据库迁移：已添加ZPARENTFOLDERID字段")
+        except Exception as e:
+            print(f"数据库迁移警告: {e}")
+        
+        # 数据库迁移：为现有数据库添加ZISPINNED字段
+        try:
+            # 检查ZNOTE表是否已有ZISPINNED字段
+            cursor.execute("PRAGMA table_info(ZNOTE)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'ZISPINNED' not in columns:
+                # 添加ZISPINNED字段
+                cursor.execute('''
+                    ALTER TABLE ZNOTE ADD COLUMN ZISPINNED INTEGER DEFAULT 0
+                ''')
+                print("数据库迁移：已添加ZISPINNED字段")
+        except Exception as e:
+            print(f"数据库迁移警告: {e}")
+        
         self.conn.commit()
         
     def _timestamp_to_cocoa(self, dt: datetime) -> float:
@@ -253,6 +286,42 @@ class NoteManager:
         ''', (cocoa_time, note_id))
         
         self.conn.commit()
+    
+    def toggle_pin_note(self, note_id: str):
+        """切换笔记的置顶状态"""
+        cursor = self.conn.cursor()
+        
+        # 获取当前置顶状态
+        cursor.execute('''
+            SELECT ZISPINNED FROM ZNOTE WHERE ZIDENTIFIER = ?
+        ''', (note_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return False
+        
+        current_pinned = row[0]
+        new_pinned = 0 if current_pinned else 1
+        
+        # 更新置顶状态
+        cursor.execute('''
+            UPDATE ZNOTE 
+            SET ZISPINNED = ?
+            WHERE ZIDENTIFIER = ?
+        ''', (new_pinned, note_id))
+        
+        self.conn.commit()
+        return new_pinned == 1
+    
+    def is_note_pinned(self, note_id: str) -> bool:
+        """检查笔记是否已置顶"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT ZISPINNED FROM ZNOTE WHERE ZIDENTIFIER = ?
+        ''', (note_id,))
+        
+        row = cursor.fetchone()
+        return bool(row[0]) if row else False
         
     def permanently_delete_note(self, note_id: str):
         """永久删除笔记"""
@@ -286,12 +355,12 @@ class NoteManager:
             self.conn.commit()
             
     def get_all_notes(self) -> List[Dict]:
-        """获取所有未删除的笔记"""
+        """获取所有未删除的笔记（置顶的笔记排在前面）"""
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM ZNOTE 
             WHERE ZISDELETED = 0
-            ORDER BY ZMODIFICATIONDATE DESC
+            ORDER BY ZISPINNED DESC, ZMODIFICATIONDATE DESC
         ''')
         
         return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -319,12 +388,12 @@ class NoteManager:
         return [self._row_to_dict(row) for row in cursor.fetchall()]
         
     def get_notes_by_folder(self, folder_id: str) -> List[Dict]:
-        """获取指定文件夹的笔记"""
+        """获取指定文件夹的笔记（置顶的笔记排在前面）"""
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM ZNOTE 
             WHERE ZFOLDERID = ? AND ZISDELETED = 0
-            ORDER BY ZMODIFICATIONDATE DESC
+            ORDER BY ZISPINNED DESC, ZMODIFICATIONDATE DESC
         ''', (folder_id,))
         
         return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -410,8 +479,16 @@ class NoteManager:
             
     # ========== 文件夹管理方法 ==========
     
-    def create_folder(self, name: str) -> str:
-        """创建新文件夹"""
+    def create_folder(self, name: str, parent_folder_id: Optional[str] = None) -> str:
+        """创建新文件夹
+        
+        Args:
+            name: 文件夹名称
+            parent_folder_id: 父文件夹ID，如果为None则创建顶级文件夹
+            
+        Returns:
+            新创建的文件夹ID
+        """
         folder_id = str(uuid.uuid4())
         now = datetime.now()
         cocoa_time = self._timestamp_to_cocoa(now)
@@ -425,10 +502,10 @@ class NoteManager:
         
         cursor.execute('''
             INSERT INTO ZFOLDER (
-                ZIDENTIFIER, ZNAME, ZCREATIONDATE, 
+                ZIDENTIFIER, ZNAME, ZPARENTFOLDERID, ZCREATIONDATE, 
                 ZMODIFICATIONDATE, ZORDERINDEX
-            ) VALUES (?, ?, ?, ?, ?)
-        ''', (folder_id, name, cocoa_time, cocoa_time, order_index))
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        ''', (folder_id, name, parent_folder_id, cocoa_time, cocoa_time, order_index))
         
         self.conn.commit()
         return folder_id
@@ -510,6 +587,7 @@ class NoteManager:
         return {
             'id': row['ZIDENTIFIER'],
             'name': row['ZNAME'],
+            'parent_folder_id': row['ZPARENTFOLDERID'] if row['ZPARENTFOLDERID'] else None,
             'created_at': created_at.isoformat(),
             'updated_at': updated_at.isoformat(),
             'order_index': row['ZORDERINDEX'],
