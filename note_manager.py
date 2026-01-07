@@ -816,6 +816,82 @@ class NoteManager:
                 
         self.conn.commit()
         return count
+
+    def _get_descendant_folder_ids(self, folder_id: str) -> List[str]:
+        """获取folder_id的所有子文件夹ID（递归，包含自身）。"""
+        if not folder_id:
+            return []
+
+        try:
+            all_folders = self.get_all_folders()
+        except Exception:
+            all_folders = []
+
+        children_map: Dict[str, List[str]] = {}
+        for f in all_folders:
+            pid = f.get('parent_folder_id')
+            if not pid:
+                continue
+            children_map.setdefault(pid, []).append(f.get('id'))
+
+        result: List[str] = []
+        stack: List[str] = [folder_id]
+        seen: set[str] = set()
+
+        while stack:
+            cur = stack.pop()
+            if not cur or cur in seen:
+                continue
+            seen.add(cur)
+            result.append(cur)
+            for child in children_map.get(cur, []):
+                if child and child not in seen:
+                    stack.append(child)
+
+        return result
+
+    def delete_notes_in_folders(self, folder_ids: List[str]):
+        """将指定folder_ids下的所有笔记移到回收站（ZISDELETED=1）。"""
+        if not folder_ids:
+            return
+
+        cursor = self.conn.cursor()
+        cocoa_time = self._timestamp_to_cocoa(datetime.now())
+        placeholders = ",".join(["?"] * len(folder_ids))
+
+        cursor.execute(
+            f"""
+            UPDATE ZNOTE
+            SET ZISDELETED = 1, ZMODIFICATIONDATE = ?
+            WHERE ZISDELETED = 0 AND ZFOLDERID IN ({placeholders})
+            """,
+            (cocoa_time, *folder_ids),
+        )
+        self.conn.commit()
+
+    def delete_folder_to_trash(self, folder_id: str):
+        """删除文件夹：将该文件夹（含子文件夹）下的笔记全部移入“最近删除”，然后删除文件夹本身。
+
+        说明：
+        - “最近删除”在本项目里由笔记字段 `ZISDELETED=1` 表示，而不是一个真实文件夹。
+        - 文件夹删除后，其子文件夹也会一并删除。
+        """
+        if not folder_id:
+            return
+
+        # 1) 获取子树folder ids
+        folder_ids = self._get_descendant_folder_ids(folder_id)
+        if not folder_ids:
+            folder_ids = [folder_id]
+
+        # 2) 笔记移入最近删除
+        self.delete_notes_in_folders(folder_ids)
+
+        # 3) 删除文件夹子树（先删子后删父）
+        cursor = self.conn.cursor()
+        for fid in reversed(folder_ids):
+            cursor.execute('DELETE FROM ZFOLDER WHERE ZIDENTIFIER = ?', (fid,))
+        self.conn.commit()
     
     def __del__(self):
         """析构函数，确保数据库连接关闭"""

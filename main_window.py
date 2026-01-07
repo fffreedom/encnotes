@@ -8,11 +8,14 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QSplitter, QListWidget, QToolBar, QPushButton,
     QListWidgetItem, QMessageBox, QFileDialog, QDialog,
-    QLabel, QCheckBox, QProgressDialog, QInputDialog, QMenu
+    QLabel, QCheckBox, QProgressDialog, QInputDialog, QMenu,
+    QSizePolicy
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
+
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QSettings
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QDesktopServices
 from PyQt6.QtCore import QUrl
+
 from note_editor import NoteEditor
 from note_manager import NoteManager
 from export_manager import ExportManager
@@ -81,7 +84,51 @@ class FolderTwisty(QLabel):
 class MainWindow(QMainWindow):
     """主窗口类"""
 
+    def _is_empty_new_note(self, note: dict) -> bool:
+        """判断某条笔记是否为“空的新笔记草稿”。
+
+        约束：一个文件夹下只允许存在一个这样的草稿，用于避免用户连续创建多个空白笔记。
+
+        判定规则（与“保存标题规则”保持一致）：
+        - 只要整条笔记（纯文本）为空（没有任何非空白字符），就认为是“空草稿”
+        - 不再强依赖数据库里当下的 title 值（因为 title 会随着输入变化而变为“无标题”等）
+        """
+        try:
+            if not note:
+                return False
+
+            # content 是HTML字符串（NoteManager._row_to_dict 已解密），用 toPlainText 语义的方式提取
+            from bs4 import BeautifulSoup
+            html = note.get('content') or ''
+            plain = BeautifulSoup(html, 'html.parser').get_text(separator='\n')
+            return (plain or '').strip() == ""
+        except Exception:
+            return False
+
+    def _current_folder_has_empty_new_note(self) -> bool:
+        """当前选中文件夹下是否已存在一个“空的新笔记草稿”。"""
+        if not self.current_folder_id:
+            return False
+        try:
+            notes = self.note_manager.get_notes_by_folder(self.current_folder_id)
+        except Exception:
+            notes = []
+        for n in notes:
+            if self._is_empty_new_note(n):
+                return True
+        return False
+
+    def _update_new_note_action_enabled(self):
+        """根据当前上下文启用/禁用“新建笔记”动作。"""
+        enabled = bool(self.current_folder_id) and (not self._current_folder_has_empty_new_note())
+
+        for attr in ("new_note_action_toolbar", "new_note_action_menu"):
+            act = getattr(self, attr, None)
+            if act is not None:
+                act.setEnabled(enabled)
+
     def eventFilter(self, obj, event):
+
         # 文件夹重命名：ESC 取消（就地编辑）
         if event.type() == event.Type.KeyPress:
             try:
@@ -155,7 +202,33 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """初始化用户界面"""
         self.setWindowTitle("加密笔记")
-        self.setGeometry(100, 100, 1200, 800)
+
+        # 窗口大小/位置持久化：若用户曾调整过窗口大小，则下次启动按上次值恢复。
+        # 若没有历史记录（首次启动），默认最大化。
+        self._settings = QSettings("encnotes", "encnotes")
+        restored = False
+        try:
+            geo = self._settings.value("main_window/geometry")
+            if geo is not None:
+                restored = self.restoreGeometry(geo)
+        except Exception:
+            restored = False
+
+        # 首次启动：默认最大化（占满当前显示器的可用工作区，不覆盖菜单栏/任务栏）
+        if not restored:
+            try:
+                self.showMaximized()
+            except Exception:
+                self.setGeometry(100, 100, 1200, 800)
+
+        # 可选：恢复窗口状态（例如工具栏停靠等）；失败不影响启动
+        try:
+            st = self._settings.value("main_window/state")
+            if st is not None:
+                self.restoreState(st)
+        except Exception:
+            pass
+
         
         # 创建中心部件
         central_widget = QWidget()
@@ -177,7 +250,8 @@ class MainWindow(QMainWindow):
         # 左侧：文件夹列表
 
         self.folder_list = QListWidget()
-        self.folder_list.setMaximumWidth(200)
+        # 左侧文件夹栏：设置一个更合理的默认/最小宽度；真正的初始宽度由 QSplitter 的 sizes 决定
+        self.folder_list.setMaximumWidth(300)
         self.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.folder_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.folder_list.setStyleSheet("""
@@ -260,6 +334,18 @@ class MainWindow(QMainWindow):
         # 为文件夹列表添加右键菜单
         self.folder_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_list.customContextMenuRequested.connect(self.show_folder_context_menu)
+
+        # 文件夹列表滚动条：默认不显示；用户滚动/拖动时临时浮动显示；停止交互一段时间后自动隐藏
+        self.folder_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._folder_scrollbar_hide_timer = QTimer(self)
+        self._folder_scrollbar_hide_timer.setSingleShot(True)
+        self._folder_scrollbar_hide_timer.timeout.connect(self._hide_folder_scrollbar)
+
+        self._folder_scrollbar_dragging = False
+        folder_sb = self.folder_list.verticalScrollBar()
+        folder_sb.valueChanged.connect(self._show_folder_scrollbar_temporarily)
+        folder_sb.sliderPressed.connect(self._on_folder_scrollbar_pressed)
+        folder_sb.sliderReleased.connect(self._on_folder_scrollbar_released)
         
         # 中间：笔记列表
         self.note_list = QListWidget()
@@ -280,7 +366,7 @@ class MainWindow(QMainWindow):
         # 为笔记列表添加右键菜单
         self.note_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.note_list.customContextMenuRequested.connect(self.show_note_context_menu)
-        self.note_list.setMaximumWidth(300)
+        self.note_list.setMaximumWidth(500)
         self.note_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 去掉焦点边框
         self.note_list.setStyleSheet("""
             QListWidget {
@@ -368,6 +454,10 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 5)
+
+        # 设置分割器初始宽度（关键：启动时的默认宽度由这里决定，而不是 setMaximumWidth）
+        # 这里把左侧文件夹栏稍微加宽，避免“新建文件夹”等默认名称显示不全
+        splitter.setSizes([170, 170, 900])
         
         main_layout.addWidget(splitter)
         
@@ -388,6 +478,10 @@ class MainWindow(QMainWindow):
         new_note_action.setShortcut(QKeySequence("Ctrl+N"))
         new_note_action.triggered.connect(self.create_new_note)
         toolbar.addAction(new_note_action)
+
+        # 保存引用：用于根据“是否已存在空的新笔记”动态禁用
+        self.new_note_action_toolbar = new_note_action
+
         
         # 新建文件夹按钮
         new_folder_action = QAction("📁 新建文件夹", self)
@@ -414,6 +508,10 @@ class MainWindow(QMainWindow):
         new_action.setShortcut(QKeySequence("Ctrl+N"))
         new_action.triggered.connect(self.create_new_note)
         file_menu.addAction(new_action)
+
+        # 保存引用：用于根据“是否已存在空的新笔记”动态禁用
+        self.new_note_action_menu = new_action
+
         
         new_folder_action = QAction("新建文件夹", self)
         new_folder_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
@@ -735,8 +833,34 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # 根据当前文件夹是否已有“空的新笔记草稿”刷新菜单可用状态
+        self._update_new_note_action_enabled()
+
     
+    def _show_folder_scrollbar_temporarily(self):
+        """用户滚动文件夹列表时临时显示滚动条，停止滚动一段时间后隐藏"""
+        self.folder_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._folder_scrollbar_hide_timer.start(2000)
+
+    def _on_folder_scrollbar_pressed(self):
+        """用户按下文件夹列表滚动条开始拖动时：保持显示，不触发隐藏"""
+        self._folder_scrollbar_dragging = True
+        self.folder_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._folder_scrollbar_hide_timer.stop()
+
+    def _on_folder_scrollbar_released(self):
+        """用户结束拖动文件夹列表滚动条：延迟隐藏"""
+        self._folder_scrollbar_dragging = False
+        self._folder_scrollbar_hide_timer.start(2000)
+
+    def _hide_folder_scrollbar(self):
+        """隐藏文件夹列表滚动条（停止滚动后触发）"""
+        if getattr(self, "_folder_scrollbar_dragging", False):
+            return
+        self.folder_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
     def _show_note_scrollbar_temporarily(self):
+
         """用户滚动笔记列表时临时显示滚动条，停止滚动一段时间后隐藏"""
         self.note_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # 只要在滚动，就不断延后隐藏时间
@@ -919,6 +1043,58 @@ class MainWindow(QMainWindow):
         self.folder_list.setItemWidget(icloud_header, header_widget)
 
         
+        # 预计算：系统项计数 + folder_id -> 笔记数量（不含已删除）
+        # 使用一次SQL聚合，避免逐个文件夹调用 get_notes_by_folder 造成卡顿
+        self._folder_note_counts = {}
+        self._system_note_counts = {"all_notes": 0, "deleted": 0}
+        try:
+            cur = self.note_manager.conn.cursor()
+
+            # 所有笔记（未删除）
+            cur.execute('''
+                SELECT COUNT(*) as cnt
+                FROM ZNOTE
+                WHERE ZISDELETED = 0
+            ''')
+            row = cur.fetchone()
+            try:
+                self._system_note_counts["all_notes"] = int(row['cnt'])
+            except Exception:
+                self._system_note_counts["all_notes"] = int(row[0]) if row else 0
+
+            # 最近删除
+            cur.execute('''
+                SELECT COUNT(*) as cnt
+                FROM ZNOTE
+                WHERE ZISDELETED = 1
+            ''')
+            row = cur.fetchone()
+            try:
+                self._system_note_counts["deleted"] = int(row['cnt'])
+            except Exception:
+                self._system_note_counts["deleted"] = int(row[0]) if row else 0
+
+            # 自定义文件夹：folder_id -> 笔记数量（未删除，且属于某文件夹）
+            cur.execute('''
+                SELECT ZFOLDERID as folder_id, COUNT(*) as cnt
+                FROM ZNOTE
+                WHERE ZISDELETED = 0 AND ZFOLDERID IS NOT NULL
+                GROUP BY ZFOLDERID
+            ''')
+            for row in cur.fetchall():
+                try:
+                    fid = row['folder_id']
+                    cnt = row['cnt']
+                except Exception:
+                    fid = row[0]
+                    cnt = row[1]
+                if fid:
+                    self._folder_note_counts[str(fid)] = int(cnt)
+
+        except Exception:
+            self._folder_note_counts = {}
+            self._system_note_counts = {"all_notes": 0, "deleted": 0}
+
         # 添加系统文件夹（使用与自定义文件夹一致的布局，保证左侧文字对齐）
         self._add_system_folder_item("all_notes", "📝 所有笔记")
         
@@ -928,6 +1104,7 @@ class MainWindow(QMainWindow):
         # 构建文件夹树结构
         self.custom_folders = []
         self._add_folders_recursive(all_folders, None, 1, self.custom_folders)
+
         
         # 添加最近删除（使用一致布局）
         self._add_system_folder_item("deleted", "🗑️ 最近删除")
@@ -1046,6 +1223,23 @@ class MainWindow(QMainWindow):
             """)
             row_layout.addWidget(name_label, 1)
 
+            # 右侧：笔记数量（灰色、右对齐；无笔记则不显示）
+            try:
+                count = int(getattr(self, "_folder_note_counts", {}).get(folder_id, 0))
+            except Exception:
+                count = 0
+
+            count_label = QLabel(str(max(0, count)))
+            count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            count_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+            count_label.setMinimumWidth(28)  # 预留 1~3 位数字对齐
+            count_label.setStyleSheet("""
+                font-size: 12px;
+                color: #9a9a9a;
+                background: transparent;
+            """)
+            row_layout.addWidget(count_label)
+
             row_widget.setFixedHeight(28)
             item.setSizeHint(QSize(200, 28))
 
@@ -1126,6 +1320,23 @@ class MainWindow(QMainWindow):
         """)
         row_layout.addWidget(name_label, 1)
 
+        # 右侧：系统项笔记数量（灰色、右对齐）
+        try:
+            count = int(getattr(self, "_system_note_counts", {}).get(key, 0))
+        except Exception:
+            count = 0
+
+        count_label = QLabel(str(max(0, count)))
+        count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        count_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        count_label.setMinimumWidth(28)
+        count_label.setStyleSheet("""
+            font-size: 12px;
+            color: #9a9a9a;
+            background: transparent;
+        """)
+        row_layout.addWidget(count_label)
+
         row_widget.setFixedHeight(28)
         item.setSizeHint(QSize(200, 28))
 
@@ -1134,7 +1345,30 @@ class MainWindow(QMainWindow):
 
     def create_new_folder(self):
 
-        """创建新文件夹（不弹窗）：自动创建“新建文件夹/新建文件夹1/...”并进入就地重命名"""
+        """创建新文件夹（不弹窗）。
+
+        规则：
+        - 如果当前选中的是“自定义文件夹”，则在该文件夹下创建子文件夹（行为与右键菜单一致）
+        - 否则（未选中自定义文件夹/选中系统项/标签等），在根目录下创建
+        """
+        parent_folder_id = None
+
+        # 判断当前选中行是否为自定义文件夹
+        try:
+            current_row = self.folder_list.currentRow()
+            folder_count = len(self.custom_folders)
+            deleted_row = 2 + folder_count
+            if 2 <= current_row < deleted_row:
+                folder_index = current_row - 2
+                if 0 <= folder_index < len(self.custom_folders):
+                    parent_folder_id = self.custom_folders[folder_index]['id']
+        except Exception:
+            parent_folder_id = None
+
+        if parent_folder_id:
+            self.create_subfolder(parent_folder_id)
+            return
+
         base_name = "新建文件夹"
 
         # 顶级文件夹：parent_folder_id 为 None
@@ -1350,9 +1584,15 @@ class MainWindow(QMainWindow):
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            self.note_manager.delete_folder(folder_id)
+            # 删除文件夹时：将该文件夹（含子文件夹）下的笔记全部移入“最近删除”
+            try:
+                self.note_manager.delete_folder_to_trash(folder_id)
+            except Exception:
+                # 兜底：保持原有行为（至少不让UI崩溃）
+                self.note_manager.delete_folder(folder_id)
             self.load_folders()
             self.load_notes()
+
             
     # ========== 标签管理方法 ==========
     
@@ -1400,31 +1640,56 @@ class MainWindow(QMainWindow):
             self.load_notes()
             
     def create_new_note(self):
-        """创建新笔记"""
-        # 获取当前文件夹ID
-        current_row = self.folder_list.currentRow()
-        folder_id = None
-        
-        folder_count = len(self.custom_folders)
-        deleted_row = 2 + folder_count
-        
-        if 2 <= current_row < deleted_row:  # 自定义文件夹
-            folder_index = current_row - 2
-            if 0 <= folder_index < len(self.custom_folders):
-                folder_id = self.custom_folders[folder_index]['id']
-        
-        note_id = self.note_manager.create_note(folder_id=folder_id)
+        """创建新笔记（菜单/工具栏）。
+
+        规则：
+        - 默认在当前选中的“自定义文件夹”下创建
+        - 标题默认为“新笔记”
+        - 同一文件夹下只允许存在一个“空的新笔记草稿”；若已存在，则该菜单应不可用（这里也做一次保护）
+        """
+        # 必须在自定义文件夹下创建；未选中文件夹时直接忽略
+        folder_id = self.current_folder_id
+        if not folder_id:
+            self._update_new_note_action_enabled()
+            return
+
+        # 防御：如果已存在空草稿，直接返回
+        if self._current_folder_has_empty_new_note():
+            self._update_new_note_action_enabled()
+            return
+
+        note_id = self.note_manager.create_note(title="新笔记", folder_id=folder_id)
+        try:
+            # 确保标题落库（兼容未来 create_note 默认值变化）
+            self.note_manager.update_note(note_id, title="新笔记")
+        except Exception:
+            pass
+
+        # 刷新笔记列表
         self.load_notes()
-        
+
+        # 同步刷新左侧文件夹计数（load_notes 不会重建 folder_list）
+        selected_row = self.folder_list.currentRow()
+        self.load_folders()
+        try:
+            if selected_row is not None and 0 <= selected_row < self.folder_list.count():
+                self.folder_list.setCurrentRow(selected_row)
+        except Exception:
+            pass
+
         # 选中新创建的笔记
         for i in range(self.note_list.count()):
             item = self.note_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == note_id:
                 self.note_list.setCurrentItem(item)
                 break
-        
+
         # 设置焦点到编辑器，让光标闪烁
         self.editor.text_edit.setFocus()
+
+        # 刷新可用状态
+        self._update_new_note_action_enabled()
+
                 
     def show_folder_context_menu(self, position):
         """显示文件夹列表的右键菜单"""
@@ -1442,8 +1707,14 @@ class MainWindow(QMainWindow):
             if 0 <= folder_index < len(self.custom_folders):
                 folder_id = self.custom_folders[folder_index]['id']
                 
-                # 新建笔记
+                # 新建笔记（若该文件夹已存在“空的新笔记草稿”，则禁用）
                 new_note_action = QAction("新建笔记", self)
+                try:
+                    notes = self.note_manager.get_notes_by_folder(folder_id)
+                except Exception:
+                    notes = []
+                if any(self._is_empty_new_note(n) for n in notes):
+                    new_note_action.setEnabled(False)
                 new_note_action.triggered.connect(lambda: self.create_note_in_folder(folder_id))
                 menu.addAction(new_note_action)
                 
@@ -1555,27 +1826,50 @@ class MainWindow(QMainWindow):
     
     def create_note_in_folder(self, folder_id: str, default_title: str | None = None):
         """在指定文件夹下创建笔记"""
-        # 创建笔记
-        note_id = self.note_manager.create_note(folder_id=folder_id)
-        if default_title:
-            try:
-                self.note_manager.update_note(note_id, title=default_title)
-            except Exception:
-                pass
+        if default_title is None:
+            default_title = "新笔记"
 
-        
+        # “同一文件夹只允许一个空的新笔记草稿”
+        if folder_id and default_title == "新笔记":
+            try:
+                notes = self.note_manager.get_notes_by_folder(folder_id)
+            except Exception:
+                notes = []
+            if any(self._is_empty_new_note(n) for n in notes):
+                self._update_new_note_action_enabled()
+                return
+
+        # 创建笔记
+        note_id = self.note_manager.create_note(title=default_title, folder_id=folder_id)
+        try:
+            self.note_manager.update_note(note_id, title=default_title)
+        except Exception:
+            pass
+
         # 刷新笔记列表
         self.load_notes()
-        
+
+        # 同步刷新左侧文件夹计数
+        selected_row = self.folder_list.currentRow()
+        self.load_folders()
+        try:
+            if selected_row is not None and 0 <= selected_row < self.folder_list.count():
+                self.folder_list.setCurrentRow(selected_row)
+        except Exception:
+            pass
+
         # 选中新创建的笔记
         for i in range(self.note_list.count()):
             item = self.note_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == note_id:
                 self.note_list.setCurrentItem(item)
                 break
-        
+
         # 设置焦点到编辑器，让光标闪烁
         self.editor.text_edit.setFocus()
+
+        self._update_new_note_action_enabled()
+
     
     def rename_note(self, note_id: str):
         """重命名笔记"""
@@ -1623,6 +1917,15 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             self.note_manager.delete_note(note_id)
             self.load_notes()
+
+            # 同步刷新左侧文件夹计数
+            selected_row = self.folder_list.currentRow()
+            self.load_folders()
+            try:
+                if selected_row is not None and 0 <= selected_row < self.folder_list.count():
+                    self.folder_list.setCurrentRow(selected_row)
+            except Exception:
+                pass
             
             # 如果删除的是当前笔记，清空编辑器
             if note_id == self.current_note_id:
@@ -1776,6 +2079,7 @@ class MainWindow(QMainWindow):
                 
                 # 设置焦点到编辑器，让光标闪烁
                 self.editor.text_edit.setFocus()
+
         else:
             self.current_note_id = None
             self.editor.current_note_id = None
@@ -1784,18 +2088,20 @@ class MainWindow(QMainWindow):
                 self.editor.text_edit.clearFocus()
             except Exception:
                 pass
-            
 
-            
+        # 选中变化后刷新“新建笔记”可用状态
+        self._update_new_note_action_enabled()
 
-            
-
-            
     def on_text_changed(self):
         """文本变化事件"""
         if self.current_note_id:
             # 自动保存
             self.save_current_note()
+
+        # 文本一旦不再为空，可能需要重新允许“新建笔记”
+        self._update_new_note_action_enabled()
+
+
             
     def save_current_note(self):
         """保存当前笔记"""
@@ -1804,10 +2110,18 @@ class MainWindow(QMainWindow):
             plain_text = self.editor.toPlainText()
             
             # 从内容中提取标题（第一行）
-            title = plain_text.split('\n')[0][:50] if plain_text else "无标题"
-            if not title.strip():
-                title = "无标题"
-                
+            # 规则：
+            # - 整条笔记为空（没有任何可见字符）=> 标题使用“新笔记”（便于继续编辑，也用于“仅允许一个空草稿”判断）
+            # - 正文有内容但第一行为空 => 标题为“无标题”
+            normalized_plain = (plain_text or "").replace("\r\n", "\n").replace("\r", "\n")
+            is_note_empty = normalized_plain.strip() == ""
+
+            if is_note_empty:
+                title = "新笔记"
+            else:
+                first_line = normalized_plain.split("\n")[0][:50]
+                title = first_line.strip() or "无标题"
+
             self.note_manager.update_note(
                 self.current_note_id,
                 title=title,
@@ -2188,6 +2502,16 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """关闭事件"""
+        # 持久化窗口大小/位置（用户调整过的尺寸下次启动恢复）
+        try:
+            settings = getattr(self, "_settings", None)
+            if settings is None:
+                settings = QSettings("encnotes", "encnotes")
+            settings.setValue("main_window/geometry", self.saveGeometry())
+            settings.setValue("main_window/state", self.saveState())
+        except Exception:
+            pass
+
         self.save_current_note()
         
         # 如果启用了同步，在关闭前同步一次
