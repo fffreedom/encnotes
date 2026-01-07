@@ -143,6 +143,103 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # 文件夹拖拽：把一个文件夹拖到另一个文件夹上 => 作为其子文件夹
+        try:
+            from PyQt6.QtCore import QEvent
+            if obj is getattr(self, "folder_list", None) and event.type() == QEvent.Type.Drop:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+
+                target_item = self.folder_list.itemAt(pos)
+                target_payload = target_item.data(Qt.ItemDataRole.UserRole) if target_item else None
+                target_folder_id = None
+                if isinstance(target_payload, tuple) and len(target_payload) == 2 and target_payload[0] == "folder":
+                    target_folder_id = target_payload[1]
+
+                # 可靠获取被拖拽的源文件夹：不要用 currentItem（Drop 时 current 可能已经切到目标）
+                # 说明：application/x-qabstractitemmodeldatalist 的编码格式较特殊，之前用 readInt32 读“map size”会读错，
+                # 导致解析失败，从而 src_folder_id 经常为 None，update_folder_parent 不会执行。
+                src_folder_id = None
+                try:
+                    from PyQt6.QtCore import QDataStream, QIODevice
+                    md = event.mimeData()
+                    fmt = "application/x-qabstractitemmodeldatalist"
+                    if md and md.hasFormat(fmt):
+                        data = md.data(fmt)
+                        stream = QDataStream(data)
+                        stream.setVersion(QDataStream.Version.Qt_5_0)
+
+                        # 每个条目：row(int) + column(int) + QMap<int,QVariant>
+                        # 在 PyQt 里可以用 readInt32 读 row/col，然后用 readQVariantMap 读整个 map。
+                        while not stream.atEnd():
+                            _row = stream.readInt32()
+                            _col = stream.readInt32()
+                            role_map = stream.readQVariantMap()
+                            payload = role_map.get(int(Qt.ItemDataRole.UserRole))
+                            if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder":
+                                src_folder_id = payload[1]
+                                break
+                except Exception:
+                    src_folder_id = None
+
+                # 兜底：如果 mimeData 解析失败，再退回 currentItem
+                if not src_folder_id:
+                    src_item = self.folder_list.currentItem()
+                    src_payload = src_item.data(Qt.ItemDataRole.UserRole) if src_item else None
+                    if isinstance(src_payload, tuple) and len(src_payload) == 2 and src_payload[0] == "folder":
+                        src_folder_id = src_payload[1]
+
+                # 只有“拖动自定义文件夹”才处理；目标可为文件夹或空白(顶级)
+                if src_folder_id:
+                    # 拖到某个文件夹上：作为其子文件夹；拖到空白：移动到顶级
+                    new_parent = target_folder_id if target_folder_id else None
+
+                    # 避免把自己拖到自己上（无效）
+                    if new_parent == src_folder_id:
+                        event.accept()
+                        return True
+
+                    self.note_manager.update_folder_parent(src_folder_id, new_parent)
+
+                    # 刷新文件夹树，并尽量保持选中
+                    self.load_folders()
+
+                    # 清理拖拽期间残留的“黄色选中背景”
+                    try:
+                        cur_item = self.folder_list.currentItem()
+                        cur_w = self.folder_list.itemWidget(cur_item) if cur_item else None
+                        if cur_w and cur_w.objectName() == "folder_row_widget":
+                            cur_w.setProperty("selected", False)
+                            cur_w.style().unpolish(cur_w)
+                            cur_w.style().polish(cur_w)
+                            cur_w.update()
+                    except Exception:
+                        pass
+
+                    try:
+                        self.folder_list.setCurrentRow(-1)
+                    except Exception:
+                        try:
+                            self.folder_list.setCurrentItem(None)
+                        except Exception:
+                            pass
+
+                    for i in range(self.folder_list.count()):
+                        it = self.folder_list.item(i)
+                        if not it:
+                            continue
+                        payload = it.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder" and payload[1] == src_folder_id:
+                            self.folder_list.setCurrentRow(i)
+                            break
+
+                try:
+                    event.acceptProposedAction()
+                except Exception:
+                    event.accept()
+                return True
+        except Exception:
+            pass
+
         # 空文件夹：点击编辑器自动新建笔记
         try:
             from PyQt6.QtCore import QEvent
@@ -254,6 +351,20 @@ class MainWindow(QMainWindow):
         self.folder_list.setMaximumWidth(300)
         self.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.folder_list.setTextElideMode(Qt.TextElideMode.ElideRight)
+
+        # 文件夹拖拽：允许把一个文件夹拖到另一个文件夹上，作为其子文件夹
+        self.folder_list.setDragEnabled(True)
+        self.folder_list.setAcceptDrops(True)
+        self.folder_list.setDropIndicatorShown(True)
+        try:
+            from PyQt6.QtWidgets import QAbstractItemView
+            # 注意：不要用 InternalMove。InternalMove 会执行“列表内重排”，看起来只改变位置不改变层级。
+            # 我们把 Drop 交给 eventFilter 处理：写入 ZPARENTFOLDERID 后再 load_folders() 重新渲染层级树。
+            self.folder_list.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        except Exception:
+            pass
+        self.folder_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+
         self.folder_list.setStyleSheet("""
             QListWidget {
                 border: none;
@@ -324,6 +435,12 @@ class MainWindow(QMainWindow):
         self.folder_list.currentRowChanged.connect(self.on_folder_changed)
         self.folder_list.itemDoubleClicked.connect(self.on_folder_item_double_clicked)
         self.folder_list.itemClicked.connect(self.on_folder_item_clicked)
+
+        # 让 MainWindow.eventFilter 能收到 folder_list 的 Drop 事件
+        try:
+            self.folder_list.installEventFilter(self)
+        except Exception:
+            pass
 
         # 允许“选中后再次单击”进入重命名（仿Finder）
         self.folder_list.setEditTriggers(QListWidget.EditTrigger.NoEditTriggers)
@@ -1288,6 +1405,13 @@ class MainWindow(QMainWindow):
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, ("system", key))
 
+        # 系统项（所有笔记/最近删除）不允许拖动：它们不是“真实文件夹节点”，
+        # 也不参与父子层级调整，避免用户误操作。
+        try:
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
+        except Exception:
+            pass
+
         row_widget = QWidget()
         row_widget.setObjectName("folder_row_widget")
         row_widget.setProperty("selected", False)
@@ -2059,29 +2183,71 @@ class MainWindow(QMainWindow):
     def on_folder_changed(self, index):
         """文件夹切换"""
         # 选中高亮由 `folder_row_widget` 自己绘制（避免与就地编辑的白色输入框冲突）
-        try:
-            prev_row = getattr(self, "_prev_folder_row", None)
-            if prev_row is not None and 0 <= prev_row < self.folder_list.count():
-                prev_item = self.folder_list.item(prev_row)
-                prev_w = self.folder_list.itemWidget(prev_item) if prev_item else None
-                if prev_w and prev_w.objectName() == "folder_row_widget":
-                    prev_w.setProperty("selected", False)
-                    prev_w.style().unpolish(prev_w)
-                    prev_w.style().polish(prev_w)
-                    prev_w.update()
+        def _set_row_widget_selected(row_widget: QWidget | None, selected: bool):
+            if not row_widget:
+                return
+            if row_widget.objectName() != "folder_row_widget":
+                return
+            row_widget.setProperty("selected", selected)
+            row_widget.style().unpolish(row_widget)
+            row_widget.style().polish(row_widget)
+            row_widget.update()
 
+        def _find_folder_row_widget_by_id(folder_id: str):
+            if not folder_id:
+                return None
+            for i in range(self.folder_list.count()):
+                it = self.folder_list.item(i)
+                if not it:
+                    continue
+                payload = it.data(Qt.ItemDataRole.UserRole)
+                if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder" and payload[1] == folder_id:
+                    return self.folder_list.itemWidget(it)
+            return None
+
+        try:
+            # 先取消“上一次选中的文件夹/系统项”的高亮。
+            # 不能只用 row index：拖拽后会 load_folders() 重建列表，row 会变化，导致旧高亮残留。
+            prev_folder_id = getattr(self, "_prev_selected_folder_id", None)
+            prev_system_key = getattr(self, "_prev_selected_system_key", None)
+
+            prev_w = None
+            if prev_folder_id:
+                prev_w = _find_folder_row_widget_by_id(prev_folder_id)
+            elif prev_system_key:
+                # system item: 通过 key 定位
+                for i in range(self.folder_list.count()):
+                    it = self.folder_list.item(i)
+                    if not it:
+                        continue
+                    payload = it.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "system" and payload[1] == prev_system_key:
+                        prev_w = self.folder_list.itemWidget(it)
+                        break
+
+            _set_row_widget_selected(prev_w, False)
+
+            # 再设置当前行选中
+            cur_folder_id = None
+            cur_system_key = None
             if index is not None and 0 <= index < self.folder_list.count():
                 cur_item = self.folder_list.item(index)
-                cur_w = self.folder_list.itemWidget(cur_item) if cur_item else None
-                if cur_w and cur_w.objectName() == "folder_row_widget":
-                    cur_w.setProperty("selected", True)
-                    cur_w.style().unpolish(cur_w)
-                    cur_w.style().polish(cur_w)
-                    cur_w.update()
+                payload = cur_item.data(Qt.ItemDataRole.UserRole) if cur_item else None
 
-            self._prev_folder_row = index
+                if isinstance(payload, tuple) and len(payload) == 2:
+                    if payload[0] == "folder":
+                        cur_folder_id = payload[1]
+                    elif payload[0] == "system":
+                        cur_system_key = payload[1]
+
+                cur_w = self.folder_list.itemWidget(cur_item) if cur_item else None
+                _set_row_widget_selected(cur_w, True)
+
+            # 记录“上一次选中”的语义ID（而不是 row）
+            self._prev_selected_folder_id = cur_folder_id
+            self._prev_selected_system_key = cur_system_key
         except Exception:
-            self._prev_folder_row = index
+            pass
 
         self.load_notes()
 

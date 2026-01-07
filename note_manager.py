@@ -544,6 +544,42 @@ class NoteManager:
         ''', (name, cocoa_time, folder_id))
         
         self.conn.commit()
+
+    def update_folder_parent(self, folder_id: str, parent_folder_id: Optional[str]):
+        """更新文件夹父级（用于拖拽：把文件夹移动到另一个文件夹下）。
+
+        规则：
+        - parent_folder_id=None 表示移动到顶级。
+        - 不允许把文件夹移动到自身或自身的子孙文件夹下（避免环）。
+        """
+        if not folder_id:
+            return
+
+        # 自己不能成为自己的父级
+        if parent_folder_id == folder_id:
+            return
+
+        # 禁止移动到自己的子孙节点下
+        try:
+            descendants = set(self._get_descendant_folder_ids(folder_id))
+        except Exception:
+            descendants = set([folder_id])
+
+        if parent_folder_id and parent_folder_id in descendants:
+            return
+
+        cursor = self.conn.cursor()
+        cocoa_time = self._timestamp_to_cocoa(datetime.now())
+        cursor.execute(
+            '''
+            UPDATE ZFOLDER
+            SET ZPARENTFOLDERID = ?, ZMODIFICATIONDATE = ?
+            WHERE ZIDENTIFIER = ?
+            ''',
+            (parent_folder_id, cocoa_time, folder_id),
+        )
+        self.conn.commit()
+
         
     def delete_folder(self, folder_id: str):
         """删除文件夹（将其中的笔记移到无文件夹）"""
