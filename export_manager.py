@@ -17,7 +17,7 @@ class ExportManager:
     """导出管理器类"""
     
     def __init__(self):
-        self.export_dir = Path.home() / "Documents" / "MathNotes导出"
+        self.export_dir = Path.home() / "Documents" / "encnotes导出"
         self.export_dir.mkdir(parents=True, exist_ok=True)
         
     def export_to_pdf(self, note_title, note_content_html):

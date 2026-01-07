@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
         
     def init_ui(self):
         """初始化用户界面"""
-        self.setWindowTitle("数学笔记")
+        self.setWindowTitle("加密笔记")
         self.setGeometry(100, 100, 1200, 800)
         
         # 创建中心部件

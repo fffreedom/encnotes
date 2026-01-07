@@ -22,7 +22,7 @@ class EncryptionManager:
     """加密管理器类"""
     
     # 钥匙串服务名称
-    KEYRING_SERVICE = "com.mathnotes.encryption"
+    KEYRING_SERVICE = "com.encnotes.encryption"
     KEYRING_USERNAME = "master_key"
     
     # 加密配置
@@ -37,7 +37,7 @@ class EncryptionManager:
         self.is_unlocked = False
         
         # 配置文件路径
-        self.config_dir = Path.home() / "Library" / "Group Containers" / "group.com.mathnotes"
+        self.config_dir = Path.home() / "Library" / "Group Containers" / "group.com.encnotes"
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.config_dir / "encryption_config.json"
         

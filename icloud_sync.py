@@ -18,12 +18,12 @@ class CloudKitSyncManager:
     
     def __init__(self, note_manager):
         self.note_manager = note_manager
-        self.container_id = "iCloud.com.mathnotes.app"
+        self.container_id = "iCloud.com.encnotes.app"
         self.sync_enabled = False
         self.last_sync_time = None
         
         # 配置文件路径
-        self.config_dir = Path.home() / "Library" / "Group Containers" / "group.com.mathnotes"
+        self.config_dir = Path.home() / "Library" / "Group Containers" / "group.com.encnotes"
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.config_dir / "sync_config.json"
         

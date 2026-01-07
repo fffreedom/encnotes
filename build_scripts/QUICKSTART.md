@@ -38,7 +38,7 @@ chmod +x build_dmg.sh build_app.sh
 
 ```bash
 # 打开生成的 DMG
-open ../dist/MathNotes-3.4.0.dmg
+open ../dist/encnotes-3.4.0.dmg
 
 # 拖拽应用到 Applications 文件夹
 # 从启动台启动应用测试
@@ -53,7 +53,7 @@ cd build_scripts
 ./build_app.sh
 
 # 直接运行生成的应用
-open ../dist/MathNotes.app
+open ../dist/encnotes.app
 ```
 
 ## 📝 常见问题
@@ -88,15 +88,15 @@ brew install create-dmg
 
 ```
 dist/
-├── MathNotes.app           # macOS 应用（可直接运行）
-└── MathNotes-3.4.0.dmg     # DMG 安装包（用于分发）
+├── encnotes.app           # macOS 应用（可直接运行）
+└── encnotes-3.4.0.dmg     # DMG 安装包（用于分发）
 ```
 
 ## 🎉 完成！
 
 现在你可以：
-- 双击 `MathNotes.app` 直接运行
-- 分享 `MathNotes-3.4.0.dmg` 给其他用户
+- 双击 `encnotes.app` 直接运行
+- 分享 `encnotes-3.4.0.dmg` 给其他用户
 - 上传到 GitHub Releases 供下载
 
 ---

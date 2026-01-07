@@ -440,8 +440,8 @@
   - 默认数学符号图标
 
 - 📋 **应用信息**
-  - Bundle ID: com.mathnotes.app
-  - 应用名称：数学笔记
+  - Bundle ID: com.encnotes.app
+  - 应用名称：加密笔记
   - 版本号：3.4.0
   - 支持 macOS 10.14+
 
@@ -471,8 +471,8 @@ cd build_scripts
 ```
 
 #### 输出文件
-- `dist/MathNotes.app` - macOS 应用包
-- `dist/MathNotes-3.4.0.dmg` - DMG 安装镜像
+- `dist/encnotes.app` - macOS 应用包
+- `dist/encnotes-3.4.0.dmg` - DMG 安装镜像
 
 ---
 
@@ -737,7 +737,7 @@ cd build_scripts
 #### 数据存储：JSON → SQLite
 
 - 🗄️ **SQLite数据库** - 高性能存储
-  - 存储位置：`~/Library/Group Containers/group.com.mathnotes/NoteStore.sqlite`
+  - 存储位置：`~/Library/Group Containers/group.com.encnotes/NoteStore.sqlite`
   - 模仿macOS备忘录的存储方式
   - 支持事务和索引
   - 10倍性能提升
@@ -786,7 +786,7 @@ cd build_scripts
   - 保留所有格式
 
 - ✨ **导出文件夹管理** - 一键打开导出目录
-  - 所有导出文件统一保存在 `~/Documents/MathNotes导出/`
+  - 所有导出文件统一保存在 `~/Documents/encnotes导出/`
 
 ##### ☁️ iCloud同步功能
 - ✨ **启用/禁用同步** - 灵活控制同步状态
@@ -870,7 +870,7 @@ cd build_scripts
   - 回收站功能
 
 - ✨ **数据持久化** - JSON格式存储
-  - 保存在 `~/.mathnotes/notes.json`
+  - 保存在 `~/.encnotes/notes.json`
   - 易于备份
 
 #### 技术栈

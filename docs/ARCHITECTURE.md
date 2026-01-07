@@ -2,7 +2,7 @@
 
 ## 概述
 
-数学笔记应用是一款模仿 macOS 备忘录的笔记软件，采用 Python + PyQt6 开发，支持富文本编辑和数学公式渲染。本文档详细说明应用的技术架构、设计理念和实现细节。
+加密笔记应用是一款模仿 macOS 备忘录的笔记软件，采用 Python + PyQt6 开发，支持富文本编辑和数学公式渲染。本文档详细说明应用的技术架构、设计理念和实现细节。
 
 ## 设计理念
 
@@ -490,7 +490,7 @@ ICloudSync.sync()
 使用 PyInstaller 打包为独立应用：
 
 ```bash
-pyinstaller --name="数学笔记" \
+pyinstaller --name="加密笔记" \
             --windowed \
             --icon=icon.icns \
             --add-data="resources:resources" \

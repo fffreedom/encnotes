@@ -18,8 +18,8 @@ def main():
     )
     
     app = QApplication(sys.argv)
-    app.setApplicationName("数学笔记")
-    app.setOrganizationName("MathNotes")
+    app.setApplicationName("加密笔记")
+    app.setOrganizationName("encnotes")
     
     # 设置Mac风格
     app.setStyle("Fusion")

@@ -8,10 +8,10 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}快速构建 MathNotes.app...${NC}"
+echo -e "${GREEN}快速构建 encnotes.app...${NC}"
 
 BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SPEC_FILE="${BUILD_DIR}/build_scripts/MathNotes.spec"
+SPEC_FILE="${BUILD_DIR}/build_scripts/encnotes.spec"
 
 # 清理
 rm -rf "${BUILD_DIR}/build"
@@ -27,5 +27,5 @@ fi
 cd "${BUILD_DIR}/build_scripts"
 pyinstaller --clean --noconfirm "${SPEC_FILE}"
 
-echo -e "${GREEN}构建完成: ${BUILD_DIR}/dist/MathNotes.app${NC}"
-echo -e "${YELLOW}提示: 可以直接运行 dist/MathNotes.app 测试应用${NC}"
+echo -e "${GREEN}构建完成: ${BUILD_DIR}/dist/encnotes.app${NC}"
+echo -e "${YELLOW}提示: 可以直接运行 dist/encnotes.app 测试应用${NC}"

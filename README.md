@@ -1,4 +1,4 @@
-# 数学笔记 - Mac风格备忘录应用
+# 加密笔记 - Mac风格备忘录应用
 
 一款类似Mac备忘录的笔记软件，支持插入LaTeX和MathML数学公式。
 
@@ -45,8 +45,8 @@
 ### 方式一：使用 DMG 安装包（推荐）
 
 1. 下载最新的 DMG 安装包
-2. 双击打开 `MathNotes-x.x.x.dmg`
-3. 将"数学笔记"拖拽到 Applications 文件夹
+2. 双击打开 `encnotes-x.x.x.dmg`
+3. 将"加密笔记"拖拽到 Applications 文件夹
 4. 从启动台或 Applications 文件夹启动应用
 
 ### 方式二：从源码运行
@@ -89,7 +89,7 @@ python3 create_icon.py
 ./build_dmg.sh
 ```
 
-生成的 DMG 文件位于 `dist/MathNotes-x.x.x.dmg`
+生成的 DMG 文件位于 `dist/encnotes-x.x.x.dmg`
 
 详细的打包说明请查看：[构建指南](build_scripts/README.md)
 
@@ -221,7 +221,7 @@ python3 create_icon.py
    - 点击菜单栏"文件" → "导出" → "导出为HTML"
    - 可在浏览器中查看
 
-**导出位置**：所有导出的文件保存在 `~/Documents/MathNotes导出/` 文件夹中
+**导出位置**：所有导出的文件保存在 `~/Documents/encnotes导出/` 文件夹中
 
 ### iCloud同步
 
@@ -313,7 +313,7 @@ python3 create_icon.py
 笔记数据使用**SQLite数据库**存储，模仿 macOS 备忘录的存储方式：
 
 ```
-~/Library/Group Containers/group.com.mathnotes/
+~/Library/Group Containers/group.com.encnotes/
 ├── NoteStore.sqlite        # 笔记数据库
 ├── sync_config.json       # 同步配置
 └── CloudKit/              # CloudKit缓存
@@ -335,7 +335,7 @@ python3 create_icon.py
 启用iCloud同步后，使用**CloudKit**进行同步（与 macOS 备忘录相同）：
 
 ```
-~/Library/Group Containers/group.com.mathnotes/CloudKit/
+~/Library/Group Containers/group.com.encnotes/CloudKit/
 └── *.ckrecord          # CloudKit记录缓存
 ```
 
@@ -349,7 +349,7 @@ python3 create_icon.py
 
 导出的文件保存在：
 ```
-~/Documents/MathNotes导出/
+~/Documents/encnotes导出/
 ```
 
 ## 🔄 数据迁移
@@ -421,7 +421,7 @@ notes/
 ├── README.md           # 说明文档
 ├── CHANGELOG.md        # 更新日志
 ├── build_scripts/      # 打包脚本
-│   ├── MathNotes.spec  # PyInstaller配置
+│   ├── encnotes.spec  # PyInstaller配置
 │   ├── build_dmg.sh    # DMG打包脚本
 │   ├── build_app.sh    # 快速构建脚本
 │   ├── create_icon.py  # 图标生成工具
@@ -532,7 +532,7 @@ A: 确保已安装matplotlib库，并且LaTeX语法正确。
 
 ### Q: 如何备份笔记？
 A: 有三种方式备份笔记：
-1. 复制数据库文件 `~/Library/Group Containers/group.com.mathnotes/NoteStore.sqlite`
+1. 复制数据库文件 `~/Library/Group Containers/group.com.encnotes/NoteStore.sqlite`
 2. 使用导出功能导出为PDF、Word或Markdown
 3. 启用iCloud同步，自动备份到云端
 
@@ -576,4 +576,4 @@ MIT License
 
 ---
 
-**享受数学笔记的乐趣！** 📐✨
+**享受加密笔记的乐趣！** 📐✨

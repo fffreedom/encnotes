@@ -142,7 +142,7 @@ python main.py
 1. **无法恢复笔记**：这是端到端加密的特性
 2. **重置应用**：删除数据库文件，重新开始
    ```bash
-   rm -rf ~/Library/Group\ Containers/group.com.mathnotes/
+   rm -rf ~/Library/Group\ Containers/group.com.encnotes/
    ```
 3. **从备份恢复**：如果有导出的笔记，可以重新导入
 
@@ -156,15 +156,15 @@ python main.py
 ### 钥匙串访问被拒绝
 
 如果提示钥匙串访问被拒绝：
-1. 打开"钥匙串访问"应用
-2. 找到 `com.mathnotes.encryption` 项
+1. 打开“钥匙串访问”应用
+2. 找到 `com.encnotes.encryption` 项
 3. 允许 Python 访问
 
 ## 📚 技术参考
 
 ### 加密配置文件
 
-位置：`~/Library/Group Containers/group.com.mathnotes/encryption_config.json`
+位置：`~/Library/Group Containers/group.com.encnotes/encryption_config.json`
 
 内容：
 ```json
@@ -177,14 +177,14 @@ python main.py
 
 ### 数据库文件
 
-位置：`~/Library/Group Containers/group.com.mathnotes/NoteStore.sqlite`
+位置：`~/Library/Group Containers/group.com.encnotes/NoteStore.sqlite`
 
 - 笔记内容（ZCONTENT字段）以加密形式存储
 - 标题（ZTITLE字段）未加密（用于列表显示）
 
 ### 钥匙串项
 
-- 服务名：`com.mathnotes.encryption`
+- 服务名：`com.encnotes.encryption`
 - 账户名：`master_key`
 - 内容：Base64编码的加密密钥
 

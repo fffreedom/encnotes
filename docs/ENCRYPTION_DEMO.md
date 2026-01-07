@@ -39,7 +39,7 @@
 
 **钥匙串集成**：
 - 使用 `keyring` 库访问系统钥匙串
-- 服务名：`com.mathnotes.encryption`
+- 服务名：`com.encnotes.encryption`
 - 账户名：`master_key`
 - 自动保存加密密钥
 

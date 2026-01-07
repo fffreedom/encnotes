@@ -14,13 +14,13 @@ def migrate_json_to_sqlite():
     """将JSON数据迁移到SQLite数据库"""
     
     print("=" * 60)
-    print("数学笔记 - 数据迁移工具")
+    print("加密笔记 - 数据迁移工具")
     print("从JSON格式迁移到SQLite数据库")
     print("=" * 60)
     print()
     
     # 旧数据路径
-    old_data_dir = Path.home() / ".mathnotes"
+    old_data_dir = Path.home() / ".encnotes"
     old_notes_file = old_data_dir / "notes.json"
     
     # 检查旧数据是否存在

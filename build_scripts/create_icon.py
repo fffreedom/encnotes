@@ -128,7 +128,7 @@ def main():
     script_dir = Path(__file__).parent
     
     print("=" * 50)
-    print("  MathNotes 图标生成工具")
+    print("  encnotes 图标生成工具")
     print("=" * 50)
     print()
     

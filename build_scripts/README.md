@@ -1,10 +1,10 @@
 # 构建和打包指南
 
-本目录包含将 MathNotes 应用打包为 macOS DMG 安装包的所有脚本和配置文件。
+本目录包含将 encnotes 应用打包为 macOS DMG 安装包的所有脚本和配置文件。
 
 ## 📁 文件说明
 
-- `MathNotes.spec` - PyInstaller 配置文件
+- `encnotes.spec` - PyInstaller 配置文件
 - `build_dmg.sh` - 完整的 DMG 打包脚本
 - `build_app.sh` - 快速构建脚本（仅打包 .app）
 - `create_icon.py` - 图标生成工具
@@ -50,7 +50,7 @@ chmod +x build_app.sh
 ./build_app.sh
 ```
 
-生成的应用位于：`dist/MathNotes.app`
+生成的应用位于：`dist/encnotes.app`
 
 #### 方式二：完整打包（生成 DMG）
 
@@ -62,7 +62,7 @@ chmod +x build_dmg.sh
 ./build_dmg.sh
 ```
 
-生成的 DMG 位于：`dist/MathNotes-3.3.0.dmg`
+生成的 DMG 位于：`dist/encnotes-3.3.0.dmg`
 
 ## 📦 打包流程详解
 
@@ -71,10 +71,10 @@ chmod +x build_dmg.sh
 PyInstaller 将 Python 应用及其依赖打包成独立的 macOS 应用：
 
 ```bash
-pyinstaller --clean --noconfirm MathNotes.spec
+pyinstaller --clean --noconfirm encnotes.spec
 ```
 
-**配置说明**（MathNotes.spec）：
+**配置说明**（encnotes.spec）：
 
 - `hiddenimports`: 显式声明需要打包的模块
 - `excludes`: 排除不需要的模块（减小体积）
@@ -88,11 +88,11 @@ pyinstaller --clean --noconfirm MathNotes.spec
 
 ```bash
 create-dmg \
-  --volname "数学笔记" \
+  --volname "加密笔记" \
   --window-size 800 400 \
   --icon-size 100 \
   --app-drop-link 600 185 \
-  "MathNotes-3.3.0.dmg" \
+  "encnotes-3.3.0.dmg" \
   "dmg_build/"
 ```
 
@@ -107,16 +107,16 @@ create-dmg \
 
 ### 修改应用信息
 
-编辑 `MathNotes.spec` 文件：
+编辑 `encnotes.spec` 文件：
 
 ```python
 app = BUNDLE(
     coll,
-    name='MathNotes.app',
-    bundle_identifier='com.mathnotes.app',  # 修改应用标识
+    name='encnotes.app',
+    bundle_identifier='com.encnotes.app',  # 修改应用标识
     version='3.3.0',                         # 修改版本号
     info_plist={
-        'CFBundleDisplayName': '数学笔记',   # 修改显示名称
+        'CFBundleDisplayName': '加密笔记',   # 修改显示名称
         # ... 其他配置
     },
 )
@@ -137,7 +137,7 @@ create-dmg \
 
 ### 添加自定义文件
 
-在 `MathNotes.spec` 中添加：
+在 `encnotes.spec` 中添加：
 
 ```python
 datas=[
@@ -151,7 +151,7 @@ datas=[
 
 ### 问题 1: PyInstaller 找不到模块
 
-**解决方案**：在 `MathNotes.spec` 的 `hiddenimports` 中添加缺失的模块：
+**解决方案**：在 `encnotes.spec` 的 `hiddenimports` 中添加缺失的模块：
 
 ```python
 hiddenimports=[
@@ -165,7 +165,7 @@ hiddenimports=[
 
 1. 在终端中直接运行应用查看错误：
    ```bash
-   ./dist/MathNotes.app/Contents/MacOS/MathNotes
+   ./dist/encnotes.app/Contents/MacOS/encnotes
    ```
 
 2. 检查是否缺少依赖库或资源文件
@@ -187,7 +187,7 @@ hiddenimports=[
 
 **解决方案**：
 
-1. 在 `MathNotes.spec` 中排除不需要的模块：
+1. 在 `encnotes.spec` 中排除不需要的模块：
    ```python
    excludes=[
        'tkinter',
@@ -207,17 +207,17 @@ hiddenimports=[
 
 ```
 dist/
-├── MathNotes.app/              # macOS 应用包
+├── encnotes.app/              # macOS 应用包
 │   ├── Contents/
 │   │   ├── MacOS/
-│   │   │   └── MathNotes       # 可执行文件
+│   │   │   └── encnotes       # 可执行文件
 │   │   ├── Resources/
 │   │   │   ├── icon.icns       # 应用图标
 │   │   │   └── ...             # 其他资源
 │   │   ├── Frameworks/         # 依赖库
 │   │   └── Info.plist          # 应用元数据
 │   └── ...
-└── MathNotes-3.3.0.dmg         # DMG 安装包
+└── encnotes-3.3.0.dmg         # DMG 安装包
 ```
 
 ## 🔐 代码签名（可选）
@@ -233,14 +233,14 @@ dist/
 ```bash
 codesign --deep --force --verify --verbose \
   --sign "Developer ID Application: Your Name" \
-  dist/MathNotes.app
+  dist/encnotes.app
 ```
 
 ### 3. 公证应用
 
 ```bash
 # 创建 DMG 后公证
-xcrun notarytool submit MathNotes-3.3.0.dmg \
+xcrun notarytool submit encnotes-3.3.0.dmg \
   --apple-id "your@email.com" \
   --password "app-specific-password" \
   --team-id "TEAM_ID"
@@ -249,15 +249,15 @@ xcrun notarytool submit MathNotes-3.3.0.dmg \
 ### 4. 验证签名
 
 ```bash
-codesign --verify --deep --strict --verbose=2 dist/MathNotes.app
-spctl -a -t exec -vv dist/MathNotes.app
+codesign --verify --deep --strict --verbose=2 dist/encnotes.app
+spctl -a -t exec -vv dist/encnotes.app
 ```
 
 ## 📝 发布检查清单
 
 发布前请确认：
 
-- [ ] 更新版本号（MathNotes.spec 和 build_dmg.sh）
+- [ ] 更新版本号（encnotes.spec 和 build_dmg.sh）
 - [ ] 测试应用所有功能正常
 - [ ] 检查应用图标显示正确
 - [ ] 测试 DMG 安装流程
@@ -280,16 +280,16 @@ spctl -a -t exec -vv dist/MathNotes.app
 创建 Homebrew Cask 配方：
 
 ```ruby
-cask "mathnotes" do
+cask "encnotes" do
   version "3.3.0"
   sha256 "..."
   
-  url "https://example.com/MathNotes-#{version}.dmg"
-  name "MathNotes"
-  desc "数学笔记应用"
+  url "https://example.com/encnotes-#{version}.dmg"
+  name "encnotes"
+  desc "加密笔记应用"
   homepage "https://example.com"
   
-  app "MathNotes.app"
+  app "encnotes.app"
 end
 ```
 

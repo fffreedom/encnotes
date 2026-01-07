@@ -17,7 +17,7 @@ class NoteManager:
     
     def __init__(self):
         # 数据存储路径 - 模仿macOS备忘录的存储位置
-        self.data_dir = Path.home() / "Library" / "Group Containers" / "group.com.mathnotes"
+        self.data_dir = Path.home() / "Library" / "Group Containers" / "group.com.encnotes"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
         self.db_path = self.data_dir / "NoteStore.sqlite"

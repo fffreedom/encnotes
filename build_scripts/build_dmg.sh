@@ -10,13 +10,13 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  MathNotes DMG 打包脚本${NC}"
+echo -e "${GREEN}  encnotes DMG 打包脚本${NC}"
 echo -e "${GREEN}========================================${NC}"
 
 # 配置变量
-APP_NAME="MathNotes"
-APP_DISPLAY_NAME="数学笔记"
-VERSION="3.3.0"
+APP_NAME="encnotes"
+APP_DISPLAY_NAME="加密笔记"
+VERSION="3.4.0"
 DMG_NAME="${APP_NAME}-${VERSION}"
 BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="${BUILD_DIR}/dist"
