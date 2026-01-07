@@ -136,7 +136,7 @@ class MainWindow(QMainWindow):
         self.note_list.currentItemChanged.connect(self.on_note_selected)
         
         # 右侧：编辑器
-        self.editor = NoteEditor()
+        self.editor = NoteEditor(self.note_manager)
         self.editor.textChanged.connect(self.on_text_changed)
         
         # 添加到分割器
@@ -248,6 +248,20 @@ class MainWindow(QMainWindow):
         
         # 插入菜单
         insert_menu = menubar.addMenu("插入")
+        
+        # 插入图片
+        image_action = QAction("插入图片", self)
+        image_action.setShortcut(QKeySequence("Ctrl+I"))
+        image_action.triggered.connect(self.insert_image)
+        insert_menu.addAction(image_action)
+        
+        # 插入附件
+        attachment_action = QAction("插入附件", self)
+        attachment_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        attachment_action.triggered.connect(self.insert_attachment)
+        insert_menu.addAction(attachment_action)
+        
+        insert_menu.addSeparator()
         
         latex_action = QAction("插入 LaTeX 公式", self)
         latex_action.setShortcut(QKeySequence("Ctrl+L"))
@@ -722,6 +736,7 @@ class MainWindow(QMainWindow):
         if current:
             note_id = current.data(Qt.ItemDataRole.UserRole)
             self.current_note_id = note_id
+            self.editor.current_note_id = note_id  # 设置编辑器的当前笔记ID
             note = self.note_manager.get_note(note_id)
             
             if note:
@@ -730,6 +745,7 @@ class MainWindow(QMainWindow):
                 self.editor.blockSignals(False)
         else:
             self.current_note_id = None
+            self.editor.current_note_id = None
             self.editor.clear()
             
     def on_text_changed(self):
@@ -769,6 +785,47 @@ class MainWindow(QMainWindow):
                             if isinstance(title_label, QLabel):
                                 title_label.setText(title)
                     break
+                
+    def insert_image(self):
+        """插入图片"""
+        if not self.current_note_id:
+            QMessageBox.warning(self, "提示", "请先选择或创建一个笔记")
+            return
+        
+        # 打开文件选择对话框
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择图片",
+            "",
+            "图片文件 (*.png *.jpg *.jpeg *.gif *.bmp *.svg);;所有文件 (*.*)"
+        )
+        
+        if file_path:
+            # 调用编辑器的插入图片方法
+            from PyQt6.QtGui import QImage
+            image = QImage(file_path)
+            if not image.isNull():
+                self.editor.insert_image_to_editor(image)
+            else:
+                QMessageBox.warning(self, "错误", "无法加载图片文件")
+    
+    def insert_attachment(self):
+        """插入附件"""
+        if not self.current_note_id:
+            QMessageBox.warning(self, "提示", "请先选择或创建一个笔记")
+            return
+        
+        # 打开文件选择对话框
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择附件",
+            "",
+            "所有文件 (*.*)"
+        )
+        
+        if file_path:
+            # 调用编辑器的内部方法处理附件（传递文件路径）
+            self.editor._insert_attachment_with_path(file_path)
                 
     def export_to_pdf(self):
         """导出当前笔记为PDF"""

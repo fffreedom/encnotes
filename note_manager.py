@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 from encryption_manager import EncryptionManager
+from attachment_manager import AttachmentManager
 
 
 class NoteManager:
@@ -25,6 +26,9 @@ class NoteManager:
         
         # 初始化加密管理器
         self.encryption_manager = EncryptionManager()
+        
+        # 初始化附件管理器
+        self.attachment_manager = AttachmentManager(self.encryption_manager)
         
         self.init_database()
         

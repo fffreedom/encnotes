@@ -304,6 +304,84 @@ class EncryptionManager:
             
         except Exception as e:
             raise RuntimeError(f"解密失败: {e}")
+    
+    def encrypt_data(self, data: bytes) -> Tuple[bool, bytes]:
+        """
+        加密二进制数据（用于附件）
+        
+        Args:
+            data: 原始二进制数据
+            
+        Returns:
+            (成功标志, 加密后的数据)
+        """
+        if not self.is_unlocked:
+            return False, b""
+            
+        try:
+            # 生成随机IV
+            iv = os.urandom(self.IV_SIZE)
+            
+            # 创建加密器
+            cipher = Cipher(
+                algorithms.AES(self.encryption_key),
+                modes.CBC(iv),
+                backend=default_backend()
+            )
+            encryptor = cipher.encryptor()
+            
+            # 填充数据（PKCS7）
+            padded_data = self._pad(data)
+            
+            # 加密
+            ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+            
+            # 组合IV和密文
+            encrypted_data = iv + ciphertext
+            
+            return True, encrypted_data
+            
+        except Exception as e:
+            print(f"加密数据失败: {e}")
+            return False, b""
+    
+    def decrypt_data(self, encrypted_data: bytes) -> Tuple[bool, bytes]:
+        """
+        解密二进制数据（用于附件）
+        
+        Args:
+            encrypted_data: 加密后的数据
+            
+        Returns:
+            (成功标志, 解密后的数据)
+        """
+        if not self.is_unlocked:
+            return False, b""
+            
+        try:
+            # 分离IV和密文
+            iv = encrypted_data[:self.IV_SIZE]
+            ciphertext = encrypted_data[self.IV_SIZE:]
+            
+            # 创建解密器
+            cipher = Cipher(
+                algorithms.AES(self.encryption_key),
+                modes.CBC(iv),
+                backend=default_backend()
+            )
+            decryptor = cipher.decryptor()
+            
+            # 解密
+            padded_data = decryptor.update(ciphertext) + decryptor.finalize()
+            
+            # 去除填充
+            data = self._unpad(padded_data)
+            
+            return True, data
+            
+        except Exception as e:
+            print(f"解密数据失败: {e}")
+            return False, b""
             
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         """

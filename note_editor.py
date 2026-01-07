@@ -67,6 +67,78 @@ class PasteImageTextEdit(QTextEdit):
             # 触发重绘
             self.viewport().update()
     
+    def open_attachment(self, url_or_path):
+        """处理链接点击事件 - 打开附件
+        
+        Args:
+            url_or_path: 可以是字符串路径或QUrl对象
+        """
+        try:
+            import subprocess
+            import platform
+            import tempfile
+            
+            # 获取文件路径或附件ID
+            if isinstance(url_or_path, str):
+                file_path = url_or_path
+            else:
+                # QUrl对象
+                file_path = url_or_path.toString()
+            
+            # 检查是否是加密附件（attachment://协议）
+            if file_path.startswith('attachment://'):
+                attachment_id = file_path[13:]  # 去掉 'attachment://' 前缀
+                
+                # 获取附件管理器
+                if not self.parent_editor or not self.parent_editor.note_manager:
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(self, "错误", "无法访问附件管理器")
+                    return
+                
+                attachment_manager = self.parent_editor.note_manager.attachment_manager
+                
+                # 使用AttachmentManager的新方法打开附件（自动管理临时文件）
+                success, message = attachment_manager.open_attachment_with_system(attachment_id)
+                if not success:
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(self, "打开失败", message)
+                    return
+                
+                print(f"打开加密附件: {message}")
+                return
+            
+            # 处理普通文件链接
+            # 去掉 file:// 前缀（如果有）
+            if file_path.startswith('file://'):
+                file_path = file_path[7:]  # 去掉 'file://' 前缀
+            
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "文件不存在", f"无法找到文件：\n{file_path}")
+                return
+            
+            # 根据操作系统使用不同的命令打开文件
+            system = platform.system()
+            if system == 'Darwin':  # macOS
+                subprocess.run(['open', file_path])
+            elif system == 'Windows':
+                os.startfile(file_path)
+            elif system == 'Linux':
+                subprocess.run(['xdg-open', file_path])
+            else:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "不支持的系统", f"当前系统不支持自动打开文件")
+                
+            print(f"打开附件: {file_path}")
+            
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "打开失败", f"无法打开文件：\n{str(e)}")
+            print(f"打开附件失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def paintEvent(self, event):
         """绘制事件 - 绘制选中图片的边界框"""
         super().paintEvent(event)
@@ -257,6 +329,18 @@ class PasteImageTextEdit(QTextEdit):
     def mousePressEvent(self, event):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
+            # 首先检查是否点击了链接（附件）
+            cursor = self.cursorForPosition(event.pos())
+            char_format = cursor.charFormat()
+            
+            if char_format.isAnchor():
+                # 点击了链接，获取URL并打开
+                anchor_href = char_format.anchorHref()
+                if anchor_href:
+                    self.open_attachment(anchor_href)
+                    event.accept()
+                    return
+            
             # 检查是否点击了控制点
             if self.selected_image:
                 handle = self.get_handle_at_pos(event.pos())
@@ -279,9 +363,6 @@ class PasteImageTextEdit(QTextEdit):
                     return
             
             # 检查是否点击了图片
-            cursor = self.cursorForPosition(event.pos())
-            char_format = cursor.charFormat()
-            
             if char_format.isImageFormat():
                 # 选中图片
                 self.selected_image = char_format.toImageFormat()
@@ -567,9 +648,11 @@ class PasteImageTextEdit(QTextEdit):
 class NoteEditor(QWidget):
     """笔记编辑器类 - 包含工具栏和编辑区"""
     
-    def __init__(self):
+    def __init__(self, note_manager=None):
         super().__init__()
         self.math_renderer = MathRenderer()
+        self.note_manager = note_manager
+        self.current_note_id = None  # 当前编辑的笔记ID
         self.attachments = {}  # 存储附件 {filename: filepath}
         self.init_ui()
         
@@ -956,28 +1039,14 @@ class NoteEditor(QWidget):
                 cursor.insertText(text, fmt)
     
     def insert_attachment(self):
-        """插入附件"""
+        """插入附件 - 弹出文件选择对话框"""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "选择附件", "", "所有文件 (*.*)"
         )
         
         if file_path:
-            file_name = os.path.basename(file_path)
-            
-            # 保存附件引用
-            attachment_id = str(uuid.uuid4())
-            self.attachments[attachment_id] = file_path
-            
-            # 在文本中插入附件标记
-            cursor = self.text_edit.textCursor()
-            
-            fmt = QTextCharFormat()
-            fmt.setBackground(QColor("#f0f0f0"))
-            fmt.setForeground(QColor("#007AFF"))
-            fmt.setToolTip(file_path)
-            
-            cursor.insertText(f"📎 {file_name}", fmt)
-            cursor.insertText(" ")  # 添加空格
+            # 调用内部方法处理附件
+            self._insert_attachment_with_path(file_path)
     
     def rerender_formulas(self):
         """重新渲染HTML中的所有数学公式"""
@@ -1107,6 +1176,65 @@ class NoteEditor(QWidget):
             print(f"插入图片时发生错误: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _insert_attachment_with_path(self, file_path):
+        """插入附件链接 - 使用附件管理器加密存储"""
+        try:
+            import os
+            
+            # 检查是否有note_manager和当前笔记ID
+            if not self.note_manager or not self.current_note_id:
+                QMessageBox.warning(self, "错误", "无法添加附件：笔记未保存")
+                return
+            
+            # 获取文件名和大小
+            file_name = os.path.basename(file_path)
+            file_size = os.path.getsize(file_path)
+            
+            # 格式化文件大小
+            if file_size < 1024:
+                size_str = f"{file_size} B"
+            elif file_size < 1024 * 1024:
+                size_str = f"{file_size / 1024:.1f} KB"
+            else:
+                size_str = f"{file_size / (1024 * 1024):.1f} MB"
+            
+            # 使用附件管理器添加附件（复制并加密）
+            success, message, attachment_id = self.note_manager.attachment_manager.add_attachment(
+                file_path, self.current_note_id
+            )
+            
+            if not success:
+                QMessageBox.warning(self, "添加附件失败", message)
+                return
+            
+            # 获取光标
+            cursor = self.text_edit.textCursor()
+            
+            # 创建附件HTML（使用attachment_id作为链接）
+            # 使用自定义协议 attachment:// 来标识这是一个加密附件
+            attachment_url = f"attachment://{attachment_id}"
+            
+            # 创建附件HTML（带样式的链接）
+            attachment_html = f'''
+            <div style="background-color: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; padding: 8px; margin: 4px 0; display: inline-block;">
+                <span style="font-size: 16px;">📎</span>
+                <a href="{attachment_url}" style="color: #0066cc; text-decoration: none; margin: 0 8px;" data-attachment-id="{attachment_id}">{file_name}</a>
+                <span style="color: #666; font-size: 12px;">({size_str})</span>
+            </div>
+            '''
+            
+            cursor.insertHtml(attachment_html)
+            cursor.insertBlock()  # 添加换行
+            
+            print(f"成功插入附件: {file_name} ({size_str}), ID: {attachment_id}")
+            QMessageBox.information(self, "成功", f"{message}\n文件已加密保存")
+            
+        except Exception as e:
+            print(f"插入附件时发生错误: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "错误", f"插入附件失败: {str(e)}")
         
     def insert_latex(self):
         """插入LaTeX公式"""
