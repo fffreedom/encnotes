@@ -40,34 +40,42 @@ class PasteImageTextEdit(QTextEdit):
     
     def mousePressEvent(self, event):
         """鼠标按下事件 - 检测是否点击图片"""
-        cursor = self.cursorForPosition(event.pos())
-        char_format = cursor.charFormat()
-        
-        # 检查是否点击了图片
-        if char_format.isImageFormat():
-            self.resizing_image = char_format.toImageFormat()
-            self.resize_start_pos = event.pos()
-            self.resize_start_size = (self.resizing_image.width(), self.resizing_image.height())
-            event.accept()
-            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            cursor = self.cursorForPosition(event.pos())
+            char_format = cursor.charFormat()
+            
+            # 检查是否点击了图片
+            if char_format.isImageFormat():
+                self.resizing_image = char_format.toImageFormat()
+                self.resize_start_pos = event.pos()
+                self.resize_start_size = (self.resizing_image.width(), self.resizing_image.height())
+                self.resize_cursor = cursor
+                event.accept()
+                return
         
         super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
         """鼠标移动事件 - 调整图片大小"""
-        if self.resizing_image and self.resize_start_pos:
+        if self.resizing_image and self.resize_start_pos and hasattr(self, 'resize_cursor'):
             # 计算新的大小
             delta = event.pos() - self.resize_start_pos
             new_width = max(50, self.resize_start_size[0] + delta.x())
-            new_height = max(50, self.resize_start_size[1] + delta.y())
             
             # 保持宽高比
             aspect_ratio = self.resize_start_size[0] / self.resize_start_size[1]
             new_height = int(new_width / aspect_ratio)
             
-            # 更新图片大小
-            self.resizing_image.setWidth(new_width)
-            self.resizing_image.setHeight(new_height)
+            # 创建新的图片格式
+            new_format = QTextImageFormat()
+            new_format.setName(self.resizing_image.name())
+            new_format.setWidth(new_width)
+            new_format.setHeight(new_height)
+            
+            # 更新图片
+            self.resize_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+            cursor = QTextCursor(self.resize_cursor)
+            cursor.insertImage(new_format)
             
             event.accept()
             return
@@ -89,6 +97,8 @@ class PasteImageTextEdit(QTextEdit):
             self.resizing_image = None
             self.resize_start_pos = None
             self.resize_start_size = None
+            if hasattr(self, 'resize_cursor'):
+                delattr(self, 'resize_cursor')
             event.accept()
             return
         
@@ -601,38 +611,80 @@ class NoteEditor(QWidget):
     
     def insert_image_to_editor(self, image):
         """插入图片到编辑器"""
+        # 检查图片是否有效
+        if image is None or image.isNull():
+            print("错误：图片无效")
+            return
+        
         # 限制图片大小
         max_width = 800
-        original_width = image.width()
-        original_height = image.height()
         
         if image.width() > max_width:
             image = image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
         
-        # 将图片转换为base64
-        byte_array = QByteArray()
-        buffer = QBuffer(byte_array)
-        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        image.save(buffer, "PNG")
+        # 再次检查缩放后的图片
+        if image.isNull():
+            print("错误：图片缩放后无效")
+            return
         
-        image_data = byte_array.toBase64().data().decode()
-        
-        # 生成唯一的图片名称
-        image_name = f"image_{uuid.uuid4().hex[:8]}.png"
-        
-        # 创建图片格式
-        cursor = self.text_edit.textCursor()
-        
-        # 使用data URI插入图片，添加样式使其可调整大小
-        # 添加 contenteditable="false" 使图片可以被选中
-        # 添加 style 使图片可以通过拖动边角调整大小
-        image_html = f'''<img src="data:image/png;base64,{image_data}" 
-                         alt="{image_name}" 
-                         width="{image.width()}" 
-                         height="{image.height()}"
-                         style="max-width: 100%; cursor: move; display: block; margin: 10px 0;" />'''
-        cursor.insertHtml(image_html)
-        cursor.insertBlock()  # 添加新行
+        try:
+            from PIL import Image as PILImage
+            import io
+            
+            # 将 QImage 转换为 PIL Image，完全避免使用 Qt 的 save 方法
+            # 获取图片的宽度、高度和格式
+            width = image.width()
+            height = image.height()
+            
+            # 转换为 RGBA8888 格式（PIL 兼容）
+            image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+            
+            # 获取图片的原始字节数据
+            ptr = image.constBits()
+            ptr.setsize(image.sizeInBytes())
+            
+            # 使用 PIL 从原始字节创建图片
+            pil_image = PILImage.frombytes('RGBA', (width, height), bytes(ptr), 'raw', 'RGBA', 0, 1)
+            
+            # 转换为 RGB（去除 alpha 通道，PNG 更小）
+            if pil_image.mode == 'RGBA':
+                # 创建白色背景
+                background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
+                background.paste(pil_image, mask=pil_image.split()[3])  # 使用 alpha 通道作为 mask
+                pil_image = background
+            
+            # 使用 PIL 保存为 PNG 格式到内存
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format='PNG', optimize=True)
+            image_bytes = buffer.getvalue()
+            
+            # 转换为 base64
+            image_data = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # 生成唯一的图片名称
+            image_name = f"image_{uuid.uuid4().hex[:8]}.png"
+            
+            # 获取光标
+            cursor = self.text_edit.textCursor()
+            
+            # 使用QTextImageFormat插入图片（更可靠的方式）
+            image_format = QTextImageFormat()
+            image_format.setName(f"data:image/png;base64,{image_data}")
+            image_format.setWidth(width)
+            image_format.setHeight(height)
+            
+            # 插入图片
+            cursor.insertImage(image_format)
+            
+            # 添加换行
+            cursor.insertBlock()
+            
+            print(f"成功插入图片: {width}x{height}, 大小: {len(image_bytes)} 字节")
+            
+        except Exception as e:
+            print(f"插入图片时发生错误: {e}")
+            import traceback
+            traceback.print_exc()
         
     def insert_latex(self):
         """插入LaTeX公式"""
@@ -657,24 +709,60 @@ class NoteEditor(QWidget):
         # 渲染公式为图片
         image_data = self.math_renderer.render(code, formula_type)
         
-        if image_data:
-            # 将图片转换为base64
-            byte_array = QByteArray()
-            buffer = QBuffer(byte_array)
-            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            image_data.save(buffer, "PNG")
-            
-            image_base64 = byte_array.toBase64().data().decode()
-            
-            # 使用alt属性保存公式元数据（格式: MATH:type:code）
-            # alt属性会被QTextEdit保留
-            import html
-            escaped_code = html.escape(code)
-            alt_text = f"MATH:{formula_type}:{escaped_code}"
-            
-            # 公式图片添加样式（vertical-align: middle 使公式与文本在行高中间对齐）
-            formula_html = f'<img src="data:image/png;base64,{image_base64}" alt="{alt_text}" style="vertical-align: bottom;" />'
-            cursor.insertHtml(formula_html)
+        if image_data and not image_data.isNull():
+            try:
+                from PIL import Image as PILImage
+                import io
+                
+                # 将 QImage 转换为 PIL Image，完全避免使用 Qt 的 save 方法
+                width = image_data.width()
+                height = image_data.height()
+                
+                # 转换为 RGBA8888 格式（PIL 兼容）
+                image_data = image_data.convertToFormat(QImage.Format.Format_RGBA8888)
+                
+                # 获取图片的原始字节数据
+                ptr = image_data.constBits()
+                ptr.setsize(image_data.sizeInBytes())
+                
+                # 使用 PIL 从原始字节创建图片
+                pil_image = PILImage.frombytes('RGBA', (width, height), bytes(ptr), 'raw', 'RGBA', 0, 1)
+                
+                # 转换为 RGB（去除 alpha 通道）
+                if pil_image.mode == 'RGBA':
+                    background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
+                    background.paste(pil_image, mask=pil_image.split()[3])
+                    pil_image = background
+                
+                # 使用 PIL 保存为 PNG 格式到内存
+                buffer = io.BytesIO()
+                pil_image.save(buffer, format='PNG', optimize=True)
+                image_bytes = buffer.getvalue()
+                
+                # 转换为 base64
+                image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                
+                # 使用alt属性保存公式元数据（格式: MATH:type:code）
+                # alt属性会被QTextEdit保留
+                import html
+                escaped_code = html.escape(code)
+                alt_text = f"MATH:{formula_type}:{escaped_code}"
+                
+                # 公式图片添加样式（vertical-align: middle 使公式与文本在行高中间对齐）
+                formula_html = f'<img src="data:image/png;base64,{image_base64}" alt="{alt_text}" style="vertical-align: bottom;" />'
+                cursor.insertHtml(formula_html)
+                
+                print(f"成功插入公式: {width}x{height}, 大小: {len(image_bytes)} 字节")
+                
+            except Exception as e:
+                print(f"插入公式时发生错误: {e}")
+                import traceback
+                traceback.print_exc()
+                # 如果出错，插入原始代码
+                if formula_type == 'latex':
+                    cursor.insertText(f"$${code}$$")
+                else:
+                    cursor.insertText(f"[MathML: {code[:50]}...]")
         else:
             # 如果渲染失败，插入原始代码
             if formula_type == 'latex':
