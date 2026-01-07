@@ -80,6 +80,23 @@ class FolderTwisty(QLabel):
 
 class MainWindow(QMainWindow):
     """主窗口类"""
+
+    def eventFilter(self, obj, event):
+        # 文件夹重命名：ESC 取消（就地编辑）
+        if event.type() == event.Type.KeyPress:
+            try:
+                from PyQt6.QtCore import Qt
+                if event.key() == Qt.Key.Key_Escape:
+                    # 标记取消，让 editingFinished 走取消分支
+                    if hasattr(obj, "setProperty"):
+                        obj.setProperty("_rename_cancelled", True)
+                    obj.clearFocus()
+                    event.accept()
+                    return True
+            except Exception:
+                pass
+        return super().eventFilter(obj, event)
+
     
     def __init__(self):
         super().__init__()
@@ -130,8 +147,15 @@ class MainWindow(QMainWindow):
         
         # 创建分割器
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(1)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #e6e6e6;
+            }
+        """)
         
         # 左侧：文件夹列表
+
         self.folder_list = QListWidget()
         self.folder_list.setMaximumWidth(200)
         self.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -143,6 +167,14 @@ class MainWindow(QMainWindow):
                 font-size: 13px;
                 outline: none;
             }
+
+            QWidget#folder_row_widget {
+                background: transparent;
+            }
+            QWidget#folder_row_widget[selected="true"] {
+                background-color: #FFE066;
+            }
+
             QListWidget::item {
                 padding: 6px 10px;
                 border: none;
@@ -151,11 +183,12 @@ class MainWindow(QMainWindow):
             QListWidget::item:selected,
             QListWidget::item:selected:active,
             QListWidget::item:selected:!active {
-                background-color: #FFE066;
+                background-color: transparent;
                 color: #000000;
                 border: none;
                 outline: none;
             }
+
             QListWidget::item:hover {
                 background-color: #FFF4CC;
                 border: none;
@@ -165,9 +198,44 @@ class MainWindow(QMainWindow):
                 border: none;
                 outline: none;
             }
+
+            /* 让滚动条更轻：避免出现边框/箭头等 */
+            QScrollBar:vertical {
+                background: transparent;
+                width: 6px;
+                margin: 0px;
+                border: none;
+            }
+            QScrollBar::handle:vertical {
+                background: #c8c8c8;
+                min-height: 24px;
+                border: none;
+                border-radius: 3px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+                width: 0px;
+                border: none;
+                background: transparent;
+            }
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: transparent;
+                border: none;
+            }
         """)
+
         self.folder_list.setCurrentRow(0)
         self.folder_list.currentRowChanged.connect(self.on_folder_changed)
+        self.folder_list.itemDoubleClicked.connect(self.on_folder_item_double_clicked)
+        self.folder_list.itemClicked.connect(self.on_folder_item_clicked)
+
+        # 允许“选中后再次单击”进入重命名（仿Finder）
+        self.folder_list.setEditTriggers(QListWidget.EditTrigger.NoEditTriggers)
+        self._last_folder_click_folder_id = None
+        self._last_folder_click_ms = 0
+
         
         # 为文件夹列表添加右键菜单
         self.folder_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -223,6 +291,32 @@ class MainWindow(QMainWindow):
             QListWidget::item:focus {
                 border: none;
                 outline: none;
+            }
+
+            /* 浮动滚动条：只显示一条粗线（滑块），不显示边框/箭头/轨道灰底 */
+            QScrollBar:vertical {
+                background: transparent;
+                width: 6px;
+                margin: 0px;
+                border: none;
+            }
+            QScrollBar::handle:vertical {
+                background: #bdbdbd;
+                min-height: 24px;
+                border: none;
+                border-radius: 3px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+                width: 0px;
+                border: none;
+                background: transparent;
+            }
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: transparent;
+                border: none;
             }
         """)
 
@@ -858,9 +952,12 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, ("folder", folder_id))
 
             row_widget = QWidget()
+            row_widget.setObjectName("folder_row_widget")
+            row_widget.setProperty("selected", False)
             row_layout = QHBoxLayout(row_widget)
             # 左移：让折叠箭头列的最左侧与“🏷️ 标签”等普通文本项的图标最左侧对齐
             row_layout.setContentsMargins(0, 0, 10, 0)
+
             row_layout.setSpacing(6)
             row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -880,9 +977,23 @@ class MainWindow(QMainWindow):
                 spacer.setFixedWidth(14)
                 row_layout.addWidget(spacer)
 
-            # 文件夹名称
-            name_label = ElidedLabel(f"📁 {folder['name']}")
-            name_label.setFullText(f"📁 {folder['name']}")
+            # 文件夹图标（单独一列，确保重命名时图标仍显示）
+            icon_label = QLabel("📁")
+            icon_label.setFixedWidth(16)
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon_label.setStyleSheet("""
+                font-size: 13px;
+                color: #000000;
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+            """)
+            row_layout.addWidget(icon_label)
+
+            # 文件夹名称（仅名称部分可编辑）
+            name_label = ElidedLabel(folder['name'])
+            name_label.setFullText(folder['name'])
             name_label.setToolTip(folder['name'])
             name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             name_label.setStyleSheet("""
@@ -940,9 +1051,12 @@ class MainWindow(QMainWindow):
         item.setData(Qt.ItemDataRole.UserRole, ("system", key))
 
         row_widget = QWidget()
+        row_widget.setObjectName("folder_row_widget")
+        row_widget.setProperty("selected", False)
         row_layout = QHBoxLayout(row_widget)
         # 左移：与“🏷️ 标签”等普通文本项的图标最左侧对齐
         row_layout.setContentsMargins(0, 0, 10, 0)
+
         row_layout.setSpacing(6)
         row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -977,36 +1091,208 @@ class MainWindow(QMainWindow):
 
     def create_new_folder(self):
 
-        """创建新文件夹"""
-        name, ok = QInputDialog.getText(
-            self, "新建文件夹", "请输入文件夹名称:"
-        )
-        
-        if ok and name.strip():
-            folder_id = self.note_manager.create_folder(name.strip())
-            self.load_folders()
-            
-            # 选中新创建的文件夹（索引从2开始）
-            for i, folder in enumerate(self.custom_folders):
-                if folder['id'] == folder_id:
-                    self.folder_list.setCurrentRow(2 + i)
+        """创建新文件夹（不弹窗）：自动创建“新建文件夹/新建文件夹1/...”并进入就地重命名"""
+        base_name = "新建文件夹"
+
+        # 顶级文件夹：parent_folder_id 为 None
+        try:
+            all_folders = self.note_manager.get_all_folders()
+            existing = {
+                str(f.get("name", "")).strip().casefold()
+                for f in all_folders
+                if f.get("parent_folder_id") is None
+            }
+        except Exception:
+            existing = set()
+
+        # 生成不重名的默认名：新建文件夹 / 新建文件夹1 / 新建文件夹2 ...
+        if base_name.casefold() not in existing:
+            name = base_name
+        else:
+            i = 1
+            while True:
+                candidate = f"{base_name}{i}"
+                if candidate.casefold() not in existing:
+                    name = candidate
                     break
+                i += 1
+
+        folder_id = self.note_manager.create_folder(name)
+        self.load_folders()
+
+        # 选中新创建的文件夹（索引从2开始）
+        created_row = None
+        for i, folder in enumerate(self.custom_folders):
+            if folder['id'] == folder_id:
+                created_row = 2 + i
+                self.folder_list.setCurrentRow(created_row)
+                break
+
+        # 进入就地重命名：让用户可直接覆盖默认名
+        if created_row is not None:
+            QTimer.singleShot(0, lambda: self.rename_folder(folder_id))
+
                     
     def rename_folder(self, folder_id: str):
-        """重命名文件夹"""
+        """重命名文件夹（就地编辑，不弹窗）。
+
+        交互：将该文件夹行的名称区域替换为可编辑输入框；用户回车或失去焦点即提交；
+        ESC 取消。
+        """
         folder = self.note_manager.get_folder(folder_id)
         if not folder:
             return
-            
-        name, ok = QInputDialog.getText(
-            self, "重命名文件夹", 
-            "请输入新名称:",
-            text=folder['name']
-        )
-        
-        if ok and name.strip():
-            self.note_manager.update_folder(folder_id, name.strip())
+
+        # 找到对应的 QListWidgetItem
+        target_item = None
+        for i in range(self.folder_list.count()):
+            it = self.folder_list.item(i)
+            if not it:
+                continue
+            payload = it.data(Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder" and payload[1] == folder_id:
+                target_item = it
+                break
+
+        if not target_item:
+            return
+
+        row_widget = self.folder_list.itemWidget(target_item)
+        if not row_widget:
+            return
+
+        layout = row_widget.layout()
+        if not layout:
+            return
+
+        # 防止重复进入编辑态
+        if row_widget.property("renaming") is True:
+            return
+        row_widget.setProperty("renaming", True)
+
+        from PyQt6.QtWidgets import QLineEdit
+
+        # 定位名称控件（我们构建行时，最后一个 stretch=1 的 widget 是名称 ElidedLabel）
+        name_widget = None
+        name_index = -1
+        for idx in range(layout.count() - 1, -1, -1):
+            w = layout.itemAt(idx).widget()
+            if isinstance(w, ElidedLabel):
+                name_widget = w
+                name_index = idx
+                break
+
+        if name_widget is None or name_index < 0:
+            row_widget.setProperty("renaming", False)
+            return
+
+        # 编辑框只编辑纯名称（不包含 📁 ）
+        old_name = folder.get("name", "")
+
+        editor = QLineEdit()
+        # 右侧留出一块可点击的空白区域（仿 macOS 备忘录/Finder）：
+        # 不通过给文本追加空格来实现，而是通过输入框的右侧 padding 留白。
+        editor.setText(old_name)
+        editor.setTextMargins(0, 0, 24, 0)
+
+        editor.setProperty("_rename_old_name", old_name)
+        editor.setProperty("_rename_cancelled", False)
+        editor.setFrame(False)
+        editor.setStyleSheet("""
+            QLineEdit {
+                font-size: 13px;
+                color: #000000;
+                background-color: #ffffff;
+                border: 1px solid #bdbdbd;
+                border-radius: 4px;
+                padding: 2px 24px 2px 6px;
+                margin: 0px;
+            }
+        """)
+
+        def _cleanup(cancelled: bool, new_name: str | None = None):
+            # 恢复 label
+            try:
+                layout.removeWidget(editor)
+                editor.deleteLater()
+            except Exception:
+                pass
+
+            # 把 label 加回原位
+            layout.insertWidget(name_index, name_widget, 1)
+            name_widget.show()
+
+            row_widget.setProperty("renaming", False)
+
+            # 如果取消，直接恢复原显示
+            if cancelled:
+                name_widget.setFullText(old_name)
+                name_widget.setToolTip(old_name)
+                return
+
+            # 提交更新
+            if new_name is None:
+                return
+            new_name = (new_name or "").strip()
+
+            if not new_name or new_name == old_name:
+                name_widget.setFullText(old_name)
+                name_widget.setToolTip(old_name)
+                return
+
+            # 校验：同一父文件夹下不允许重名（忽略大小写和首尾空白）
+            try:
+                all_folders = self.note_manager.get_all_folders()
+                parent_id = folder.get("parent_folder_id")
+                normalized = new_name.strip().casefold()
+                conflict = any(
+                    (f.get("id") != folder_id)
+                    and (f.get("parent_folder_id") == parent_id)
+                    and (str(f.get("name", "")).strip().casefold() == normalized)
+                    for f in all_folders
+                )
+            except Exception:
+                conflict = False
+
+            if conflict:
+                QMessageBox.warning(self, "名称已存在", "已存在同名文件夹，请换一个名称。")
+                # 回到就地编辑状态，让用户继续编辑
+                QTimer.singleShot(0, lambda: self.rename_folder(folder_id))
+                return
+
+            self.note_manager.update_folder(folder_id, new_name)
+            # 直接全量刷新，确保名称、排序、扁平映射一致
             self.load_folders()
+
+        # 提交：回车
+        editor.returnPressed.connect(lambda: _cleanup(False, editor.text()))
+
+        def _on_editing_finished():
+            # ESC 取消
+            if bool(editor.property("_rename_cancelled")):
+                _cleanup(True)
+                return
+
+            # editingFinished 会在回车和失焦都触发；如果 returnPressed 已经触发，
+            # 此时 row_widget.renaming 可能已被置回 False，避免重复提交。
+            if row_widget.property("renaming") is True:
+                _cleanup(False, editor.text())
+
+        editor.editingFinished.connect(_on_editing_finished)
+
+        # 取消：ESC
+        editor.installEventFilter(self)
+
+        # 临时替换控件
+        name_widget.hide()
+        layout.removeWidget(name_widget)
+        layout.insertWidget(name_index, editor, 1)
+
+        editor.setFocus()
+        # 默认全选（Finder 风格）：用户可以直接输入覆盖；
+        # 如果想在末尾追加，点击右侧留白处即可把光标放到末尾再输入。
+        editor.selectAll()
+
             
     def delete_folder_confirm(self, folder_id: str):
         """删除文件夹（确认）"""
@@ -1185,21 +1471,44 @@ class MainWindow(QMainWindow):
         menu.exec(self.note_list.mapToGlobal(position))
     
     def create_subfolder(self, parent_folder_id: str):
-        """在指定文件夹下创建子文件夹"""
-        name, ok = QInputDialog.getText(
-            self, "新建文件夹", "请输入文件夹名称:"
-        )
-        
-        if ok and name.strip():
-            # 创建子文件夹，传入父文件夹ID
-            folder_id = self.note_manager.create_folder(name.strip(), parent_folder_id)
-            self.load_folders()
-            
-            # 选中新创建的文件夹
-            for i, folder in enumerate(self.custom_folders):
-                if folder['id'] == folder_id:
-                    self.folder_list.setCurrentRow(2 + i)
+        """在指定文件夹下创建子文件夹（不弹窗）：自动创建“新建文件夹/新建文件夹1/...”并进入就地重命名"""
+        base_name = "新建文件夹"
+
+        try:
+            all_folders = self.note_manager.get_all_folders()
+            existing = {
+                str(f.get("name", "")).strip().casefold()
+                for f in all_folders
+                if f.get("parent_folder_id") == parent_folder_id
+            }
+        except Exception:
+            existing = set()
+
+        if base_name.casefold() not in existing:
+            name = base_name
+        else:
+            i = 1
+            while True:
+                candidate = f"{base_name}{i}"
+                if candidate.casefold() not in existing:
+                    name = candidate
                     break
+                i += 1
+
+        folder_id = self.note_manager.create_folder(name, parent_folder_id)
+        self.load_folders()
+
+        # 选中新创建的子文件夹
+        created_row = None
+        for i, folder in enumerate(self.custom_folders):
+            if folder['id'] == folder_id:
+                created_row = 2 + i
+                self.folder_list.setCurrentRow(created_row)
+                break
+
+        if created_row is not None:
+            QTimer.singleShot(0, lambda: self.rename_folder(folder_id))
+
     
     def create_note_in_folder(self, folder_id: str):
         """在指定文件夹下创建笔记"""
@@ -1280,9 +1589,102 @@ class MainWindow(QMainWindow):
             
     def on_folder_changed(self, index):
         """文件夹切换"""
+        # 选中高亮由 `folder_row_widget` 自己绘制（避免与就地编辑的白色输入框冲突）
+        try:
+            prev_row = getattr(self, "_prev_folder_row", None)
+            if prev_row is not None and 0 <= prev_row < self.folder_list.count():
+                prev_item = self.folder_list.item(prev_row)
+                prev_w = self.folder_list.itemWidget(prev_item) if prev_item else None
+                if prev_w and prev_w.objectName() == "folder_row_widget":
+                    prev_w.setProperty("selected", False)
+                    prev_w.style().unpolish(prev_w)
+                    prev_w.style().polish(prev_w)
+                    prev_w.update()
+
+            if index is not None and 0 <= index < self.folder_list.count():
+                cur_item = self.folder_list.item(index)
+                cur_w = self.folder_list.itemWidget(cur_item) if cur_item else None
+                if cur_w and cur_w.objectName() == "folder_row_widget":
+                    cur_w.setProperty("selected", True)
+                    cur_w.style().unpolish(cur_w)
+                    cur_w.style().polish(cur_w)
+                    cur_w.update()
+
+            self._prev_folder_row = index
+        except Exception:
+            self._prev_folder_row = index
+
         self.load_notes()
+
+    def on_folder_item_double_clicked(self, item: QListWidgetItem):
+        """左侧文件夹列表：双击文件夹行时展开/折叠（仅对有子文件夹的自定义文件夹生效）"""
+        if not item:
+            return
+
+        payload = item.data(Qt.ItemDataRole.UserRole)
+        if not (isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder"):
+            return
+
+        folder_id = payload[1]
+
+        # 仅当该文件夹确实有子文件夹时才切换
+        try:
+            all_folders = self.note_manager.get_all_folders()
+            has_children = any(f.get('parent_folder_id') == folder_id for f in all_folders)
+        except Exception:
+            has_children = False
+
+        if not has_children:
+            return
+
+        self._toggle_folder_expanded(folder_id)
+
+    def on_folder_item_clicked(self, item: QListWidgetItem):
+        """左侧文件夹列表：选中状态下再次单击进入重命名（仅自定义文件夹）。
+
+        说明：由于文件夹行使用了 `setItemWidget`，Qt 的原生 inline 编辑器无法正常工作，
+        这里采用 Finder 风格的“再次单击”触发弹窗重命名。
+        """
+        if not item:
+            return
+
+        payload = item.data(Qt.ItemDataRole.UserRole)
+        if not (isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder"):
+            # 仅文件夹支持该交互（系统项/标题/标签不处理）
+            self._last_folder_click_folder_id = None
+            self._last_folder_click_ms = 0
+            return
+
+        folder_id = payload[1]
+
+        # 判断这次点击是否点在“当前已选中的同一行”
+        current_item = self.folder_list.currentItem()
+        is_clicking_selected_same_item = (current_item is item)
+
+        from PyQt6.QtCore import QElapsedTimer
+        if not hasattr(self, "_folder_click_timer"):
+            self._folder_click_timer = QElapsedTimer()
+            self._folder_click_timer.start()
+            self._last_folder_click_folder_id = folder_id
+            return
+
+        elapsed_ms = self._folder_click_timer.elapsed()
+        same_folder = (self._last_folder_click_folder_id == folder_id)
+
+        # 第二次点击：时间间隔不要太短（避免与双击冲突），也不要太长
+        if is_clicking_selected_same_item and same_folder and 350 <= elapsed_ms <= 1200:
+            self.rename_folder(folder_id)
+            self._folder_click_timer.restart()
+            self._last_folder_click_folder_id = folder_id
+            return
+
+        # 第一次点击：记录
+        self._folder_click_timer.restart()
+        self._last_folder_click_folder_id = folder_id
+
         
     def on_note_selected(self, current, previous):
+
         """笔记选中事件"""
         # 让选中背景由条目widget自身绘制（避免QListWidget默认选中背景出现上下错位）
         def _set_item_widget_selected(item, selected: bool):
