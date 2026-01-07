@@ -669,8 +669,12 @@ class NoteEditor(QWidget):
         # 创建文本编辑器（支持粘贴图片）
         self.text_edit = PasteImageTextEdit(self)
         
-        # 设置字体
-        font = QFont("SF Pro Text", 14)  # Mac系统字体
+        # 设置字体：优先使用系统默认字体，避免缺失字体导致Qt在启动时耗时做字体别名填充
+        font = self.font()
+        try:
+            font.setPointSize(14)
+        except Exception:
+            pass
         self.text_edit.setFont(font)
         
         # 设置样式
@@ -1523,7 +1527,10 @@ class LatexInputDialog(QDialog):
         latex_code = self.input_edit.toPlainText()
         if latex_code:
             # 简单预览，显示LaTeX代码
-            self.preview.setHtml(f"<p style='font-family: monospace;'>${latex_code}$</p>")
+            # 使用系统默认等宽字体栈，避免引用不存在的字体导致Qt做字体回退带来额外耗时
+            self.preview.setHtml(
+                f"<p style='font-family: ui-monospace, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace;'>${latex_code}$</p>"
+            )
         else:
             self.preview.clear()
             
