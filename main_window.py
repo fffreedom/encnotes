@@ -1747,32 +1747,38 @@ class MainWindow(QMainWindow):
         """显示笔记列表的右键菜单"""
         item = self.note_list.itemAt(position)
         menu = QMenu(self)
-        
+
         if item:
             # 点击在笔记上
             note_id = item.data(Qt.ItemDataRole.UserRole)
-            
+
             # 新建笔记
             new_note_action = QAction("新建笔记", self)
             new_note_action.triggered.connect(self.create_new_note)
             menu.addAction(new_note_action)
-            
+
             menu.addSeparator()
-            
+
+            # 移到...
+            move_to_menu = menu.addMenu("移到")
+            self._populate_move_to_menu(move_to_menu, note_id)
+
+            menu.addSeparator()
+
             # 置顶/取消置顶
             is_pinned = self.note_manager.is_note_pinned(note_id)
             pin_text = "取消置顶" if is_pinned else "置顶"
             pin_action = QAction(pin_text, self)
             pin_action.triggered.connect(lambda: self.toggle_pin_note(note_id))
             menu.addAction(pin_action)
-            
+
             menu.addSeparator()
-            
+
             # 重命名笔记
             rename_action = QAction("重命名笔记", self)
             rename_action.triggered.connect(lambda: self.rename_note(note_id))
             menu.addAction(rename_action)
-            
+
             # 删除笔记
             delete_action = QAction("删除笔记", self)
             delete_action.triggered.connect(lambda: self.delete_note_by_id(note_id))
@@ -1782,8 +1788,118 @@ class MainWindow(QMainWindow):
             new_note_action = QAction("新建笔记", self)
             new_note_action.triggered.connect(self.create_new_note)
             menu.addAction(new_note_action)
-        
+
         menu.exec(self.note_list.mapToGlobal(position))
+
+    def _populate_move_to_menu(self, menu: QMenu, note_id: str):
+        """填充“移到”子菜单：展示所有文件夹（含层级），并支持移出文件夹。"""
+        try:
+            note = self.note_manager.get_note(note_id)
+        except Exception:
+            note = None
+
+        current_folder_id = None
+        try:
+            current_folder_id = note.get('folder_id') if note else None
+        except Exception:
+            current_folder_id = None
+
+        # “无文件夹 / 所有笔记”语义：把 ZFOLDERID 置为 NULL
+        move_to_all = QAction("所有笔记", self)
+        move_to_all.setCheckable(True)
+        move_to_all.setChecked(current_folder_id in (None, ""))
+        move_to_all.triggered.connect(lambda: self._move_note_to_folder_and_refresh(note_id, None))
+        menu.addAction(move_to_all)
+
+        menu.addSeparator()
+
+        # 构建文件夹树
+        try:
+            all_folders = self.note_manager.get_all_folders()
+        except Exception:
+            all_folders = []
+
+        children_map = {}
+        for f in all_folders:
+            pid = f.get('parent_folder_id')
+            children_map.setdefault(pid, []).append(f)
+
+        def _sort_key(folder: dict):
+            return (int(folder.get('order_index', 0) or 0), str(folder.get('name', '')))
+
+        for pid in list(children_map.keys()):
+            try:
+                children_map[pid].sort(key=_sort_key)
+            except Exception:
+                pass
+
+        def _add_folder_branch(parent_menu: QMenu, parent_id):
+            folders = children_map.get(parent_id, [])
+            for folder in folders:
+                fid = folder.get('id')
+                name = folder.get('name') or '未命名文件夹'
+
+                has_children = bool(children_map.get(fid))
+
+                if has_children:
+                    sub = parent_menu.addMenu(f"📁 {name}")
+                    # 子菜单的标题不可直接触发移动（和备忘录一致：展开后选择具体目标）
+                    _add_folder_branch(sub, fid)
+
+                    # 但为了可用性，允许“把笔记移到这个父文件夹”
+                    sub.addSeparator()
+                    act_here = QAction(f"移动到“{name}”", self)
+                    act_here.setCheckable(True)
+                    act_here.setChecked(current_folder_id == fid)
+                    act_here.triggered.connect(lambda checked=False, _fid=fid: self._move_note_to_folder_and_refresh(note_id, _fid))
+                    sub.addAction(act_here)
+                else:
+                    act = QAction(f"📁 {name}", self)
+                    act.setCheckable(True)
+                    act.setChecked(current_folder_id == fid)
+                    act.triggered.connect(lambda checked=False, _fid=fid: self._move_note_to_folder_and_refresh(note_id, _fid))
+                    parent_menu.addAction(act)
+
+        _add_folder_branch(menu, None)
+
+        # 如果没有任何文件夹，给一个禁用提示
+        if not children_map.get(None):
+            empty = QAction("（暂无文件夹）", self)
+            empty.setEnabled(False)
+            menu.addAction(empty)
+
+    def _move_note_to_folder_and_refresh(self, note_id: str, folder_id: str | None):
+        """执行移动，并刷新笔记列表与左侧计数（尽量保持选中不跳）。"""
+        try:
+            self.note_manager.move_note_to_folder(note_id, folder_id)
+        except Exception:
+            return
+
+        # 记录当前选中（避免刷新后跳走）
+        selected_folder_row = self.folder_list.currentRow()
+        selected_note_id = note_id
+
+        # 刷新：笔记列表（当前视图可能会变化：比如从文件夹A移到B，A里会消失）
+        self.load_notes()
+
+        # 同步刷新左侧文件夹计数
+        self.load_folders()
+        try:
+            if selected_folder_row is not None and 0 <= selected_folder_row < self.folder_list.count():
+                self.folder_list.setCurrentRow(selected_folder_row)
+        except Exception:
+            pass
+
+        # 尝试重新选中该笔记（如果移动后仍在当前列表里）
+        try:
+            for i in range(self.note_list.count()):
+                it = self.note_list.item(i)
+                if it and it.data(Qt.ItemDataRole.UserRole) == selected_note_id:
+                    self.note_list.setCurrentRow(i)
+                    break
+        except Exception:
+            pass
+
     
     def create_subfolder(self, parent_folder_id: str):
         """在指定文件夹下创建子文件夹（不弹窗）：自动创建“新建文件夹/新建文件夹1/...”并进入就地重命名"""

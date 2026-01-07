@@ -563,18 +563,60 @@ class NoteManager:
         
         self.conn.commit()
         
-    def move_note_to_folder(self, note_id: str, folder_id: Optional[str]):
-        """将笔记移动到文件夹"""
+    def restore_note(self, note_id: str):
+        """从“最近删除”恢复笔记（ZISDELETED=0）。"""
         cursor = self.conn.cursor()
         cocoa_time = self._timestamp_to_cocoa(datetime.now())
-        
-        cursor.execute('''
-            UPDATE ZNOTE 
+        cursor.execute(
+            '''
+            UPDATE ZNOTE
+            SET ZISDELETED = 0, ZMODIFICATIONDATE = ?
+            WHERE ZIDENTIFIER = ?
+            ''',
+            (cocoa_time, note_id),
+        )
+        self.conn.commit()
+
+    def move_note_to_folder(self, note_id: str, folder_id: Optional[str]):
+        """将笔记移动到文件夹。
+
+        约定：
+        - “最近删除”由 `ZISDELETED=1` 表示。
+        - 如果一条已删除笔记被移动到“所有笔记/任意文件夹”，则视为“恢复并移动”。
+        """
+        cursor = self.conn.cursor()
+        cocoa_time = self._timestamp_to_cocoa(datetime.now())
+
+        # 先恢复（如果它在最近删除里）
+        cursor.execute('SELECT ZISDELETED FROM ZNOTE WHERE ZIDENTIFIER = ?', (note_id,))
+        row = cursor.fetchone()
+        try:
+            is_deleted = bool(row['ZISDELETED']) if row is not None else False
+        except Exception:
+            is_deleted = bool(row[0]) if row is not None else False
+
+        if is_deleted:
+            cursor.execute(
+                '''
+                UPDATE ZNOTE
+                SET ZISDELETED = 0, ZMODIFICATIONDATE = ?
+                WHERE ZIDENTIFIER = ?
+                ''',
+                (cocoa_time, note_id),
+            )
+
+        # 再更新所属文件夹
+        cursor.execute(
+            '''
+            UPDATE ZNOTE
             SET ZFOLDERID = ?, ZMODIFICATIONDATE = ?
             WHERE ZIDENTIFIER = ?
-        ''', (folder_id, cocoa_time, note_id))
-        
+            ''',
+            (folder_id, cocoa_time, note_id),
+        )
+
         self.conn.commit()
+
         
     def _folder_row_to_dict(self, row: sqlite3.Row) -> Dict:
         """将文件夹数据库行转换为字典"""
