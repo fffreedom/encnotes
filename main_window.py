@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem, QMessageBox, QFileDialog, QDialog,
     QLabel, QCheckBox, QProgressDialog, QInputDialog, QMenu
 )
-from PyQt6.QtCore import Qt, QSize, QTimer
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QDesktopServices
 from PyQt6.QtCore import QUrl
 from note_editor import NoteEditor
@@ -21,12 +21,70 @@ from password_dialog import UnlockDialog, SetupPasswordDialog, ChangePasswordDia
 import datetime
 
 
+class ElidedLabel(QLabel):
+    """宽度不足时自动显示省略号的Label（用于setItemWidget场景）"""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full_text = text or ""
+        super().setText(self._full_text)
+
+    def setFullText(self, text: str):
+        self._full_text = text or ""
+        self._update_elide()
+
+    def fullText(self) -> str:
+        return self._full_text
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elide()
+
+    def _update_elide(self):
+        fm = self.fontMetrics()
+        # 预留1px避免某些平台紧贴边缘导致最后一个字符被截断
+        available = max(0, self.width() - 1)
+        elided = fm.elidedText(self._full_text, Qt.TextElideMode.ElideRight, available)
+        super().setText(elided)
+
+
+class FolderTwisty(QLabel):
+    """文件夹展开/折叠小箭头（可点击）"""
+
+    toggled = pyqtSignal(str)
+
+    def __init__(self, folder_id: str, expanded: bool, parent=None):
+        super().__init__(parent)
+        self._folder_id = folder_id
+        self.setExpanded(expanded)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedWidth(14)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet("""
+            color: #666666;
+            font-size: 12px;
+            background: transparent;
+        """)
+
+    def setExpanded(self, expanded: bool):
+        # ▶ (折叠) / ▼ (展开)
+        self.setText("▼" if expanded else "▶")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.toggled.emit(self._folder_id)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class MainWindow(QMainWindow):
     """主窗口类"""
     
     def __init__(self):
         super().__init__()
         self.note_manager = NoteManager()
+
         self.export_manager = ExportManager()
         self.sync_manager = CloudKitSyncManager(self.note_manager)
         self.current_note_id = None
@@ -34,9 +92,13 @@ class MainWindow(QMainWindow):
         self.current_tag_id = None  # 当前选中的标签ID
         self.custom_folders = []  # 自定义文件夹列表
         self.tags = []  # 标签列表
+
+        # 文件夹展开/折叠状态（folder_id -> bool），默认展开
+        self._folder_expanded = {}
         
         # 加密管理器
         self.encryption_manager = self.note_manager.encryption_manager
+
         
         # 检查是否需要设置密码或解锁
         if not self._handle_encryption_setup():
@@ -72,22 +134,36 @@ class MainWindow(QMainWindow):
         # 左侧：文件夹列表
         self.folder_list = QListWidget()
         self.folder_list.setMaximumWidth(200)
+        self.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.folder_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.folder_list.setStyleSheet("""
             QListWidget {
                 border: none;
                 background-color: #f5f5f5;
                 font-size: 13px;
+                outline: none;
             }
             QListWidget::item {
                 padding: 6px 10px;
                 border: none;
+                outline: none;
             }
-            QListWidget::item:selected {
+            QListWidget::item:selected,
+            QListWidget::item:selected:active,
+            QListWidget::item:selected:!active {
                 background-color: #FFE066;
                 color: #000000;
+                border: none;
+                outline: none;
             }
             QListWidget::item:hover {
                 background-color: #FFF4CC;
+                border: none;
+                outline: none;
+            }
+            QListWidget::item:focus {
+                border: none;
+                outline: none;
             }
         """)
         self.folder_list.setCurrentRow(0)
@@ -99,6 +175,20 @@ class MainWindow(QMainWindow):
         
         # 中间：笔记列表
         self.note_list = QListWidget()
+        self.note_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # 笔记列表滚动条：默认不显示；用户滚动/拖动时临时浮动显示；停止交互一段时间后自动隐藏
+        self.note_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._note_scrollbar_hide_timer = QTimer(self)
+        self._note_scrollbar_hide_timer.setSingleShot(True)
+        self._note_scrollbar_hide_timer.timeout.connect(self._hide_note_scrollbar)
+
+        self._note_scrollbar_dragging = False
+        sb = self.note_list.verticalScrollBar()
+        sb.valueChanged.connect(self._show_note_scrollbar_temporarily)
+        sb.sliderPressed.connect(self._on_note_scrollbar_pressed)
+        sb.sliderReleased.connect(self._on_note_scrollbar_released)
+
         # 为笔记列表添加右键菜单
         self.note_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.note_list.customContextMenuRequested.connect(self.show_note_context_menu)
@@ -117,21 +207,25 @@ class MainWindow(QMainWindow):
                 outline: none;
             }
             QListWidget::item:selected {
-                background-color: #FFE066;
+                background: transparent;
                 color: #000000;
+                padding: 0px;
                 border: none;
                 outline: none;
             }
             QListWidget::item:hover {
-                background-color: #FFF4CC;
+                background: transparent;
+                padding: 0px;
                 border: none;
                 outline: none;
             }
+
             QListWidget::item:focus {
                 border: none;
                 outline: none;
             }
         """)
+
         self.note_list.currentItemChanged.connect(self.on_note_selected)
         
         # 右侧：编辑器
@@ -367,6 +461,7 @@ class MainWindow(QMainWindow):
         widget_layout.addWidget(header_label)
 
         # 分组标题与下方列表的分隔线：左侧对齐分组文字(16px)，右侧对齐笔记分隔线(8px)
+        widget_layout.addSpacing(6)
         group_separator = QWidget()
         group_separator.setFixedHeight(1)
         group_separator.setStyleSheet("""
@@ -376,11 +471,11 @@ class MainWindow(QMainWindow):
         """)
         widget_layout.addWidget(group_separator)
 
-        widget.setFixedHeight(41)  # 40 + 1px分隔线
+        widget.setFixedHeight(47)  # 标题 + 间距 + 1px分隔线
         
         self.note_list.addItem(item)
         self.note_list.setItemWidget(item, widget)
-        item.setSizeHint(QSize(280, 41))
+        item.setSizeHint(QSize(280, 47))
     
     def load_notes(self):
         """加载笔记列表"""
@@ -504,6 +599,29 @@ class MainWindow(QMainWindow):
                     self.note_list.setCurrentRow(i)
                     break
     
+    def _show_note_scrollbar_temporarily(self):
+        """用户滚动笔记列表时临时显示滚动条，停止滚动一段时间后隐藏"""
+        self.note_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # 只要在滚动，就不断延后隐藏时间
+        self._note_scrollbar_hide_timer.start(2000)
+
+    def _on_note_scrollbar_pressed(self):
+        """用户按下滚动条开始拖动时：保持显示，不触发隐藏"""
+        self._note_scrollbar_dragging = True
+        self.note_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._note_scrollbar_hide_timer.stop()
+
+    def _on_note_scrollbar_released(self):
+        """用户结束拖动滚动条：延迟隐藏"""
+        self._note_scrollbar_dragging = False
+        self._note_scrollbar_hide_timer.start(2000)
+
+    def _hide_note_scrollbar(self):
+        """隐藏笔记列表滚动条（停止滚动后触发）"""
+        if getattr(self, "_note_scrollbar_dragging", False):
+            return
+        self.note_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
     def _add_note_item(self, note):
         """添加笔记项到列表"""
         # 获取笔记的纯文本内容
@@ -552,12 +670,25 @@ class MainWindow(QMainWindow):
         
         # 使用自定义widget显示两行内容
         widget = QWidget()
+        widget.setObjectName("note_item_widget")
+        widget.setProperty("selected", False)
+        widget.setStyleSheet("""
+            QWidget#note_item_widget {
+                background: transparent;
+            }
+            QWidget#note_item_widget[selected="true"] {
+                background-color: #FFE066;
+            }
+        """)
+
         widget_layout = QVBoxLayout(widget)
-        widget_layout.setContentsMargins(32, 6, 8, 6)  # 笔记内容缩进32px（相对分组标识再缩进一层）
+        widget_layout.setContentsMargins(32, 6, 8, 6)  # 笔记内容缩进：左对齐标题起点；右侧留白
         widget_layout.setSpacing(2)  # 减小间距，从4改为2
+
         
         # 第一行：标题
-        title_label = QLabel(note['title'])
+        title_label = ElidedLabel(note['title'])
+        title_label.setFullText(note['title'])
         title_label.setStyleSheet("""
             font-size: 15px; 
             font-weight: normal; 
@@ -569,11 +700,16 @@ class MainWindow(QMainWindow):
         """)
         title_label.setWordWrap(False)
         title_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        title_label.setTextFormat(Qt.TextFormat.PlainText)
+        title_label.setMinimumWidth(0)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        title_label.setToolTip(note['title'])
         widget_layout.addWidget(title_label)
         
         # 第二行：时间 + 预览
         info_text = f"{time_str}    {preview_text}"
-        info_label = QLabel(info_text)
+        info_label = ElidedLabel(info_text)
+        info_label.setFullText(info_text)
         info_label.setStyleSheet("""
             font-size: 12px; 
             color: #888888;
@@ -584,26 +720,31 @@ class MainWindow(QMainWindow):
         """)
         info_label.setWordWrap(False)
         info_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        info_label.setTextFormat(Qt.TextFormat.PlainText)
+        info_label.setMinimumWidth(0)
+        info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        info_label.setToolTip(info_text)
         widget_layout.addWidget(info_label)
-        
-        # 添加底部分隔线（缩进显示）
+
+        # 条目之间的分隔线（不是分组分隔线）：左侧与标题对齐，右侧留白
         separator = QWidget()
         separator.setFixedHeight(1)
         separator.setStyleSheet("""
             background-color: #e0e0e0;
             margin-left: 0px;
-            margin-right: 8px;
+            margin-right: 0px;
         """)
         widget_layout.addWidget(separator)
         
-        # 设置widget固定高度
-        widget.setFixedHeight(61)  # 增加1px以容纳分隔线
+        # 设置widget固定高度（内容+分隔线）
+        widget.setFixedHeight(61)
         
         self.note_list.addItem(item)
         self.note_list.setItemWidget(item, widget)
         
         # 设置item高度
-        item.setSizeHint(QSize(280, 61))  # 增加1px以容纳分隔线
+        item.setSizeHint(QSize(280, 61))
+
             
     def load_folders(self):
         """加载文件夹列表（新布局：iCloud分组，支持多级文件夹）"""
@@ -613,16 +754,36 @@ class MainWindow(QMainWindow):
         # 清空列表
         self.folder_list.clear()
         
-        # 添加iCloud标题（不可选中）
-        icloud_header = QListWidgetItem("☁️ iCloud")
+        # 添加iCloud标题（不可选中）：与“🏷️ 标签”等普通文本项的图标起始位置对齐
+        icloud_header = QListWidgetItem()
         icloud_header.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
-        font = icloud_header.font()
-        font.setBold(True)
-        icloud_header.setFont(font)
+
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        # 使用与QListWidget默认item padding一致的左边距，让图标起始位置与“🏷️ 标签”对齐
+        header_layout.setContentsMargins(0, 0, 10, 0)
+
+        header_layout.setSpacing(6)
+
+        header_label = ElidedLabel("☁️ iCloud")
+        header_label.setFullText("☁️ iCloud")
+        header_label.setStyleSheet("""
+            font-size: 13px;
+            font-weight: bold;
+            color: #000000;
+            background: transparent;
+        """)
+        header_layout.addWidget(header_label, 1)
+
+        header_widget.setFixedHeight(28)
+        icloud_header.setSizeHint(QSize(200, 28))
+
         self.folder_list.addItem(icloud_header)
+        self.folder_list.setItemWidget(icloud_header, header_widget)
+
         
-        # 添加系统文件夹（缩进显示）
-        self.folder_list.addItem("    📝 所有笔记")
+        # 添加系统文件夹（使用与自定义文件夹一致的布局，保证左侧文字对齐）
+        self._add_system_folder_item("all_notes", "📝 所有笔记")
         
         # 加载自定义文件夹（支持层级显示）
         all_folders = self.note_manager.get_all_folders()
@@ -631,8 +792,9 @@ class MainWindow(QMainWindow):
         self.custom_folders = []
         self._add_folders_recursive(all_folders, None, 1, self.custom_folders)
         
-        # 添加最近删除（缩进显示，在iCloud下面）
-        self.folder_list.addItem("    🗑️ 最近删除")
+        # 添加最近删除（使用一致布局）
+        self._add_system_folder_item("deleted", "🗑️ 最近删除")
+
         
         # 添加标签标题（与iCloud并列）
         tag_header = QListWidgetItem("🏷️ 标签")
@@ -660,7 +822,7 @@ class MainWindow(QMainWindow):
             self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
     
     def _add_folders_recursive(self, all_folders, parent_id, level, flat_list):
-        """递归添加文件夹，支持多级层级显示
+        """递归添加文件夹，支持多级层级显示（带展开/折叠箭头）
         
         Args:
             all_folders: 所有文件夹列表
@@ -670,27 +832,151 @@ class MainWindow(QMainWindow):
         """
         # 找出当前层级的文件夹
         current_level_folders = [
-            f for f in all_folders 
+            f for f in all_folders
             if f.get('parent_folder_id') == parent_id
         ]
-        
+
         # 按order_index排序
         current_level_folders.sort(key=lambda x: x.get('order_index', 0))
-        
+
+        # 为了判断是否有子文件夹，预先构建 parent -> children_count
+        children_count = {}
+        for f in all_folders:
+            pid = f.get('parent_folder_id')
+            if pid is None:
+                continue
+            children_count[pid] = children_count.get(pid, 0) + 1
+
         # 添加到列表
         for folder in current_level_folders:
-            # 计算缩进（每级增加4个空格）
-            indent = "    " * level
-            item_text = f"{indent}📁 {folder['name']}"
-            self.folder_list.addItem(item_text)
-            
-            # 添加到扁平列表（保持与原有逻辑兼容）
+            folder_id = folder['id']
+            has_children = children_count.get(folder_id, 0) > 0
+            expanded = self._folder_expanded.get(folder_id, True)
+
+            # 创建item + 自定义widget
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, ("folder", folder_id))
+
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            # 左移：让折叠箭头列的最左侧与“🏷️ 标签”等普通文本项的图标最左侧对齐
+            row_layout.setContentsMargins(0, 0, 10, 0)
+            row_layout.setSpacing(6)
+            row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+            # 缩进：顶级(folder level=1)不额外缩进；子级每级增加16px
+            indent_px = max(0, (level - 1) * 16)
+            indent_widget = QWidget()
+            indent_widget.setFixedWidth(indent_px)
+            row_layout.addWidget(indent_widget)
+
+            # 展开/折叠箭头（仅在有子文件夹时显示，否则占位保证对齐）
+            if has_children:
+                twisty = FolderTwisty(folder_id, expanded)
+                twisty.toggled.connect(self._toggle_folder_expanded)
+                row_layout.addWidget(twisty)
+            else:
+                spacer = QWidget()
+                spacer.setFixedWidth(14)
+                row_layout.addWidget(spacer)
+
+            # 文件夹名称
+            name_label = ElidedLabel(f"📁 {folder['name']}")
+            name_label.setFullText(f"📁 {folder['name']}")
+            name_label.setToolTip(folder['name'])
+            name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            name_label.setStyleSheet("""
+                font-size: 13px;
+                color: #000000;
+                background: transparent;
+            """)
+            row_layout.addWidget(name_label, 1)
+
+            row_widget.setFixedHeight(28)
+            item.setSizeHint(QSize(200, 28))
+
+            self.folder_list.addItem(item)
+            self.folder_list.setItemWidget(item, row_widget)
+
+            # 添加到扁平列表（保持与原有逻辑兼容：用于 folder_index -> folder_id 映射）
             flat_list.append(folder)
-            
+
+            # 未展开就不递归渲染子文件夹
+            if has_children and not expanded:
+                continue
+
             # 递归添加子文件夹
-            self._add_folders_recursive(all_folders, folder['id'], level + 1, flat_list)
-            
+            self._add_folders_recursive(all_folders, folder_id, level + 1, flat_list)
+
+    def _toggle_folder_expanded(self, folder_id: str):
+        """切换文件夹展开/折叠状态并刷新左侧列表"""
+        # 记录当前选中的folder_id（尽量保持选中不跳）
+        selected_folder_id = None
+        current_row = self.folder_list.currentRow()
+        if current_row is not None and current_row >= 0:
+            cur_item = self.folder_list.item(current_row)
+            if cur_item:
+                payload = cur_item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder":
+                    selected_folder_id = payload[1]
+
+        self._folder_expanded[folder_id] = not self._folder_expanded.get(folder_id, True)
+        self.load_folders()
+
+        # 恢复选中
+        if selected_folder_id:
+            for i in range(self.folder_list.count()):
+                it = self.folder_list.item(i)
+                if not it:
+                    continue
+                payload = it.data(Qt.ItemDataRole.UserRole)
+                if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder" and payload[1] == selected_folder_id:
+                    self.folder_list.setCurrentRow(i)
+                    break
+
+    def _add_system_folder_item(self, key: str, text: str):
+        """添加系统文件夹项（与自定义文件夹统一缩进/对齐）"""
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, ("system", key))
+
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        # 左移：与“🏷️ 标签”等普通文本项的图标最左侧对齐
+        row_layout.setContentsMargins(0, 0, 10, 0)
+        row_layout.setSpacing(6)
+        row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        # 系统项顶级不再额外缩进（level=0）
+        level = 0
+        indent_px = level * 16
+        indent_widget = QWidget()
+        indent_widget.setFixedWidth(indent_px)
+        row_layout.addWidget(indent_widget)
+
+        # 系统项没有展开/折叠，但需要占位保持对齐
+        spacer = QWidget()
+        spacer.setFixedWidth(14)
+        row_layout.addWidget(spacer)
+
+        name_label = ElidedLabel(text)
+        name_label.setFullText(text)
+        name_label.setToolTip(text.replace("📝 ", "").replace("🗑️ ", ""))
+        name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        name_label.setStyleSheet("""
+            font-size: 13px;
+            color: #000000;
+            background: transparent;
+        """)
+        row_layout.addWidget(name_label, 1)
+
+        row_widget.setFixedHeight(28)
+        item.setSizeHint(QSize(200, 28))
+
+        self.folder_list.addItem(item)
+        self.folder_list.setItemWidget(item, row_widget)
+
     def create_new_folder(self):
+
         """创建新文件夹"""
         name, ok = QInputDialog.getText(
             self, "新建文件夹", "请输入文件夹名称:"
@@ -998,11 +1284,28 @@ class MainWindow(QMainWindow):
         
     def on_note_selected(self, current, previous):
         """笔记选中事件"""
+        # 让选中背景由条目widget自身绘制（避免QListWidget默认选中背景出现上下错位）
+        def _set_item_widget_selected(item, selected: bool):
+            if not item:
+                return
+            w = self.note_list.itemWidget(item)
+            if not w:
+                return
+            if w.objectName() != "note_item_widget":
+                return
+            w.setProperty("selected", selected)
+            # 触发QSS重新应用
+            w.style().unpolish(w)
+            w.style().polish(w)
+            w.update()
+
         if previous:
+            _set_item_widget_selected(previous, False)
             # 保存之前的笔记
             self.save_current_note()
             
         if current:
+            _set_item_widget_selected(current, True)
             note_id = current.data(Qt.ItemDataRole.UserRole)
             self.current_note_id = note_id
             self.editor.current_note_id = note_id  # 设置编辑器的当前笔记ID
@@ -1026,6 +1329,8 @@ class MainWindow(QMainWindow):
             self.current_note_id = None
             self.editor.current_note_id = None
             self.editor.clear()
+            
+
             
     def on_text_changed(self):
         """文本变化事件"""
@@ -1061,7 +1366,10 @@ class MainWindow(QMainWindow):
                         layout = widget.layout()
                         if layout and layout.count() > 0:
                             title_label = layout.itemAt(0).widget()
-                            if isinstance(title_label, QLabel):
+                            if isinstance(title_label, ElidedLabel):
+                                title_label.setFullText(title)
+                                title_label.setToolTip(title)
+                            elif isinstance(title_label, QLabel):
                                 title_label.setText(title)
                     break
                 
