@@ -34,75 +34,497 @@ class PasteImageTextEdit(QTextEdit):
         super().__init__(parent)
         self.parent_editor = parent
         self.setMouseTracking(True)
-        self.resizing_image = None
+        
+        # 图片选中和缩放相关
+        self.selected_image = None  # 当前选中的图片格式
+        self.selected_image_rect = None  # 图片的矩形区域
+        self.selected_image_cursor = None  # 图片的光标位置
+        
+        # 缩放相关
+        self.resizing = False
+        self.resize_handle = None  # 'tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l'
         self.resize_start_pos = None
         self.resize_start_size = None
+        
+        # 拖动移动相关
+        self.dragging = False
+        self.drag_start_pos = None
+        self.drag_start_cursor_pos = None
+        self.drag_preview_cursor = None  # 拖动预览光标位置
+        
+        # 边界检测阈值
+        self.handle_size = 8
+        
+        # 监听滚动事件
+        self.verticalScrollBar().valueChanged.connect(self.on_scroll)
+        self.horizontalScrollBar().valueChanged.connect(self.on_scroll)
+    
+    def on_scroll(self):
+        """滚动事件处理 - 更新边界框位置"""
+        if self.selected_image and self.selected_image_cursor:
+            # 重新计算图片位置
+            self.selected_image_rect = self.get_image_rect_at_cursor(self.selected_image_cursor)
+            # 触发重绘
+            self.viewport().update()
+    
+    def paintEvent(self, event):
+        """绘制事件 - 绘制选中图片的边界框"""
+        super().paintEvent(event)
+        
+        if self.selected_image and self.selected_image_cursor:
+            # 实时计算图片位置（确保滚动时位置正确）
+            self.selected_image_rect = self.get_image_rect_at_cursor(self.selected_image_cursor)
+            
+            if self.selected_image_rect:
+                from PyQt6.QtGui import QPainter, QPen
+                
+                painter = QPainter(self.viewport())
+                
+                # 绘制边界框
+                pen = QPen(QColor("#007AFF"), 2)
+                painter.setPen(pen)
+                painter.drawRect(self.selected_image_rect)
+                
+                # 绘制8个控制点
+                handles = self.get_resize_handles()
+                painter.setBrush(QColor("#007AFF"))
+                for handle_rect in handles.values():
+                    painter.drawRect(handle_rect)
+                
+                painter.end()
+        
+        # 绘制拖动预览指示器
+        if self.dragging and self.drag_preview_cursor:
+            from PyQt6.QtGui import QPainter, QPen
+            from PyQt6.QtCore import QPoint
+            
+            painter = QPainter(self.viewport())
+            
+            # 获取预览位置的光标矩形
+            preview_rect = self.cursorRect(self.drag_preview_cursor)
+            
+            # 绘制一条垂直的蓝色虚线，表示图片将被插入的位置
+            pen = QPen(QColor("#007AFF"), 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            
+            # 绘制插入位置指示线
+            x = preview_rect.left()
+            y_start = preview_rect.top() - 5
+            y_end = preview_rect.bottom() + 5
+            
+            painter.drawLine(QPoint(x, y_start), QPoint(x, y_end))
+            
+            # 在指示线两端绘制小三角形
+            from PyQt6.QtGui import QPolygon
+            
+            # 上三角
+            top_triangle = QPolygon([
+                QPoint(x, y_start),
+                QPoint(x - 4, y_start - 6),
+                QPoint(x + 4, y_start - 6)
+            ])
+            painter.setBrush(QColor("#007AFF"))
+            painter.drawPolygon(top_triangle)
+            
+            # 下三角
+            bottom_triangle = QPolygon([
+                QPoint(x, y_end),
+                QPoint(x - 4, y_end + 6),
+                QPoint(x + 4, y_end + 6)
+            ])
+            painter.drawPolygon(bottom_triangle)
+            
+            painter.end()
+    
+    def get_resize_handles(self):
+        """获取8个缩放控制点的矩形区域"""
+        if not self.selected_image_rect:
+            return {}
+        
+        from PyQt6.QtCore import QRect
+        
+        rect = self.selected_image_rect
+        hs = self.handle_size
+        
+        handles = {
+            'tl': QRect(rect.left() - hs//2, rect.top() - hs//2, hs, hs),
+            't': QRect(rect.center().x() - hs//2, rect.top() - hs//2, hs, hs),
+            'tr': QRect(rect.right() - hs//2, rect.top() - hs//2, hs, hs),
+            'r': QRect(rect.right() - hs//2, rect.center().y() - hs//2, hs, hs),
+            'br': QRect(rect.right() - hs//2, rect.bottom() - hs//2, hs, hs),
+            'b': QRect(rect.center().x() - hs//2, rect.bottom() - hs//2, hs, hs),
+            'bl': QRect(rect.left() - hs//2, rect.bottom() - hs//2, hs, hs),
+            'l': QRect(rect.left() - hs//2, rect.center().y() - hs//2, hs, hs),
+        }
+        
+        return handles
+    
+    def get_handle_at_pos(self, pos):
+        """获取鼠标位置对应的控制点"""
+        handles = self.get_resize_handles()
+        for name, rect in handles.items():
+            if rect.contains(pos):
+                return name
+        return None
+    
+    def get_cursor_for_handle(self, handle):
+        """根据控制点返回对应的光标形状"""
+        cursor_map = {
+            'tl': Qt.CursorShape.SizeFDiagCursor,
+            't': Qt.CursorShape.SizeVerCursor,
+            'tr': Qt.CursorShape.SizeBDiagCursor,
+            'r': Qt.CursorShape.SizeHorCursor,
+            'br': Qt.CursorShape.SizeFDiagCursor,
+            'b': Qt.CursorShape.SizeVerCursor,
+            'bl': Qt.CursorShape.SizeBDiagCursor,
+            'l': Qt.CursorShape.SizeHorCursor,
+        }
+        return cursor_map.get(handle, Qt.CursorShape.ArrowCursor)
+    
+    def get_image_rect_at_cursor(self, cursor):
+        """获取光标位置图片的矩形区域"""
+        char_format = cursor.charFormat()
+        if not char_format.isImageFormat():
+            return None
+        
+        # 获取图片格式
+        img_format = char_format.toImageFormat()
+        width = img_format.width()
+        height = img_format.height()
+        
+        # 创建一个新光标，定位到图片的开始位置
+        # 这样可以确保获取的是图片左上角的位置，而不是点击位置
+        image_cursor = QTextCursor(cursor)
+        
+        # 如果光标在图片字符的右侧，需要向左移动一个字符
+        # 检查当前位置的字符格式
+        test_cursor = QTextCursor(cursor)
+        test_cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
+        if test_cursor.charFormat().isImageFormat():
+            # 光标在图片右侧，使用左移后的位置
+            image_cursor = test_cursor
+        
+        # 使用文档布局来获取图片的精确位置
+        doc = self.document()
+        layout = doc.documentLayout()
+        
+        # 获取图片字符在文档中的位置
+        block = image_cursor.block()
+        block_layout = block.layout()
+        
+        if block_layout:
+            # 获取字符在块中的相对位置
+            pos_in_block = image_cursor.positionInBlock()
+            
+            # 获取字符的位置（相对于块）
+            line = block_layout.lineForTextPosition(pos_in_block)
+            if line.isValid():
+                # 获取字符在行中的x坐标
+                # cursorToX 返回元组 (x, y)，我们只需要 x
+                cursor_x_result = line.cursorToX(pos_in_block)
+                if isinstance(cursor_x_result, tuple):
+                    x = cursor_x_result[0]
+                else:
+                    x = cursor_x_result
+                
+                # 获取块在文档中的位置
+                block_pos = layout.blockBoundingRect(block).topLeft()
+                
+                # 获取行在块中的位置
+                line_pos = line.position()
+                
+                # 计算图片在文档中的绝对位置
+                doc_x = block_pos.x() + x
+                doc_y = block_pos.y() + line_pos.y()
+                
+                # 转换为视口坐标
+                # 需要减去滚动偏移
+                viewport_x = doc_x - self.horizontalScrollBar().value()
+                viewport_y = doc_y - self.verticalScrollBar().value()
+                
+                from PyQt6.QtCore import QRect
+                
+                # 返回图片的矩形区域（在视口坐标系中）
+                return QRect(int(viewport_x), int(viewport_y), int(width), int(height))
+        
+        # 如果无法通过布局获取，使用cursorRect作为后备方案
+        cursor_rect = self.cursorRect(image_cursor)
+        
+        from PyQt6.QtCore import QRect
+        return QRect(cursor_rect.left(), cursor_rect.top(), int(width), int(height))
     
     def mousePressEvent(self, event):
-        """鼠标按下事件 - 检测是否点击图片"""
+        """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
+            # 检查是否点击了控制点
+            if self.selected_image:
+                handle = self.get_handle_at_pos(event.pos())
+                if handle:
+                    # 开始缩放
+                    self.resizing = True
+                    self.resize_handle = handle
+                    self.resize_start_pos = event.pos()
+                    self.resize_start_size = (self.selected_image.width(), self.selected_image.height())
+                    event.accept()
+                    return
+                
+                # 检查是否点击了图片中心区域（用于拖动移动）
+                if self.selected_image_rect and self.selected_image_rect.contains(event.pos()):
+                    # 开始拖动
+                    self.dragging = True
+                    self.drag_start_pos = event.pos()
+                    self.drag_start_cursor_pos = self.selected_image_cursor.position()
+                    event.accept()
+                    return
+            
+            # 检查是否点击了图片
             cursor = self.cursorForPosition(event.pos())
             char_format = cursor.charFormat()
             
-            # 检查是否点击了图片
             if char_format.isImageFormat():
-                self.resizing_image = char_format.toImageFormat()
-                self.resize_start_pos = event.pos()
-                self.resize_start_size = (self.resizing_image.width(), self.resizing_image.height())
-                self.resize_cursor = cursor
+                # 选中图片
+                self.selected_image = char_format.toImageFormat()
+                self.selected_image_cursor = cursor
+                self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
+                self.viewport().update()
                 event.accept()
                 return
+            else:
+                # 取消选中
+                if self.selected_image:
+                    self.selected_image = None
+                    self.selected_image_rect = None
+                    self.selected_image_cursor = None
+                    self.viewport().update()
         
         super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
-        """鼠标移动事件 - 调整图片大小"""
-        if self.resizing_image and self.resize_start_pos and hasattr(self, 'resize_cursor'):
-            # 计算新的大小
+        """鼠标移动事件"""
+        # 处理缩放
+        if self.resizing and self.resize_handle and self.resize_start_pos:
+            # 计算偏移量
             delta = event.pos() - self.resize_start_pos
-            new_width = max(50, self.resize_start_size[0] + delta.x())
             
-            # 保持宽高比
+            # 根据控制点计算新的尺寸
+            new_width = self.resize_start_size[0]
+            new_height = self.resize_start_size[1]
             aspect_ratio = self.resize_start_size[0] / self.resize_start_size[1]
-            new_height = int(new_width / aspect_ratio)
             
-            # 创建新的图片格式
-            new_format = QTextImageFormat()
-            new_format.setName(self.resizing_image.name())
-            new_format.setWidth(new_width)
-            new_format.setHeight(new_height)
+            if self.resize_handle in ['tl', 'l', 'bl']:
+                # 左侧控制点：减小宽度
+                new_width = max(50, self.resize_start_size[0] - delta.x())
+            elif self.resize_handle in ['tr', 'r', 'br']:
+                # 右侧控制点：增加宽度
+                new_width = max(50, self.resize_start_size[0] + delta.x())
+            
+            if self.resize_handle in ['tl', 't', 'tr']:
+                # 顶部控制点：减小高度
+                new_height = max(50, self.resize_start_size[1] - delta.y())
+            elif self.resize_handle in ['bl', 'b', 'br']:
+                # 底部控制点：增加高度
+                new_height = max(50, self.resize_start_size[1] + delta.y())
+            
+            # 角落控制点：保持宽高比
+            if self.resize_handle in ['tl', 'tr', 'bl', 'br']:
+                # 以宽度为准，计算高度
+                new_height = int(new_width / aspect_ratio)
             
             # 更新图片
-            self.resize_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-            cursor = QTextCursor(self.resize_cursor)
-            cursor.insertImage(new_format)
+            self.update_image_size(new_width, new_height)
             
             event.accept()
             return
         
-        # 检查鼠标是否悬停在图片上，改变光标
-        cursor = self.cursorForPosition(event.pos())
-        char_format = cursor.charFormat()
+        # 处理拖动移动
+        if self.dragging and self.drag_start_pos:
+            # 更新预览光标位置
+            target_pos = event.pos()
+            self.drag_preview_cursor = self.cursorForPosition(target_pos)
+            
+            # 更新光标形状
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+            
+            # 触发重绘以显示预览指示器
+            self.viewport().update()
+            
+            event.accept()
+            return
         
-        if char_format.isImageFormat():
-            self.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+        # 更新光标形状
+        if self.selected_image:
+            handle = self.get_handle_at_pos(event.pos())
+            if handle:
+                self.viewport().setCursor(self.get_cursor_for_handle(handle))
+            else:
+                # 检查是否在图片区域内
+                if self.selected_image_rect and self.selected_image_rect.contains(event.pos()):
+                    self.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
+                else:
+                    self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         else:
-            self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            # 检查是否悬停在图片上
+            cursor = self.cursorForPosition(event.pos())
+            char_format = cursor.charFormat()
+            if char_format.isImageFormat():
+                self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         
         super().mouseMoveEvent(event)
     
     def mouseReleaseEvent(self, event):
-        """鼠标释放事件 - 完成调整"""
-        if self.resizing_image:
-            self.resizing_image = None
+        """鼠标释放事件"""
+        if self.resizing:
+            self.resizing = False
+            self.resize_handle = None
             self.resize_start_pos = None
             self.resize_start_size = None
-            if hasattr(self, 'resize_cursor'):
-                delattr(self, 'resize_cursor')
+            event.accept()
+            return
+        
+        if self.dragging:
+            # 计算鼠标移动的距离
+            delta = event.pos() - self.drag_start_pos
+            
+            # 如果移动距离足够大，执行移动
+            if abs(delta.x()) > 5 or abs(delta.y()) > 5:
+                # 获取目标位置的光标
+                target_cursor = self.cursorForPosition(event.pos())
+                # 执行图片移动
+                self.move_image_to_cursor(target_cursor)
+            
+            # 重置拖动状态
+            self.dragging = False
+            self.drag_start_pos = None
+            self.drag_start_cursor_pos = None
+            self.drag_preview_cursor = None  # 清除预览光标
+            
+            # 拖动结束后取消选中状态，允许用户重新点击选择
+            self.selected_image = None
+            self.selected_image_rect = None
+            self.selected_image_cursor = None
+            self.viewport().update()
+            
             event.accept()
             return
         
         super().mouseReleaseEvent(event)
+    
+    def update_image_size(self, new_width, new_height):
+        """更新图片尺寸"""
+        if not self.selected_image or not self.selected_image_cursor:
+            return
+        
+        # 创建新的图片格式
+        new_format = QTextImageFormat()
+        new_format.setName(self.selected_image.name())
+        new_format.setWidth(new_width)
+        new_format.setHeight(new_height)
+        
+        # 查找并替换图片
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        
+        found = False
+        while not cursor.atEnd():
+            char_format = cursor.charFormat()
+            if char_format.isImageFormat():
+                img_format = char_format.toImageFormat()
+                if img_format.name() == self.selected_image.name():
+                    # 找到图片
+                    found = True
+                    # 选中图片字符
+                    cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                    # 删除旧图片
+                    cursor.removeSelectedText()
+                    # 插入新图片
+                    cursor.insertImage(new_format)
+                    
+                    # 更新选中状态
+                    cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
+                    self.selected_image = new_format
+                    self.selected_image_cursor = cursor
+                    self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
+                    
+                    # 刷新显示
+                    self.viewport().update()
+                    break
+            cursor.movePosition(QTextCursor.MoveOperation.Right)
+        
+        if not found:
+            print("警告：未找到要调整的图片")
+    
+    def move_image_to_cursor(self, target_cursor):
+        """移动图片到新的光标位置"""
+        if not self.selected_image or not self.selected_image_cursor:
+            return
+        
+        # 获取目标位置
+        target_pos = target_cursor.position()
+        current_pos = self.selected_image_cursor.position()
+        
+        # 如果位置相同，不需要移动
+        if target_pos == current_pos or target_pos == current_pos + 1:
+            return
+        
+        # 保存图片格式
+        image_format = QTextImageFormat(self.selected_image)
+        
+        # 查找并删除原图片
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        
+        found = False
+        while not cursor.atEnd():
+            char_format = cursor.charFormat()
+            if char_format.isImageFormat():
+                img_format = char_format.toImageFormat()
+                if img_format.name() == self.selected_image.name():
+                    # 找到图片
+                    found = True
+                    old_pos = cursor.position()
+                    
+                    # 选中并删除图片
+                    cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                    cursor.removeSelectedText()
+                    
+                    # 调整目标位置（如果删除位置在目标位置之前）
+                    if old_pos < target_pos:
+                        target_pos -= 1
+                    
+                    break
+            cursor.movePosition(QTextCursor.MoveOperation.Right)
+        
+        if not found:
+            print("警告：未找到要移动的图片")
+            return
+        
+        # 在新位置插入图片
+        cursor = self.textCursor()
+        cursor.setPosition(target_pos)
+        
+        # 检查目标位置是否在一行文字的中间
+        # 如果光标不在行首，说明前面有内容，需要添加换行
+        block = cursor.block()
+        pos_in_block = cursor.positionInBlock()
+        
+        # 如果不在块的开头（即不在行首），在图片前插入换行
+        if pos_in_block > 0:
+            cursor.insertBlock()
+        
+        # 插入图片
+        cursor.insertImage(image_format)
+        
+        # 更新选中状态
+        cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
+        self.selected_image = image_format
+        self.selected_image_cursor = cursor
+        self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
+        
+        # 刷新显示
+        self.viewport().update()
     
     def canInsertFromMimeData(self, source):
         """检查是否可以从MIME数据插入"""
