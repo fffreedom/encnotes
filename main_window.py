@@ -1664,6 +1664,37 @@ class MainWindow(QMainWindow):
         info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         info_label.setToolTip(info_text)
         widget_layout.addWidget(info_label)
+        
+        # 第三行：文件夹信息（仅在"所有笔记"视图中显示）
+        if self.current_folder_id is None and not self.is_viewing_deleted:
+            folder_id = note.get('folder_id')
+            folder_name = "所有笔记"  # 默认值
+            
+            if folder_id:
+                # 获取文件夹名称
+                folder_info = self.note_manager.get_folder(folder_id)
+                if folder_info:
+                    folder_name = folder_info.get('name', '未知文件夹')
+            
+            # 显示文件夹图标和名称
+            folder_text = f"📁 {folder_name}"
+            folder_label = ElidedLabel(folder_text)
+            folder_label.setFullText(folder_text)
+            folder_label.setStyleSheet("""
+                font-size: 11px; 
+                color: #999999;
+                border: none;
+                background: transparent;
+                padding: 0px;
+                margin: 0px;
+            """)
+            folder_label.setWordWrap(False)
+            folder_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            folder_label.setTextFormat(Qt.TextFormat.PlainText)
+            folder_label.setMinimumWidth(0)
+            folder_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            folder_label.setToolTip(folder_text)
+            widget_layout.addWidget(folder_label)
 
         # 条目之间的分隔线（不是分组分隔线）：左侧与标题对齐，右侧留白
         separator = QWidget()
@@ -1676,13 +1707,20 @@ class MainWindow(QMainWindow):
         widget_layout.addWidget(separator)
         
         # 设置widget固定高度（内容+分隔线）
-        widget.setFixedHeight(61)
+        # 如果显示文件夹信息，高度增加约16px（文字12px + 间距4px）
+        if self.current_folder_id is None and not self.is_viewing_deleted:
+            widget.setFixedHeight(77)  # 61 + 16
+        else:
+            widget.setFixedHeight(61)
         
         self.note_list.addItem(item)
         self.note_list.setItemWidget(item, widget)
         
-        # 设置item高度
-        item.setSizeHint(QSize(280, 61))
+        # 设置item高度（与widget高度一致）
+        if self.current_folder_id is None and not self.is_viewing_deleted:
+            item.setSizeHint(QSize(280, 77))
+        else:
+            item.setSizeHint(QSize(280, 61))
 
             
     def load_folders(self):
