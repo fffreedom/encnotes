@@ -59,14 +59,11 @@ class FolderListWidget(QListWidget):
         self.main_window = None  # 将在MainWindow中设置
     
     def dropEvent(self, event):
-        """处理拖拽放下事件，实现文件夹层级变更"""
-        print(f"[拖拽] dropEvent 触发")
-        
-        if not self.main_window:
-            super().dropEvent(event)
-            return
-        
+        """处理拖拽放下事件"""
         try:
+            import time
+            t_start = time.time()
+            
             # 1. 获取拖拽源文件夹ID
             mime_data = event.mimeData()
             if not mime_data.hasFormat("application/x-qabstractitemmodeldatalist"):
@@ -91,8 +88,6 @@ class FolderListWidget(QListWidget):
                 super().dropEvent(event)
                 return
             
-            print(f"[拖拽] 源文件夹ID: {src_folder_id}")
-            
             # 2. 获取目标位置
             drop_pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
             target_item = self.itemAt(drop_pos)
@@ -109,62 +104,75 @@ class FolderListWidget(QListWidget):
                     target_folder_id = None
                 
                 if target_folder_id == src_folder_id:
-                    print(f"[拖拽] 不能拖到自己上")
                     event.ignore()
                     return
                 
                 new_parent = target_folder_id
-                print(f"[拖拽] 目标文件夹ID: {target_folder_id}, 设置为子文件夹")
             else:
                 # 拖到空白处 => 设置为顶级文件夹
                 new_parent = None
-                print(f"[拖拽] 拖到空白处，设置为顶级文件夹")
+            
+            t_before_db = time.time()
+            print(f"[性能] 准备阶段耗时: {(t_before_db - t_start)*1000:.2f}ms")
             
             # 4. 更新数据库中的父子关系
             self.main_window.note_manager.update_folder_parent(src_folder_id, new_parent)
-            print(f"[拖拽] 已更新数据库: folder_id={src_folder_id}, new_parent={new_parent}")
+            t_after_db = time.time()
+            print(f"[性能] 数据库更新耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
             
             # 4.5. 如果拖到某个文件夹下，自动展开目标父文件夹及其所有祖先文件夹
             if new_parent:
+                t_before_expand = time.time()
                 # 展开目标文件夹
                 self.main_window._folder_expanded[new_parent] = True
-                print(f"[拖拽] 自动展开目标父文件夹: {new_parent}")
                 
                 # 展开目标文件夹的所有祖先文件夹
                 current_folder_id = new_parent
+                ancestor_count = 0
                 while current_folder_id:
                     # 从数据库获取当前文件夹的父文件夹
                     folder_info = self.main_window.note_manager.get_folder(current_folder_id)
                     if folder_info and folder_info.get('parent_folder_id'):
                         parent_id = folder_info['parent_folder_id']
                         self.main_window._folder_expanded[parent_id] = True
-                        print(f"[拖拽] 自动展开祖先文件夹: {parent_id}")
                         current_folder_id = parent_id
+                        ancestor_count += 1
                     else:
                         break
+                t_after_expand = time.time()
+                print(f"[性能] 展开{ancestor_count}个祖先文件夹耗时: {(t_after_expand - t_before_expand)*1000:.2f}ms")
             
             # 5. 使用QTimer延迟刷新UI
             # 这样可以给Qt和数据库足够的时间来处理更新
             def delayed_refresh():
+                t_refresh_start = time.time()
+                
                 # 5.1. 强制刷新数据库连接，确保读取到最新数据
-                # 这可以避免缓存导致的数据不一致问题
                 try:
                     self.main_window.note_manager.conn.commit()
+                    t_after_commit = time.time()
+                    print(f"[性能] 数据库commit耗时: {(t_after_commit - t_refresh_start)*1000:.2f}ms")
                 except Exception:
                     pass
                 
                 # 5.2. 重新加载文件夹列表（从数据库读取最新数据）
+                t_before_load = time.time()
                 self.main_window.load_folders()
+                t_after_load = time.time()
+                print(f"[性能] load_folders()耗时: {(t_after_load - t_before_load)*1000:.2f}ms")
                 
-                # 5.2. 强制刷新UI
+                # 5.3. 强制刷新UI
+                t_before_ui_refresh = time.time()
                 self.viewport().update()
                 self.repaint()
                 # 强制处理所有待处理的事件
                 from PyQt6.QtWidgets import QApplication
                 QApplication.processEvents()
-                print(f"[拖拽] 已强制刷新UI")
+                t_after_ui_refresh = time.time()
+                print(f"[性能] UI刷新耗时: {(t_after_ui_refresh - t_before_ui_refresh)*1000:.2f}ms")
                 
                 # 6. 重新选中被拖动的文件夹
+                t_before_reselect = time.time()
                 found = False
                 for i in range(self.count()):
                     item = self.item(i)
@@ -177,59 +185,25 @@ class FolderListWidget(QListWidget):
                                 # 确保item可见
                                 self.scrollToItem(item, QListWidget.ScrollHint.EnsureVisible)
                                 found = True
-                                print(f"[拖拽] 重新选中文件夹: {src_folder_id}, row={i}")
-                                
-                                # 检查widget是否存在
-                                widget = self.itemWidget(item)
-                                if widget:
-                                    print(f"[拖拽] 检查widget: item={item}, widget={widget}")
-                                    print(f"[拖拽] item属性: isHidden={item.isHidden()}, isSelected={item.isSelected()}")
-                                    print(f"[拖拽] widget属性: isHidden={widget.isHidden()}, isVisible={widget.isVisible()}")
-                                    print(f"[拖拽] widget几何: size={widget.size()}, height={widget.height()}, width={widget.width()}")
-                                    print(f"[拖拽] widget位置: pos={widget.pos()}, geometry={widget.geometry()}")
-                                    print(f"[拖拽] item几何: sizeHint={item.sizeHint()}")
-                                    
-                                    # 检查widget的子控件
-                                    children = widget.findChildren(QWidget)
-                                    print(f"[拖拽] widget子控件数量: {len(children)}")
-                                    for idx, child in enumerate(children[:5]):  # 只打印前5个
-                                        print(f"[拖拽]   子控件{idx}: {child.__class__.__name__}, visible={child.isVisible()}, size={child.size()}")
-                                    
-                                    # 检查layout
-                                    layout = widget.layout()
-                                    if layout:
-                                        print(f"[拖拽] widget有layout: {layout.__class__.__name__}, count={layout.count()}")
-                                    
-                                    # 检查QListWidget的viewport
-                                    viewport = self.viewport()
-                                    print(f"[拖拽] viewport大小: {viewport.size()}, height={viewport.height()}")
-                                    print(f"[拖拽] QListWidget大小: {self.size()}, height={self.height()}")
-                                    print(f"[拖拽] 垂直滚动条: value={self.verticalScrollBar().value()}, max={self.verticalScrollBar().maximum()}")
-                                    
-                                    # 检查item在viewport中的可见性
-                                    item_rect = self.visualItemRect(item)
-                                    print(f"[拖拽] item的visualRect: {item_rect}")
-                                    
-                                    # 如果item被隐藏了，强制显示
-                                    if item.isHidden():
-                                        print(f"[拖拽] 警告: item被隐藏，强制显示")
-                                        item.setHidden(False)
-                                else:
-                                    print(f"[拖拽] 警告: widget为None")
-                                
+                                t_after_reselect = time.time()
+                                print(f"[性能] 重新选中文件夹耗时: {(t_after_reselect - t_before_reselect)*1000:.2f}ms")
                                 break
                 
                 if not found:
-                    print(f"[拖拽] 警告: 未找到被拖动的文件夹 {src_folder_id}")
+                    print(f"[警告] 未找到被拖动的文件夹 {src_folder_id}")
+                
+                t_refresh_end = time.time()
+                print(f"[性能] delayed_refresh总耗时: {(t_refresh_end - t_refresh_start)*1000:.2f}ms")
             
-            # 使用QTimer延迟200ms执行刷新（给数据库和Qt更多时间）
-            QTimer.singleShot(200, delayed_refresh)
+            # 使用QTimer延迟50ms执行刷新（根据性能测试，实际需要50-80ms）
+            QTimer.singleShot(50, delayed_refresh)
+            
+            t_end = time.time()
+            print(f"[性能] dropEvent总耗时(不含延迟): {(t_end - t_start)*1000:.2f}ms")
             
             event.accept()
-            print(f"[拖拽] 完成")
             
         except Exception as e:
-            print(f"[拖拽] 异常: {e}")
             import traceback
             traceback.print_exc()
             super().dropEvent(event)
@@ -662,7 +636,7 @@ class MainWindow(QMainWindow):
 
         # 设置分割器初始宽度（关键：启动时的默认宽度由这里决定，而不是 setMaximumWidth）
         # 这里把左侧文件夹栏稍微加宽，避免“新建文件夹”等默认名称显示不全
-        splitter.setSizes([170, 170, 900])
+        splitter.setSizes([200, 200, 900])
         
         main_layout.addWidget(splitter)
         
@@ -1377,9 +1351,6 @@ class MainWindow(QMainWindow):
             folder_id = folder['id']
             has_children = children_count.get(folder_id, 0) > 0
             expanded = self._folder_expanded.get(folder_id, True)
-            
-            # 调试信息（打印所有文件夹）
-            print(f"[递归渲染] folder_id={folder_id}, name={folder['name']}, parent_id={parent_id}, level={level}, has_children={has_children}, expanded={expanded}, children_count={children_count.get(folder_id, 0)}")
 
             # 创建item + 自定义widget
             item = QListWidgetItem()
@@ -1459,9 +1430,6 @@ class MainWindow(QMainWindow):
 
             self.folder_list.addItem(item)
             self.folder_list.setItemWidget(item, row_widget)
-            
-            # 调试：确认item和widget已添加
-            print(f"[递归渲染] 已添加item到列表: folder_id={folder_id}, row={self.folder_list.row(item)}")
 
             # 添加到扁平列表（保持与原有逻辑兼容：用于 folder_index -> folder_id 映射）
             flat_list.append(folder)
