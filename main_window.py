@@ -691,12 +691,11 @@ class NoteListWidget(QListWidget):
         pen = QPen(QColor(0xE0, 0xE0, 0xE0), 1)
         painter.setPen(pen)
 
-        # 只给“可选中的笔记项”画分隔线；标题分组等不可选项不画
+        # 默认只给“可选中的笔记项”画分隔线；
+        # 但如果某个不可选项（比如分组标题）显式设置了 _SEP_ENABLED_ROLE，也允许绘制。
         for i in range(self.count()):
             item = self.item(i)
             if not item:
-                continue
-            if not (item.flags() & Qt.ItemFlag.ItemIsSelectable):
                 continue
 
             enabled = bool(item.data(self._SEP_ENABLED_ROLE))
@@ -718,8 +717,10 @@ class NoteListWidget(QListWidget):
             except Exception:
                 right = 0
 
-            # 画在 item 的最底部：这条线会自然落在“黄色高亮块”的外边缘
-            y = rect.bottom()
+            # 画在 item 的顶部边缘：
+            # 这样上一条的分隔线会紧贴下一条（即选中黄色背景）的上边缘，避免出现“线与黄色之间有一点空白”。
+            # 同时由于绘制顺序是从上到下，使用 top 能减少 1px 的几何/抗锯齿误差。
+            y = rect.top()
             x1 = rect.left() + max(0, left)
             x2 = rect.right() - max(0, right)
             painter.drawLine(x1, y, x2, y)
@@ -1419,6 +1420,16 @@ class MainWindow(QMainWindow):
 
         widget.setFixedHeight(47)  # 标题 + 间距 + 1px分隔线
         
+        # 让分组标题也参与“自绘分隔线”：
+        # - 分组标题本身不可选中，但我们希望它也能画一条“顶部线”，让视觉上分组之间更连贯。
+        # - left/right 与分组 separator 保持一致（左 16 / 右 8）。
+        try:
+            item.setData(Qt.ItemDataRole.UserRole + 1, True)
+            item.setData(Qt.ItemDataRole.UserRole + 2, 16)
+            item.setData(Qt.ItemDataRole.UserRole + 3, 8)
+        except Exception:
+            pass
+
         self.note_list.addItem(item)
         self.note_list.setItemWidget(item, widget)
         # 注意这里Group的宽度同样会影响笔记的宽度，所以需要设置成和笔记item相同的宽度
@@ -1539,8 +1550,9 @@ class MainWindow(QMainWindow):
             self._add_group_header("置顶")
             for idx, note in enumerate(pinned_notes):
                 self._add_note_item(note)
-                # 置顶分组内的最后一条笔记：不画分隔线
-                if idx == len(pinned_notes) - 1:
+
+                # 分组的第一条笔记：关闭其“顶部线”，避免与分组标题下面的分隔线重复
+                if idx == 0:
                     try:
                         it = self.note_list.item(self.note_list.count() - 1)
                         if it and (it.flags() & Qt.ItemFlag.ItemIsSelectable):
@@ -1555,8 +1567,9 @@ class MainWindow(QMainWindow):
                 self._add_group_header(group_name)
                 for idx, note in enumerate(group_notes):
                     self._add_note_item(note)
-                    # 分组内的最后一条笔记：不画分隔线
-                    if idx == len(group_notes) - 1:
+
+                    # 分组的第一条笔记：关闭其“顶部线”，避免与分组标题下面的分隔线重复
+                    if idx == 0:
                         try:
                             it = self.note_list.item(self.note_list.count() - 1)
                             if it and (it.flags() & Qt.ItemFlag.ItemIsSelectable):
@@ -1566,12 +1579,8 @@ class MainWindow(QMainWindow):
 
         
         if notes:
-            # 找到最后一个笔记项：关闭其“下边框分隔线”
-            for i in range(self.note_list.count() - 1, -1, -1):
-                item = self.note_list.item(i)
-                if item.flags() & Qt.ItemFlag.ItemIsSelectable:
-                    item.setData(Qt.ItemDataRole.UserRole + 1, False)
-                    break
+            # 现在分隔线画在 item 的顶部边缘，因此“最后一条笔记”也应该保留顶部线（无需关闭）。
+            pass
 
             # 触发重绘（应用分隔线状态变化）
             self.note_list.viewport().update()
