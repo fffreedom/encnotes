@@ -798,6 +798,7 @@ class MainWindow(QMainWindow):
         self.current_note_id = None
         self.current_folder_id = None  # 当前选中的文件夹ID
         self.current_tag_id = None  # 当前选中的标签ID
+        self.is_viewing_deleted = False  # 是否正在查看最近删除
         self.custom_folders = []  # 自定义文件夹列表
         self.tags = []  # 标签列表
 
@@ -817,6 +818,9 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.load_folders()  # 加载文件夹
         self.load_notes()
+        
+        # 恢复上次打开的笔记和光标位置
+        self._restore_last_note()
         
         # 设置自动同步定时器（每5分钟）
         self.sync_timer = QTimer()
@@ -1356,8 +1360,12 @@ class MainWindow(QMainWindow):
         self.note_list.setItemWidget(item, widget)
         item.setSizeHint(QSize(280, 47))
     
-    def load_notes(self):
-        """加载笔记列表"""
+    def load_notes(self, select_note_id=None):
+        """加载笔记列表
+        
+        Args:
+            select_note_id: 要选中的笔记ID，如果为None则选中第一个笔记
+        """
         # 手动删除所有自定义widget，避免重叠
         # 必须在clear()之前删除所有widget
         widgets_to_delete = []
@@ -1403,10 +1411,12 @@ class MainWindow(QMainWindow):
             notes = self.note_manager.get_all_notes()
             self.current_folder_id = None
             self.current_tag_id = None
+            self.is_viewing_deleted = False
         elif current_row == deleted_row:  # 最近删除
             notes = self.note_manager.get_deleted_notes()
             self.current_folder_id = None
             self.current_tag_id = None
+            self.is_viewing_deleted = True
         elif 2 <= current_row < deleted_row:  # 自定义文件夹
             folder_index = current_row - 2
             if 0 <= folder_index < len(self.custom_folders):
@@ -1414,6 +1424,7 @@ class MainWindow(QMainWindow):
                 notes = self.note_manager.get_notes_by_folder(folder_id)
                 self.current_folder_id = folder_id
                 self.current_tag_id = None
+                self.is_viewing_deleted = False
             else:
                 notes = []
         elif current_row >= first_tag_row:  # 标签
@@ -1423,6 +1434,7 @@ class MainWindow(QMainWindow):
                 notes = self.note_manager.get_notes_by_tag(tag_id)
                 self.current_folder_id = None
                 self.current_tag_id = tag_id
+                self.is_viewing_deleted = False
             else:
                 notes = []
         else:
@@ -1471,12 +1483,24 @@ class MainWindow(QMainWindow):
                     self._add_note_item(note)
         
         if notes:
-            # 选中第一个可选中的笔记项（跳过分组标题）
-            for i in range(self.note_list.count()):
-                item = self.note_list.item(i)
-                if item.flags() & Qt.ItemFlag.ItemIsSelectable:
-                    self.note_list.setCurrentRow(i)
-                    break
+            # 如果指定了要选中的笔记ID，尝试选中它
+            note_selected = False
+            if select_note_id:
+                for i in range(self.note_list.count()):
+                    item = self.note_list.item(i)
+                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                        if item.data(Qt.ItemDataRole.UserRole) == select_note_id:
+                            self.note_list.setCurrentRow(i)
+                            note_selected = True
+                            break
+            
+            # 如果没有指定笔记ID或指定的笔记不存在，选中第一个可选中的笔记项
+            if not note_selected:
+                for i in range(self.note_list.count()):
+                    item = self.note_list.item(i)
+                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                        self.note_list.setCurrentRow(i)
+                        break
         else:
             # 空列表：保持编辑器“不可编辑/无光标闪烁”的观感
             self.current_note_id = None
@@ -2414,9 +2438,11 @@ class MainWindow(QMainWindow):
             # 点击在笔记上
             note_id = item.data(Qt.ItemDataRole.UserRole)
 
-            # 新建笔记
+            # 新建笔记（在"所有笔记"和"最近删除"视图中禁用）
             new_note_action = QAction("新建笔记", self)
             new_note_action.triggered.connect(self.create_new_note)
+            if self.current_folder_id is None or self.is_viewing_deleted:
+                new_note_action.setEnabled(False)
             menu.addAction(new_note_action)
 
             menu.addSeparator()
@@ -2446,9 +2472,11 @@ class MainWindow(QMainWindow):
             delete_action.triggered.connect(lambda: self.delete_note_by_id(note_id))
             menu.addAction(delete_action)
         else:
-            # 点击在空白区域
+            # 点击在空白区域（在"所有笔记"和"最近删除"视图中禁用）
             new_note_action = QAction("新建笔记", self)
             new_note_action.triggered.connect(self.create_new_note)
+            if self.current_folder_id is None or self.is_viewing_deleted:
+                new_note_action.setEnabled(False)
             menu.addAction(new_note_action)
 
         menu.exec(self.note_list.mapToGlobal(position))
@@ -3253,6 +3281,72 @@ class MainWindow(QMainWindow):
                         QApplication.quit()
                         return False
                     return False
+    
+    def _restore_last_note(self):
+        """恢复上次打开的笔记和光标位置"""
+        try:
+            settings = getattr(self, "_settings", None)
+            if settings is None:
+                settings = QSettings("encnotes", "encnotes")
+            
+            # 先恢复文件夹的选中状态
+            last_folder_type = settings.value("last_folder_type")
+            last_folder_value = settings.value("last_folder_value")
+            
+            folder_restored = False
+            if last_folder_type and last_folder_value:
+                # 在文件夹列表中查找匹配的项
+                for i in range(self.folder_list.count()):
+                    item = self.folder_list.item(i)
+                    if item:
+                        payload = item.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(payload, tuple) and len(payload) == 2:
+                            if payload[0] == last_folder_type and payload[1] == last_folder_value:
+                                self.folder_list.setCurrentRow(i)
+                                folder_restored = True
+                                break
+            
+            # 如果没有恢复文件夹，使用默认选中（"所有笔记"通常在第1行）
+            if not folder_restored:
+                # 查找"所有笔记"项
+                for i in range(self.folder_list.count()):
+                    item = self.folder_list.item(i)
+                    if item:
+                        payload = item.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(payload, tuple) and len(payload) == 2:
+                            if payload[0] == "system" and payload[1] == "all_notes":
+                                self.folder_list.setCurrentRow(i)
+                                break
+            
+            # 再恢复笔记的选中状态和光标位置
+            last_note_id = settings.value("last_note_id")
+            if last_note_id:
+                # 尝试在当前笔记列表中找到并选中该笔记
+                for i in range(self.note_list.count()):
+                    item = self.note_list.item(i)
+                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                        if item.data(Qt.ItemDataRole.UserRole) == last_note_id:
+                            self.note_list.setCurrentRow(i)
+                            
+                            # 恢复光标位置
+                            last_cursor_position = settings.value("last_cursor_position")
+                            if last_cursor_position is not None:
+                                try:
+                                    from PyQt6.QtGui import QTextCursor
+                                    cursor = self.editor.text_edit.textCursor()
+                                    # 确保位置不超过文档长度
+                                    max_position = len(self.editor.text_edit.toPlainText())
+                                    position = min(int(last_cursor_position), max_position)
+                                    cursor.setPosition(position)
+                                    self.editor.text_edit.setTextCursor(cursor)
+                                    
+                                    # 设置焦点到编辑器
+                                    self.editor.text_edit.setFocus()
+                                except Exception:
+                                    pass
+                            break
+        except Exception:
+            pass
             
     def change_password(self):
         """修改密码"""
@@ -3330,6 +3424,40 @@ class MainWindow(QMainWindow):
                 settings = QSettings("encnotes", "encnotes")
             settings.setValue("main_window/geometry", self.saveGeometry())
             settings.setValue("main_window/state", self.saveState())
+            
+            # 保存当前选中的文件夹信息
+            current_folder_row = self.folder_list.currentRow()
+            if current_folder_row >= 0:
+                current_item = self.folder_list.item(current_folder_row)
+                if current_item:
+                    payload = current_item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(payload, tuple) and len(payload) == 2:
+                        folder_type, folder_value = payload
+                        settings.setValue("last_folder_type", folder_type)
+                        settings.setValue("last_folder_value", folder_value)
+                    else:
+                        settings.remove("last_folder_type")
+                        settings.remove("last_folder_value")
+                else:
+                    settings.remove("last_folder_type")
+                    settings.remove("last_folder_value")
+            else:
+                settings.remove("last_folder_type")
+                settings.remove("last_folder_value")
+            
+            # 保存当前打开的笔记ID和光标位置
+            if self.current_note_id:
+                settings.setValue("last_note_id", self.current_note_id)
+                try:
+                    cursor = self.editor.text_edit.textCursor()
+                    cursor_position = cursor.position()
+                    settings.setValue("last_cursor_position", cursor_position)
+                except Exception:
+                    pass
+            else:
+                # 如果没有打开笔记，清除保存的状态
+                settings.remove("last_note_id")
+                settings.remove("last_cursor_position")
         except Exception:
             pass
 
