@@ -668,11 +668,63 @@ class FolderListWidget(QListWidget):
 
 
 class NoteListWidget(QListWidget):
-    """支持笔记拖拽到文件夹的自定义列表控件"""
-    
+    """支持笔记拖拽到文件夹的自定义列表控件
+
+    额外：自绘“笔记项分隔线”，让分隔线与标题起点对齐，且在选中黄色高亮的底部之外。
+    """
+
+    # 用 item.data 存储分隔线参数（避免改动太多结构）
+    _SEP_ENABLED_ROLE = Qt.ItemDataRole.UserRole + 1
+    _SEP_LEFT_ROLE = Qt.ItemDataRole.UserRole + 2
+    _SEP_RIGHT_ROLE = Qt.ItemDataRole.UserRole + 3
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = None  # 将在MainWindow中设置
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        from PyQt6.QtGui import QPainter, QPen, QColor
+
+        painter = QPainter(self.viewport())
+        pen = QPen(QColor(0xE0, 0xE0, 0xE0), 1)
+        painter.setPen(pen)
+
+        # 只给“可选中的笔记项”画分隔线；标题分组等不可选项不画
+        for i in range(self.count()):
+            item = self.item(i)
+            if not item:
+                continue
+            if not (item.flags() & Qt.ItemFlag.ItemIsSelectable):
+                continue
+
+            enabled = bool(item.data(self._SEP_ENABLED_ROLE))
+            if not enabled:
+                continue
+
+            rect = self.visualItemRect(item)
+            if rect.isNull() or rect.height() <= 0:
+                continue
+
+            left = item.data(self._SEP_LEFT_ROLE)
+            right = item.data(self._SEP_RIGHT_ROLE)
+            try:
+                left = int(left) if left is not None else 0
+            except Exception:
+                left = 0
+            try:
+                right = int(right) if right is not None else 0
+            except Exception:
+                right = 0
+
+            # 画在 item 的最底部：这条线会自然落在“黄色高亮块”的外边缘
+            y = rect.bottom()
+            x1 = rect.left() + max(0, left)
+            x2 = rect.right() - max(0, right)
+            painter.drawLine(x1, y, x2, y)
+
+        painter.end()
 
 
 class FolderTwisty(QLabel):
@@ -880,7 +932,7 @@ class MainWindow(QMainWindow):
         self.folder_list = FolderListWidget()
         self.folder_list.main_window = self  # 设置主窗口引用
         # 左侧文件夹栏：设置一个更合理的默认/最小宽度；真正的初始宽度由 QSplitter 的 sizes 决定
-        self.folder_list.setMaximumWidth(300)
+        self.folder_list.setMaximumWidth(500)
         self.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.folder_list.setTextElideMode(Qt.TextElideMode.ElideRight)
 
@@ -910,6 +962,9 @@ class MainWindow(QMainWindow):
             }
             QWidget#folder_row_widget[selected="true"] {
                 background-color: #FFE066;
+                border-radius: 6px;
+                margin-left: 8px;
+                margin-right: 8px;
             }
 
             QListWidget::item {
@@ -999,7 +1054,7 @@ class MainWindow(QMainWindow):
         # 中间：笔记列表
         self.note_list = NoteListWidget()
         self.note_list.main_window = self  # 设置主窗口引用
-        
+
         # 启用笔记拖拽功能：只允许拖出到文件夹列表，不接受拖入
         self.note_list.setDragEnabled(True)
         self.note_list.setAcceptDrops(False)  # 笔记列表不接受拖入
@@ -1032,6 +1087,10 @@ class MainWindow(QMainWindow):
                 font-size: 15px;
                 outline: none;
             }
+            QListWidget::viewport {
+                background: transparent;
+            }
+
             QListWidget::item {
                 padding: 0px;
                 border: none;
@@ -1112,7 +1171,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 5)
 
-        # 设置分割器初始宽度（关键：启动时的默认宽度由这里决定，而不是 setMaximumWidth）
+        # 设置分割器启动时初始宽度，文件夹列表和笔记列表最大宽度由各自的setMaximumWidth设置，最小宽度不设置
         # 这里把左侧文件夹栏稍微加宽，避免“新建文件夹”等默认名称显示不全
         splitter.setSizes([200, 200, 900])
         
@@ -1359,6 +1418,7 @@ class MainWindow(QMainWindow):
         self.note_list.addItem(item)
         self.note_list.setItemWidget(item, widget)
         item.setSizeHint(QSize(280, 47))
+
     
     def load_notes(self, select_note_id=None):
         """加载笔记列表
@@ -1472,17 +1532,46 @@ class MainWindow(QMainWindow):
         # 显示置顶笔记
         if pinned_notes:
             self._add_group_header("置顶")
-            for note in pinned_notes:
+            for idx, note in enumerate(pinned_notes):
                 self._add_note_item(note)
+                # 置顶分组内的最后一条笔记：不画分隔线
+                if idx == len(pinned_notes) - 1:
+                    try:
+                        it = self.note_list.item(self.note_list.count() - 1)
+                        if it and (it.flags() & Qt.ItemFlag.ItemIsSelectable):
+                            it.setData(Qt.ItemDataRole.UserRole + 1, False)
+                    except Exception:
+                        pass
         
         # 显示按时间分组的普通笔记
         for group_name in group_order:
             if group_name in time_groups and time_groups[group_name]:
+                group_notes = time_groups[group_name]
                 self._add_group_header(group_name)
-                for note in time_groups[group_name]:
+                for idx, note in enumerate(group_notes):
                     self._add_note_item(note)
+                    # 分组内的最后一条笔记：不画分隔线
+                    if idx == len(group_notes) - 1:
+                        try:
+                            it = self.note_list.item(self.note_list.count() - 1)
+                            if it and (it.flags() & Qt.ItemFlag.ItemIsSelectable):
+                                it.setData(Qt.ItemDataRole.UserRole + 1, False)
+                        except Exception:
+                            pass
+
         
         if notes:
+            # 找到最后一个笔记项：关闭其“下边框分隔线”
+            for i in range(self.note_list.count() - 1, -1, -1):
+                item = self.note_list.item(i)
+                if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                    item.setData(Qt.ItemDataRole.UserRole + 1, False)
+                    break
+
+            # 触发重绘（应用分隔线状态变化）
+            self.note_list.viewport().update()
+
+            
             # 如果指定了要选中的笔记ID，尝试选中它
             note_selected = False
             if select_note_id:
@@ -1614,15 +1703,26 @@ class MainWindow(QMainWindow):
         widget.setStyleSheet("""
             QWidget#note_item_widget {
                 background: transparent;
+                border-radius: 8px;
+                margin-left: 8px;
+                margin-right: 8px;
             }
             QWidget#note_item_widget[selected="true"] {
                 background-color: #FFE066;
             }
         """)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         widget_layout = QVBoxLayout(widget)
-        widget_layout.setContentsMargins(32, 6, 8, 6)  # 笔记内容缩进：左对齐标题起点；右侧留白
+        widget_layout.setContentsMargins(32, 6, 8, 6)
+
         widget_layout.setSpacing(2)  # 减小间距，从4改为2
+
+        # 分隔线：用 item 的“下边框”来画，避免分隔线落在黄色选中背景内部。
+        # 同时让分隔线左侧与内容起点对齐，右侧也留出与黄色背景一致的空白。
+        item.setData(Qt.ItemDataRole.UserRole + 1, True)  # 标记：默认显示分隔线（最后一条会关闭）
+        item.setData(Qt.ItemDataRole.UserRole + 2, 32)    # 标记：分隔线缩进（保持与标题起点一致）
+        item.setData(Qt.ItemDataRole.UserRole + 3, 8)     # 标记：右侧边距（与左侧留白对称）
 
         
         # 第一行：标题
@@ -1641,7 +1741,9 @@ class MainWindow(QMainWindow):
         title_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         title_label.setTextFormat(Qt.TextFormat.PlainText)
         title_label.setMinimumWidth(0)
+        title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
         title_label.setToolTip(note['title'])
         widget_layout.addWidget(title_label)
         
@@ -1661,7 +1763,9 @@ class MainWindow(QMainWindow):
         info_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         info_label.setTextFormat(Qt.TextFormat.PlainText)
         info_label.setMinimumWidth(0)
+        info_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
         info_label.setToolTip(info_text)
         widget_layout.addWidget(info_label)
         
@@ -1692,35 +1796,32 @@ class MainWindow(QMainWindow):
             folder_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
             folder_label.setTextFormat(Qt.TextFormat.PlainText)
             folder_label.setMinimumWidth(0)
+            folder_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             folder_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
             folder_label.setToolTip(folder_text)
             widget_layout.addWidget(folder_label)
-
-        # 条目之间的分隔线（不是分组分隔线）：左侧与标题对齐，右侧留白
-        separator = QWidget()
-        separator.setFixedHeight(1)
-        separator.setStyleSheet("""
-            background-color: #e0e0e0;
-            margin-left: 0px;
-            margin-right: 0px;
-        """)
-        widget_layout.addWidget(separator)
         
-        # 设置widget固定高度（内容+分隔线）
+        # 分隔线已改为 item 下边框绘制（最后一条会关闭）。
+
+        
+        # 设置widget固定高度
         # 如果显示文件夹信息，高度增加约16px（文字12px + 间距4px）
         if self.current_folder_id is None and not self.is_viewing_deleted:
-            widget.setFixedHeight(77)  # 61 + 16
+            widget.setFixedHeight(77)  # 原61 + 16
         else:
             widget.setFixedHeight(61)
         
         self.note_list.addItem(item)
         self.note_list.setItemWidget(item, widget)
+
         
         # 设置item高度（与widget高度一致）
+        # 宽度与 note_list 的初始宽度保持一致（splitter.setSizes([200, 200, 900])），避免初始渲染时黄色背景宽度计算不准确
         if self.current_folder_id is None and not self.is_viewing_deleted:
-            item.setSizeHint(QSize(280, 77))
+            item.setSizeHint(QSize(200, 77))
         else:
-            item.setSizeHint(QSize(280, 61))
+            item.setSizeHint(QSize(200, 61))
 
             
     def load_folders(self):
@@ -2932,8 +3033,11 @@ class MainWindow(QMainWindow):
             w = self.note_list.itemWidget(item)
             if not w:
                 return
+
+            # itemWidget 现在就是 `note_item_widget` 本身
             if w.objectName() != "note_item_widget":
                 return
+
             w.setProperty("selected", selected)
             # 触发QSS重新应用
             w.style().unpolish(w)
