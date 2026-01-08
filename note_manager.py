@@ -545,6 +545,30 @@ class NoteManager:
         
         self.conn.commit()
 
+    def is_ancestor_folder(self, ancestor_id: str, descendant_id: str) -> bool:
+        """检查ancestor_id是否是descendant_id的祖先（包括自己）
+        
+        Args:
+            ancestor_id: 可能的祖先文件夹ID
+            descendant_id: 可能的子孙文件夹ID
+            
+        Returns:
+            bool: 如果ancestor_id是descendant_id的祖先或就是自己，返回True
+        """
+        if not ancestor_id or not descendant_id:
+            return False
+        
+        # 自己是自己的祖先
+        if ancestor_id == descendant_id:
+            return True
+        
+        # 获取ancestor_id的所有子孙文件夹
+        try:
+            descendants = set(self._get_descendant_folder_ids(ancestor_id))
+            return descendant_id in descendants
+        except Exception:
+            return False
+    
     def update_folder_parent(self, folder_id: str, parent_folder_id: Optional[str]):
         """更新文件夹父级（用于拖拽：把文件夹移动到另一个文件夹下）。
 
@@ -578,6 +602,91 @@ class NoteManager:
             ''',
             (parent_folder_id, cocoa_time, folder_id),
         )
+        self.conn.commit()
+
+    def reorder_folder(self, folder_id: str, target_folder_id: str, insert_before: bool) -> bool:
+        """调整文件夹顺序（在同级文件夹中移动位置）
+        
+        Args:
+            folder_id: 要移动的文件夹ID
+            target_folder_id: 目标文件夹ID（参考位置）
+            insert_before: True表示插入到目标之前，False表示插入到目标之后
+            
+        Returns:
+            bool: 成功返回True，失败返回False
+        """
+        if not folder_id or not target_folder_id or folder_id == target_folder_id:
+            print(f"[调整顺序] 参数无效: folder_id={folder_id}, target_folder_id={target_folder_id}")
+            return False
+        
+        cursor = self.conn.cursor()
+        
+        # 获取源文件夹和目标文件夹的信息
+        src_folder = self.get_folder(folder_id)
+        target_folder = self.get_folder(target_folder_id)
+        
+        if not src_folder or not target_folder:
+            print(f"[调整顺序] 文件夹不存在: src_folder={src_folder}, target_folder={target_folder}")
+            return False
+        
+        # 检查是否在同一父文件夹下
+        src_parent = src_folder.get('parent_folder_id')
+        target_parent = target_folder.get('parent_folder_id')
+        
+        print(f"[调整顺序] 源文件夹父级: {src_parent}, 目标文件夹父级: {target_parent}")
+        
+        if src_parent != target_parent:
+            # 不在同一父文件夹下，不能调整顺序
+            print(f"[调整顺序] 失败：不在同一父文件夹下")
+            return False
+        
+        # 获取目标文件夹的order_index
+        target_order = target_folder.get('order_index', 0)
+        
+        # 计算新的order_index
+        if insert_before:
+            # 插入到目标之前
+            new_order = target_order - 0.5
+        else:
+            # 插入到目标之后
+            new_order = target_order + 0.5
+        
+        # 更新源文件夹的order_index
+        cocoa_time = self._timestamp_to_cocoa(datetime.now())
+        cursor.execute('''
+            UPDATE ZFOLDER
+            SET ZORDERINDEX = ?, ZMODIFICATIONDATE = ?
+            WHERE ZIDENTIFIER = ?
+        ''', (new_order, cocoa_time, folder_id))
+        
+        print(f"[调整顺序] 成功：将文件夹 {folder_id} 的order_index从 {src_folder.get('order_index')} 改为 {new_order}")
+        
+        self.conn.commit()
+        
+        # 重新规范化所有文件夹的order_index（避免浮点数累积）
+        self._normalize_folder_order_indices()
+        
+        return True
+    
+    def _normalize_folder_order_indices(self):
+        """重新规范化所有文件夹的order_index，使其变为连续的整数"""
+        cursor = self.conn.cursor()
+        
+        # 按当前order_index排序，重新分配连续的整数
+        cursor.execute('''
+            SELECT ZIDENTIFIER FROM ZFOLDER
+            ORDER BY ZORDERINDEX ASC, ZCREATIONDATE ASC
+        ''')
+        
+        folders = cursor.fetchall()
+        for idx, row in enumerate(folders):
+            folder_id = row[0] if isinstance(row, tuple) else row['ZIDENTIFIER']
+            cursor.execute('''
+                UPDATE ZFOLDER
+                SET ZORDERINDEX = ?
+                WHERE ZIDENTIFIER = ?
+            ''', (idx + 1, folder_id))
+        
         self.conn.commit()
 
         
