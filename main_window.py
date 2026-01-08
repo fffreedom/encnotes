@@ -3132,22 +3132,62 @@ class MainWindow(QMainWindow):
                 content=content
             )
             
-            # 更新列表中的标题（根据note_id查找对应的item）
+            # 更新列表中的标题/预览（根据note_id查找对应的item）
             for i in range(self.note_list.count()):
                 item = self.note_list.item(i)
                 if item and item.data(Qt.ItemDataRole.UserRole) == self.current_note_id:
-                    # 获取自定义widget
                     widget = self.note_list.itemWidget(item)
                     if widget:
-                        # 获取widget中的第一个QLabel（标题）
                         layout = widget.layout()
                         if layout and layout.count() > 0:
+                            # 1) 标题（第一行）
                             title_label = layout.itemAt(0).widget()
                             if isinstance(title_label, ElidedLabel):
                                 title_label.setFullText(title)
                                 title_label.setToolTip(title)
                             elif isinstance(title_label, QLabel):
                                 title_label.setText(title)
+
+                            # 2) 预览（第二行：时间 + 正文第一行）
+                            try:
+                                # 从编辑器纯文本提取“正文第一行”（排除标题行）
+                                # 规则与 _add_note_item 保持一致：跳过空行、跳过与标题相同的行。
+                                normalized_plain = (plain_text or "").replace("\r\n", "\n").replace("\r", "\n")
+                                lines = [l.strip() for l in normalized_plain.split("\n") if l.strip()]
+                                candidates = lines[1:] if len(lines) >= 2 else []
+
+                                preview_text = ""
+                                for c in candidates:
+                                    if not c:
+                                        continue
+                                    if title and c == title:
+                                        continue
+                                    preview_text = c
+                                    break
+
+                                if len(preview_text) > 35:
+                                    preview_text = preview_text[:35] + '...'
+
+                                # 更新时间字符串：尽量用 note_manager 里刚写入的 updated_at
+                                from datetime import datetime
+                                try:
+                                    note_obj = self.note_manager.get_note(self.current_note_id)
+                                    updated_at = datetime.fromisoformat(note_obj.get('updated_at')) if note_obj else None
+                                    time_str = updated_at.strftime('%Y/%m/%d') if updated_at else ''
+                                except Exception:
+                                    time_str = ''
+
+                                info_text = f"{time_str}    {preview_text}"
+
+                                if layout.count() > 1:
+                                    info_label = layout.itemAt(1).widget()
+                                    if isinstance(info_label, ElidedLabel):
+                                        info_label.setFullText(info_text)
+                                        info_label.setToolTip(info_text)
+                                    elif isinstance(info_label, QLabel):
+                                        info_label.setText(info_text)
+                            except Exception:
+                                pass
                     break
                 
     def insert_image(self):
