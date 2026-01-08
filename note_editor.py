@@ -29,6 +29,18 @@ import re
 
 class PasteImageTextEdit(QTextEdit):
     """支持粘贴图片的文本编辑器"""
+
+    DEBUG_IMAGE_EVENTS = True
+
+    def _img_debug(self, msg: str):
+        if not self.DEBUG_IMAGE_EVENTS:
+            return
+        try:
+            import datetime
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            print(f"{ts} [PasteImageTextEdit] {msg}")
+        except Exception:
+            pass
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -255,76 +267,30 @@ class PasteImageTextEdit(QTextEdit):
         return cursor_map.get(handle, Qt.CursorShape.ArrowCursor)
     
     def get_image_rect_at_cursor(self, cursor):
-        """获取光标位置图片的矩形区域"""
+        """获取光标位置图片的矩形区域（视口坐标系）"""
         char_format = cursor.charFormat()
         if not char_format.isImageFormat():
             return None
-        
-        # 获取图片格式
+
         img_format = char_format.toImageFormat()
-        width = img_format.width()
-        height = img_format.height()
-        
-        # 创建一个新光标，定位到图片的开始位置
-        # 这样可以确保获取的是图片左上角的位置，而不是点击位置
+        width = int(img_format.width() or 0)
+        height = int(img_format.height() or 0)
+
+        # 关键：QTextEdit.cursorRect(QTextCursor) 返回的是视口坐标，且会考虑富文本布局、padding、滚动等。
+        # 之前自己计算 blockBoundingRect/cursorToX 容易与 Qt 的实际渲染产生偏移（尤其在有 padding 时）。
         image_cursor = QTextCursor(cursor)
-        
-        # 如果光标在图片字符的右侧，需要向左移动一个字符
-        # 检查当前位置的字符格式
-        test_cursor = QTextCursor(cursor)
-        test_cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
-        if test_cursor.charFormat().isImageFormat():
-            # 光标在图片右侧，使用左移后的位置
-            image_cursor = test_cursor
-        
-        # 使用文档布局来获取图片的精确位置
-        doc = self.document()
-        layout = doc.documentLayout()
-        
-        # 获取图片字符在文档中的位置
-        block = image_cursor.block()
-        block_layout = block.layout()
-        
-        if block_layout:
-            # 获取字符在块中的相对位置
-            pos_in_block = image_cursor.positionInBlock()
-            
-            # 获取字符的位置（相对于块）
-            line = block_layout.lineForTextPosition(pos_in_block)
-            if line.isValid():
-                # 获取字符在行中的x坐标
-                # cursorToX 返回元组 (x, y)，我们只需要 x
-                cursor_x_result = line.cursorToX(pos_in_block)
-                if isinstance(cursor_x_result, tuple):
-                    x = cursor_x_result[0]
-                else:
-                    x = cursor_x_result
-                
-                # 获取块在文档中的位置
-                block_pos = layout.blockBoundingRect(block).topLeft()
-                
-                # 获取行在块中的位置
-                line_pos = line.position()
-                
-                # 计算图片在文档中的绝对位置
-                doc_x = block_pos.x() + x
-                doc_y = block_pos.y() + line_pos.y()
-                
-                # 转换为视口坐标
-                # 需要减去滚动偏移
-                viewport_x = doc_x - self.horizontalScrollBar().value()
-                viewport_y = doc_y - self.verticalScrollBar().value()
-                
-                from PyQt6.QtCore import QRect
-                
-                # 返回图片的矩形区域（在视口坐标系中）
-                return QRect(int(viewport_x), int(viewport_y), int(width), int(height))
-        
-        # 如果无法通过布局获取，使用cursorRect作为后备方案
-        cursor_rect = self.cursorRect(image_cursor)
-        
+
+        # 如果当前光标在图片字符右侧，向左移一格对齐到“对象替换字符”本身
+        left = QTextCursor(cursor)
+        left.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
+        if left.charFormat().isImageFormat():
+            image_cursor = left
+
+        anchor_rect = self.cursorRect(image_cursor)
+
         from PyQt6.QtCore import QRect
-        return QRect(cursor_rect.left(), cursor_rect.top(), int(width), int(height))
+        # 使用 cursorRect 的左上角作为锚点，宽高用 imageFormat 的宽高（与缩放一致）
+        return QRect(int(anchor_rect.left()), int(anchor_rect.top()), width, height)
     
     def mousePressEvent(self, event):
         """鼠标按下事件"""
@@ -332,6 +298,16 @@ class PasteImageTextEdit(QTextEdit):
             # 首先检查是否点击了链接（附件）
             cursor = self.cursorForPosition(event.pos())
             char_format = cursor.charFormat()
+
+            self._img_debug(
+                "mousePress left: "
+                f"pos=({event.pos().x()},{event.pos().y()}) "
+                f"sel={self.textCursor().hasSelection()} "
+                f"isImg={char_format.isImageFormat()} "
+                f"selected_image={'Y' if self.selected_image else 'N'} "
+                f"drag_start_pos={'Y' if self.drag_start_pos else 'N'} "
+                f"dragging={self.dragging} resizing={self.resizing}"
+            )
             
             if char_format.isAnchor():
                 # 点击了链接，获取URL并打开
@@ -355,8 +331,20 @@ class PasteImageTextEdit(QTextEdit):
                 
                 # 检查是否点击了图片中心区域（用于拖动移动）
                 if self.selected_image_rect and self.selected_image_rect.contains(event.pos()):
-                    # 开始拖动
-                    self.dragging = True
+                    # 仅当“当前光标确实就在这张已选中的图片上”时，才进入图片拖动候选状态。
+                    # 否则（例如双击选中图片/文本、或用户其实在做选择手势）交给 Qt 默认行为。
+                    hit_cursor = self.cursorForPosition(event.pos())
+                    if not hit_cursor.charFormat().isImageFormat():
+                        super().mousePressEvent(event)
+                        return
+
+                    hit_img_fmt = hit_cursor.charFormat().toImageFormat()
+                    if hit_img_fmt.name() != self.selected_image.name():
+                        super().mousePressEvent(event)
+                        return
+
+                    # 进入“可能拖动”状态：只有鼠标移动超过阈值才真正拖动，避免双击/选择误触发。
+                    self.dragging = False
                     self.drag_start_pos = event.pos()
                     self.drag_start_cursor_pos = self.selected_image_cursor.position()
                     event.accept()
@@ -364,12 +352,30 @@ class PasteImageTextEdit(QTextEdit):
             
             # 检查是否点击了图片
             if char_format.isImageFormat():
-                # 选中图片
-                self.selected_image = char_format.toImageFormat()
+                # 点击图片：进入“图片选中”模式（保留拖动/缩放能力）。
+                # 关键点：这里只做选中与状态记录，不做任何 removeSelectedText 之类的编辑动作。
+                img_format = char_format.toImageFormat()
+
+                # 记录选中图片
+                self.selected_image = img_format
                 self.selected_image_cursor = cursor
                 self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
-                self.viewport().update()
+
+                # 清理拖动候选状态（避免上一次拖动残留）
+                self.dragging = False
+                self.drag_start_pos = None
+                self.drag_start_cursor_pos = None
+                self.drag_preview_cursor = None
+
+                self._img_debug(
+                    "select image: "
+                    f"name={(img_format.name() or '')[:60]}... "
+                    f"rect={self.selected_image_rect}"
+                )
+
+                # 不把事件交给 Qt 默认（Qt 默认会把双击/选择当做文本选择，可能触发后续我们逻辑冲突）
                 event.accept()
+                self.viewport().update()
                 return
             else:
                 # 取消选中
@@ -419,17 +425,29 @@ class PasteImageTextEdit(QTextEdit):
             return
         
         # 处理拖动移动
-        if self.dragging and self.drag_start_pos:
-            # 更新预览光标位置
+        # 注意：这里只在“移动距离超过阈值”后才进入 dragging，避免与文本选择手势冲突。
+        if self.drag_start_pos and self.selected_image and self.selected_image_rect:
+            delta = event.pos() - self.drag_start_pos
+
+            # 未达到阈值：认为用户在做文本选择，不进入图片拖动逻辑
+            if not self.dragging:
+                if abs(delta.x()) <= 5 and abs(delta.y()) <= 5:
+                    super().mouseMoveEvent(event)
+                    return
+
+                # 达到阈值：进入图片拖动
+                self.dragging = True
+
+            # dragging 状态：更新预览光标位置
             target_pos = event.pos()
             self.drag_preview_cursor = self.cursorForPosition(target_pos)
-            
+
             # 更新光标形状
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
-            
+
             # 触发重绘以显示预览指示器
             self.viewport().update()
-            
+
             event.accept()
             return
         
@@ -457,6 +475,15 @@ class PasteImageTextEdit(QTextEdit):
     
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
+        self._img_debug(
+            "mouseRelease: "
+            f"pos=({event.pos().x()},{event.pos().y()}) "
+            f"sel={self.textCursor().hasSelection()} "
+            f"selected_image={'Y' if self.selected_image else 'N'} "
+            f"drag_start_pos={'Y' if self.drag_start_pos else 'N'} "
+            f"dragging={self.dragging} resizing={self.resizing}"
+        )
+
         if self.resizing:
             self.resizing = False
             self.resize_handle = None
@@ -465,38 +492,54 @@ class PasteImageTextEdit(QTextEdit):
             event.accept()
             return
         
-        if self.dragging:
+        if self.dragging and self.drag_start_pos and self.selected_image:
             # 计算鼠标移动的距离
             delta = event.pos() - self.drag_start_pos
-            
+
             # 如果移动距离足够大，执行移动
             if abs(delta.x()) > 5 or abs(delta.y()) > 5:
                 # 获取目标位置的光标
                 target_cursor = self.cursorForPosition(event.pos())
                 # 执行图片移动
                 self.move_image_to_cursor(target_cursor)
-            
-            # 重置拖动状态
-            self.dragging = False
-            self.drag_start_pos = None
-            self.drag_start_cursor_pos = None
-            self.drag_preview_cursor = None  # 清除预览光标
-            
+
             # 拖动结束后取消选中状态，允许用户重新点击选择
             self.selected_image = None
             self.selected_image_rect = None
             self.selected_image_cursor = None
             self.viewport().update()
-            
+
             event.accept()
+
+            # 清理 drag 状态
+            self.dragging = False
+            self.drag_start_pos = None
+            self.drag_start_cursor_pos = None
+            self.drag_preview_cursor = None  # 清除预览光标
             return
-        
+
+        # 未进入 dragging：一律交给 Qt 默认释放逻辑（支持双击/选择），然后清理候选状态
+        if self.drag_start_pos:
+            self.dragging = False
+            self.drag_start_pos = None
+            self.drag_start_cursor_pos = None
+            self.drag_preview_cursor = None
+
+            super().mouseReleaseEvent(event)
+            return
+
         super().mouseReleaseEvent(event)
     
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
         if not self.selected_image or not self.selected_image_cursor:
             return
+
+        self._img_debug(
+            "update_image_size: "
+            f"imgName={(self.selected_image.name() or '')[:60]}... "
+            f"new=({new_width},{new_height}) sel={self.textCursor().hasSelection()}"
+        )
         
         # 创建新的图片格式
         new_format = QTextImageFormat()
@@ -518,7 +561,12 @@ class PasteImageTextEdit(QTextEdit):
                     found = True
                     # 选中图片字符
                     cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-                    # 删除旧图片
+                    # 删除旧图片（重要：这里可能导致图片丢失，增加日志定位）
+                    self._img_debug(
+                        "update_image_size: removing selected image char "
+                        f"at pos={cursor.selectionStart()}..{cursor.selectionEnd()} "
+                        f"selTextLen={len(cursor.selectedText())}"
+                    )
                     cursor.removeSelectedText()
                     # 插入新图片
                     cursor.insertImage(new_format)
@@ -541,6 +589,13 @@ class PasteImageTextEdit(QTextEdit):
         """移动图片到新的光标位置"""
         if not self.selected_image or not self.selected_image_cursor:
             return
+
+        self._img_debug(
+            "move_image_to_cursor: "
+            f"imgName={(self.selected_image.name() or '')[:60]}... "
+            f"from={self.selected_image_cursor.position()} to={target_cursor.position()} "
+            f"sel={self.textCursor().hasSelection()}"
+        )
         
         # 获取目标位置
         target_pos = target_cursor.position()
@@ -569,6 +624,12 @@ class PasteImageTextEdit(QTextEdit):
                     
                     # 选中并删除图片
                     cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                    self._img_debug(
+                        "move_image_to_cursor: removing selected image char "
+                        f"old_pos={old_pos} target_pos_before_adjust={target_pos} "
+                        f"selRange={cursor.selectionStart()}..{cursor.selectionEnd()} "
+                        f"selTextLen={len(cursor.selectedText())}"
+                    )
                     cursor.removeSelectedText()
                     
                     # 调整目标位置（如果删除位置在目标位置之前）
@@ -868,6 +929,10 @@ class NoteEditor(QWidget):
     
     def setHtml(self, html_content):
         """设置HTML内容，并重新渲染数学公式"""
+        try:
+            print(f"[NoteEditor.setHtml] len={len(html_content or '')}")
+        except Exception:
+            pass
         # 先设置HTML
         self.text_edit.setHtml(html_content)
         
@@ -889,6 +954,14 @@ class NoteEditor(QWidget):
     
     def auto_format_first_line(self):
         """自动将第一行格式化为大标题，其他行为正文格式"""
+        try:
+            c = self.text_edit.textCursor()
+            print(
+                "[auto_format_first_line] "
+                f"block={c.block().blockNumber()} hasSel={c.hasSelection()} sel={c.selectionStart()}..{c.selectionEnd()}"
+            )
+        except Exception:
+            pass
         # 获取文档
         document = self.text_edit.document()
         if document.isEmpty():
@@ -896,6 +969,19 @@ class NoteEditor(QWidget):
         
         # 获取当前光标
         current_cursor = self.text_edit.textCursor()
+
+        # 如果当前选区里包含图片（包括公式），不要做任何自动格式化。
+        # 原因：mergeCharFormat 可能会把“对象替换字符(图片)”的格式覆盖掉，表现为双击后图片/公式丢失。
+        if current_cursor.hasSelection():
+            sel_start = current_cursor.selectionStart()
+            sel_end = current_cursor.selectionEnd()
+            scan = QTextCursor(document)
+            scan.setPosition(sel_start)
+            while scan.position() < sel_end:
+                if scan.charFormat().isImageFormat():
+                    return
+                scan.movePosition(QTextCursor.MoveOperation.Right)
+
         current_block = current_cursor.block()
         current_block_number = current_block.blockNumber()
         
@@ -907,6 +993,14 @@ class NoteEditor(QWidget):
         # 只在必要时格式化第一行
         first_cursor = QTextCursor(first_block)
         first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+
+        # 如果第一行包含图片（包含公式），不要对第一行做 mergeCharFormat（会破坏图片格式）
+        scan_first = QTextCursor(first_block)
+        scan_first.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        while not scan_first.atBlockEnd():
+            if scan_first.charFormat().isImageFormat():
+                return
+            scan_first.movePosition(QTextCursor.MoveOperation.Right)
         
         # 检查第一行是否已经是标题格式
         char_fmt = first_cursor.charFormat()
@@ -1077,53 +1171,84 @@ class NoteEditor(QWidget):
         """重新渲染HTML中的所有数学公式"""
         html_content = self.text_edit.toHtml()
         
-        # 查找所有带有MATH:前缀的图片标签
-        # 格式: <img ... alt="MATH:type:code" ... />
-        # 支持带或不带style属性的img标签
-        pattern = r'<img\s+src="data:image/png;base64,[^"]*"\s+alt="MATH:([^:]+):([^"]+)"(?:\s+style="[^"]*")?\s*/>'
-        
-        def replace_formula(match):
-            formula_type = match.group(1)
-            escaped_code = match.group(2)
-            # 反转义HTML实体
-            code = html.unescape(escaped_code)
-            
-            # 重新渲染公式
-            image_data = self.math_renderer.render(code, formula_type)
-            
-            if image_data:
-                # 将图片转换为base64
-                byte_array = QByteArray()
-                buffer = QBuffer(byte_array)
-                buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-                image_data.save(buffer, "PNG")
-                
-                image_base64 = byte_array.toBase64().data().decode()
-                
-                # 返回新的HTML（保留alt属性中的元数据）
-                alt_text = f"MATH:{formula_type}:{escaped_code}"
-                return f'<img src="data:image/png;base64,{image_base64}" alt="{alt_text}" style="vertical-align: middle;" />'
-            else:
-                # 渲染失败，保留原样
-                return match.group(0)
-        
-        # 替换所有公式
-        new_html = re.sub(pattern, replace_formula, html_content)
-        
-        # 如果有变化，更新HTML
-        if new_html != html_content:
-            # 保存当前光标位置
-            cursor = self.text_edit.textCursor()
-            position = cursor.position()
-            
-            # 阻止信号以避免触发自动保存
-            self.text_edit.blockSignals(True)
-            self.text_edit.setHtml(new_html)
+        # 新实现：不再依赖 HTML 的 alt 属性。
+        # 公式元数据存放在 QTextImageFormat.name() 里，格式：math:<type>:<escaped_code>
+        # 这里做两件事：
+        # 1) 遍历文档，把 name 为 math:* 的图片重新渲染为 PNG，并把 name 替换为 data url（可显示），
+        #    同时把元数据写入 ImageFormat 的 property('math_meta') 里，避免丢失。
+        # 2) 兼容旧数据：如果 HTML 中仍存在 alt="MATH:..." 的 img，则先转换成新格式。
+
+        doc = self.text_edit.document()
+
+        def render_to_base64_png(img: QImage) -> str:
+            byte_array = QByteArray()
+            buffer = QBuffer(byte_array)
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            img.save(buffer, "PNG")
+            return byte_array.toBase64().data().decode()
+
+        # 兼容旧格式（alt=MATH:...）：暂不在这里把 src 改成自定义 scheme（如 math:...），
+        # 因为那会让 Qt 把它当成“不可解析的图片资源”。
+        # 旧数据的迁移应在后续专门的迁移逻辑里完成（需要拿到 meta 后重新插入 imageFormat 并设置 property）。
+
+        # 遍历文档中的所有图片，处理 math: 元数据
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+
+        self.text_edit.blockSignals(True)
+        try:
+            while not cursor.atEnd():
+                fmt = cursor.charFormat()
+                if fmt.isImageFormat():
+                    img_fmt = fmt.toImageFormat()
+                    name = img_fmt.name() or ""
+
+                    # 公式元数据只认自定义 property，不要把 meta 写到 name 里（否则 name 不是可加载图片资源）
+                    try:
+                        from PyQt6.QtGui import QTextFormat
+                        MATH_META_PROP = int(QTextFormat.Property.UserProperty) + 1
+                        meta = img_fmt.property(MATH_META_PROP) or ""
+                    except Exception:
+                        meta = ""
+
+                    if isinstance(meta, str) and meta.startswith("math:"):
+                        # meta: math:<type>:<escaped_code>
+                        parts = meta.split(":", 2)
+                        if len(parts) == 3:
+                            formula_type = parts[1]
+                            escaped_code = parts[2]
+                            code = html.unescape(escaped_code)
+
+                            image_data = self.math_renderer.render(code, formula_type)
+                            if image_data and not image_data.isNull():
+                                image_base64 = render_to_base64_png(image_data)
+
+                                new_img_fmt = QTextImageFormat(img_fmt)
+                                new_img_fmt.setName(f"data:image/png;base64,{image_base64}")
+
+                                from PyQt6.QtGui import QTextFormat
+                                MATH_META_PROP = int(QTextFormat.Property.UserProperty) + 1
+                                new_img_fmt.setProperty(MATH_META_PROP, meta)
+
+                                # 替换当前图片字符
+                                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                                try:
+                                    sel_len = len(cursor.selectedText())
+                                except Exception:
+                                    sel_len = -1
+                                print(
+                                    "[rerender_formulas] replacing image char "
+                                    f"at {cursor.selectionStart()}..{cursor.selectionEnd()} selTextLen={sel_len}"
+                                )
+                                cursor.removeSelectedText()
+                                cursor.insertImage(new_img_fmt)
+
+                                # 继续向后遍历（insertImage 后光标在图片后）
+                                continue
+
+                cursor.movePosition(QTextCursor.MoveOperation.Right)
+        finally:
             self.text_edit.blockSignals(False)
-            
-            # 恢复光标位置
-            cursor.setPosition(min(position, len(self.text_edit.toPlainText())))
-            self.text_edit.setTextCursor(cursor)
     
     def insert_image_to_editor(self, image):
         """插入图片到编辑器"""
@@ -1286,49 +1411,40 @@ class NoteEditor(QWidget):
         
         if image_data and not image_data.isNull():
             try:
-                from PIL import Image as PILImage
-                import io
-                
-                # 将 QImage 转换为 PIL Image，完全避免使用 Qt 的 save 方法
+                # 直接使用 Qt 把 QImage 编码成 PNG（避免依赖 Pillow；Pillow 缺失会导致落回插入 $$code$$）
                 width = image_data.width()
                 height = image_data.height()
-                
-                # 转换为 RGBA8888 格式（PIL 兼容）
-                image_data = image_data.convertToFormat(QImage.Format.Format_RGBA8888)
-                
-                # 获取图片的原始字节数据
-                ptr = image_data.constBits()
-                ptr.setsize(image_data.sizeInBytes())
-                
-                # 使用 PIL 从原始字节创建图片
-                pil_image = PILImage.frombytes('RGBA', (width, height), bytes(ptr), 'raw', 'RGBA', 0, 1)
-                
-                # 转换为 RGB（去除 alpha 通道）
-                if pil_image.mode == 'RGBA':
-                    background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
-                    background.paste(pil_image, mask=pil_image.split()[3])
-                    pil_image = background
-                
-                # 使用 PIL 保存为 PNG 格式到内存
-                buffer = io.BytesIO()
-                pil_image.save(buffer, format='PNG', optimize=True)
-                image_bytes = buffer.getvalue()
-                
-                # 转换为 base64
-                image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-                
-                # 使用alt属性保存公式元数据（格式: MATH:type:code）
-                # alt属性会被QTextEdit保留
-                import html
+
+                byte_array = QByteArray()
+                buffer = QBuffer(byte_array)
+                buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+                ok = image_data.save(buffer, "PNG")
+                buffer.close()
+
+                if not ok:
+                    raise RuntimeError("QImage.save(PNG) failed")
+
+                image_base64 = byte_array.toBase64().data().decode("utf-8")
+
+                # 不要依赖 HTML 的 alt 属性保存公式元数据：Qt 在编辑/选择时可能会重写 HTML 导致 alt 丢失。
+                # 元数据写入 QTextImageFormat 的 property('math_meta')，图片资源仍使用 data url。
                 escaped_code = html.escape(code)
-                alt_text = f"MATH:{formula_type}:{escaped_code}"
-                
-                # 公式图片添加样式（vertical-align: middle 使公式与文本在行高中间对齐）
-                formula_html = f'<img src="data:image/png;base64,{image_base64}" alt="{alt_text}" style="vertical-align: bottom;" />'
-                cursor.insertHtml(formula_html)
-                
-                print(f"成功插入公式: {width}x{height}, 大小: {len(image_bytes)} 字节")
-                
+                meta = f"math:{formula_type}:{escaped_code}"
+
+                image_format = QTextImageFormat()
+                image_format.setName(f"data:image/png;base64,{image_base64}")
+                image_format.setWidth(width)
+                image_format.setHeight(height)
+
+                # QTextFormat.setProperty 只接受 int 类型的 propertyId（不能用字符串 key）
+                from PyQt6.QtGui import QTextFormat
+                MATH_META_PROP = int(QTextFormat.Property.UserProperty) + 1
+                image_format.setProperty(MATH_META_PROP, meta)
+
+                cursor.insertImage(image_format)
+
+                print(f"成功插入公式: {width}x{height}, base64长度: {len(image_base64)}")
+
             except Exception as e:
                 print(f"插入公式时发生错误: {e}")
                 import traceback
