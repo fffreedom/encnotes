@@ -761,6 +761,7 @@ class MainWindow(QMainWindow):
     """主窗口类"""
 
     def _is_empty_new_note(self, note: dict) -> bool:
+
         """判断某条笔记是否为“空的新笔记草稿”。
 
         约束：一个文件夹下只允许存在一个这样的草稿，用于避免用户连续创建多个空白笔记。
@@ -870,9 +871,12 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.load_folders()  # 加载文件夹
         self.load_notes()
+
+
         
         # 恢复上次打开的笔记和光标位置
         self._restore_last_note()
+
         
         # 设置自动同步定时器（每5分钟）
         self.sync_timer = QTimer()
@@ -1417,7 +1421,8 @@ class MainWindow(QMainWindow):
         
         self.note_list.addItem(item)
         self.note_list.setItemWidget(item, widget)
-        item.setSizeHint(QSize(280, 47))
+        # 注意这里Group的宽度同样会影响笔记的宽度，所以需要设置成和笔记item相同的宽度
+        item.setSizeHint(QSize(200, 47))
 
     
     def load_notes(self, select_note_id=None):
@@ -1816,8 +1821,7 @@ class MainWindow(QMainWindow):
         self.note_list.setItemWidget(item, widget)
 
         
-        # 设置item高度（与widget高度一致）
-        # 宽度与 note_list 的初始宽度保持一致（splitter.setSizes([200, 200, 900])），避免初始渲染时黄色背景宽度计算不准确
+        # 设置 item 的 sizeHint，注意这里的宽度同时受group设置的宽度影响
         if self.current_folder_id is None and not self.is_viewing_deleted:
             item.setSizeHint(QSize(200, 77))
         else:
