@@ -51,6 +51,190 @@ class ElidedLabel(QLabel):
         super().setText(elided)
 
 
+class FolderListWidget(QListWidget):
+    """支持文件夹层级拖拽的自定义列表控件"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_window = None  # 将在MainWindow中设置
+    
+    def dropEvent(self, event):
+        """处理拖拽放下事件，实现文件夹层级变更"""
+        print(f"[拖拽] dropEvent 触发")
+        
+        if not self.main_window:
+            super().dropEvent(event)
+            return
+        
+        try:
+            # 1. 获取拖拽源文件夹ID
+            mime_data = event.mimeData()
+            if not mime_data.hasFormat("application/x-qabstractitemmodeldatalist"):
+                super().dropEvent(event)
+                return
+            
+            # 从当前选中项获取源文件夹ID
+            current_item = self.currentItem()
+            if not current_item:
+                super().dropEvent(event)
+                return
+            
+            src_data = current_item.data(Qt.ItemDataRole.UserRole)
+            if not src_data:
+                super().dropEvent(event)
+                return
+            
+            # 从 tuple ('folder', 'folder_id') 中提取实际的 folder_id
+            if isinstance(src_data, tuple) and len(src_data) == 2 and src_data[0] == "folder":
+                src_folder_id = src_data[1]
+            else:
+                super().dropEvent(event)
+                return
+            
+            print(f"[拖拽] 源文件夹ID: {src_folder_id}")
+            
+            # 2. 获取目标位置
+            drop_pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
+            target_item = self.itemAt(drop_pos)
+            
+            # 3. 确定新的父文件夹ID
+            if target_item:
+                # 拖到某个文件夹上 => 作为其子文件夹
+                target_data = target_item.data(Qt.ItemDataRole.UserRole)
+                
+                # 从 tuple 中提取实际的 folder_id
+                if isinstance(target_data, tuple) and len(target_data) == 2 and target_data[0] == "folder":
+                    target_folder_id = target_data[1]
+                else:
+                    target_folder_id = None
+                
+                if target_folder_id == src_folder_id:
+                    print(f"[拖拽] 不能拖到自己上")
+                    event.ignore()
+                    return
+                
+                new_parent = target_folder_id
+                print(f"[拖拽] 目标文件夹ID: {target_folder_id}, 设置为子文件夹")
+            else:
+                # 拖到空白处 => 设置为顶级文件夹
+                new_parent = None
+                print(f"[拖拽] 拖到空白处，设置为顶级文件夹")
+            
+            # 4. 更新数据库中的父子关系
+            self.main_window.note_manager.update_folder_parent(src_folder_id, new_parent)
+            print(f"[拖拽] 已更新数据库: folder_id={src_folder_id}, new_parent={new_parent}")
+            
+            # 4.5. 如果拖到某个文件夹下，自动展开目标父文件夹及其所有祖先文件夹
+            if new_parent:
+                # 展开目标文件夹
+                self.main_window._folder_expanded[new_parent] = True
+                print(f"[拖拽] 自动展开目标父文件夹: {new_parent}")
+                
+                # 展开目标文件夹的所有祖先文件夹
+                current_folder_id = new_parent
+                while current_folder_id:
+                    # 从数据库获取当前文件夹的父文件夹
+                    folder_info = self.main_window.note_manager.get_folder(current_folder_id)
+                    if folder_info and folder_info.get('parent_folder_id'):
+                        parent_id = folder_info['parent_folder_id']
+                        self.main_window._folder_expanded[parent_id] = True
+                        print(f"[拖拽] 自动展开祖先文件夹: {parent_id}")
+                        current_folder_id = parent_id
+                    else:
+                        break
+            
+            # 5. 使用QTimer延迟刷新UI
+            # 这样可以给Qt和数据库足够的时间来处理更新
+            def delayed_refresh():
+                # 5.1. 强制刷新数据库连接，确保读取到最新数据
+                # 这可以避免缓存导致的数据不一致问题
+                try:
+                    self.main_window.note_manager.conn.commit()
+                except Exception:
+                    pass
+                
+                # 5.2. 重新加载文件夹列表（从数据库读取最新数据）
+                self.main_window.load_folders()
+                
+                # 5.2. 强制刷新UI
+                self.viewport().update()
+                self.repaint()
+                # 强制处理所有待处理的事件
+                from PyQt6.QtWidgets import QApplication
+                QApplication.processEvents()
+                print(f"[拖拽] 已强制刷新UI")
+                
+                # 6. 重新选中被拖动的文件夹
+                found = False
+                for i in range(self.count()):
+                    item = self.item(i)
+                    if item:
+                        item_data = item.data(Qt.ItemDataRole.UserRole)
+                        # 从 tuple 中提取 folder_id 进行比较
+                        if isinstance(item_data, tuple) and len(item_data) == 2 and item_data[0] == "folder":
+                            if item_data[1] == src_folder_id:
+                                self.setCurrentItem(item)
+                                # 确保item可见
+                                self.scrollToItem(item, QListWidget.ScrollHint.EnsureVisible)
+                                found = True
+                                print(f"[拖拽] 重新选中文件夹: {src_folder_id}, row={i}")
+                                
+                                # 检查widget是否存在
+                                widget = self.itemWidget(item)
+                                if widget:
+                                    print(f"[拖拽] 检查widget: item={item}, widget={widget}")
+                                    print(f"[拖拽] item属性: isHidden={item.isHidden()}, isSelected={item.isSelected()}")
+                                    print(f"[拖拽] widget属性: isHidden={widget.isHidden()}, isVisible={widget.isVisible()}")
+                                    print(f"[拖拽] widget几何: size={widget.size()}, height={widget.height()}, width={widget.width()}")
+                                    print(f"[拖拽] widget位置: pos={widget.pos()}, geometry={widget.geometry()}")
+                                    print(f"[拖拽] item几何: sizeHint={item.sizeHint()}")
+                                    
+                                    # 检查widget的子控件
+                                    children = widget.findChildren(QWidget)
+                                    print(f"[拖拽] widget子控件数量: {len(children)}")
+                                    for idx, child in enumerate(children[:5]):  # 只打印前5个
+                                        print(f"[拖拽]   子控件{idx}: {child.__class__.__name__}, visible={child.isVisible()}, size={child.size()}")
+                                    
+                                    # 检查layout
+                                    layout = widget.layout()
+                                    if layout:
+                                        print(f"[拖拽] widget有layout: {layout.__class__.__name__}, count={layout.count()}")
+                                    
+                                    # 检查QListWidget的viewport
+                                    viewport = self.viewport()
+                                    print(f"[拖拽] viewport大小: {viewport.size()}, height={viewport.height()}")
+                                    print(f"[拖拽] QListWidget大小: {self.size()}, height={self.height()}")
+                                    print(f"[拖拽] 垂直滚动条: value={self.verticalScrollBar().value()}, max={self.verticalScrollBar().maximum()}")
+                                    
+                                    # 检查item在viewport中的可见性
+                                    item_rect = self.visualItemRect(item)
+                                    print(f"[拖拽] item的visualRect: {item_rect}")
+                                    
+                                    # 如果item被隐藏了，强制显示
+                                    if item.isHidden():
+                                        print(f"[拖拽] 警告: item被隐藏，强制显示")
+                                        item.setHidden(False)
+                                else:
+                                    print(f"[拖拽] 警告: widget为None")
+                                
+                                break
+                
+                if not found:
+                    print(f"[拖拽] 警告: 未找到被拖动的文件夹 {src_folder_id}")
+            
+            # 使用QTimer延迟200ms执行刷新（给数据库和Qt更多时间）
+            QTimer.singleShot(200, delayed_refresh)
+            
+            event.accept()
+            print(f"[拖拽] 完成")
+            
+        except Exception as e:
+            print(f"[拖拽] 异常: {e}")
+            import traceback
+            traceback.print_exc()
+            super().dropEvent(event)
+
+
 class FolderTwisty(QLabel):
     """文件夹展开/折叠小箭头（可点击）"""
 
@@ -142,103 +326,6 @@ class MainWindow(QMainWindow):
                     return True
             except Exception:
                 pass
-
-        # 文件夹拖拽：把一个文件夹拖到另一个文件夹上 => 作为其子文件夹
-        try:
-            from PyQt6.QtCore import QEvent
-            if obj is getattr(self, "folder_list", None) and event.type() == QEvent.Type.Drop:
-                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-
-                target_item = self.folder_list.itemAt(pos)
-                target_payload = target_item.data(Qt.ItemDataRole.UserRole) if target_item else None
-                target_folder_id = None
-                if isinstance(target_payload, tuple) and len(target_payload) == 2 and target_payload[0] == "folder":
-                    target_folder_id = target_payload[1]
-
-                # 可靠获取被拖拽的源文件夹：不要用 currentItem（Drop 时 current 可能已经切到目标）
-                # 说明：application/x-qabstractitemmodeldatalist 的编码格式较特殊，之前用 readInt32 读“map size”会读错，
-                # 导致解析失败，从而 src_folder_id 经常为 None，update_folder_parent 不会执行。
-                src_folder_id = None
-                try:
-                    from PyQt6.QtCore import QDataStream, QIODevice
-                    md = event.mimeData()
-                    fmt = "application/x-qabstractitemmodeldatalist"
-                    if md and md.hasFormat(fmt):
-                        data = md.data(fmt)
-                        stream = QDataStream(data)
-                        stream.setVersion(QDataStream.Version.Qt_5_0)
-
-                        # 每个条目：row(int) + column(int) + QMap<int,QVariant>
-                        # 在 PyQt 里可以用 readInt32 读 row/col，然后用 readQVariantMap 读整个 map。
-                        while not stream.atEnd():
-                            _row = stream.readInt32()
-                            _col = stream.readInt32()
-                            role_map = stream.readQVariantMap()
-                            payload = role_map.get(int(Qt.ItemDataRole.UserRole))
-                            if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder":
-                                src_folder_id = payload[1]
-                                break
-                except Exception:
-                    src_folder_id = None
-
-                # 兜底：如果 mimeData 解析失败，再退回 currentItem
-                if not src_folder_id:
-                    src_item = self.folder_list.currentItem()
-                    src_payload = src_item.data(Qt.ItemDataRole.UserRole) if src_item else None
-                    if isinstance(src_payload, tuple) and len(src_payload) == 2 and src_payload[0] == "folder":
-                        src_folder_id = src_payload[1]
-
-                # 只有“拖动自定义文件夹”才处理；目标可为文件夹或空白(顶级)
-                if src_folder_id:
-                    # 拖到某个文件夹上：作为其子文件夹；拖到空白：移动到顶级
-                    new_parent = target_folder_id if target_folder_id else None
-
-                    # 避免把自己拖到自己上（无效）
-                    if new_parent == src_folder_id:
-                        event.accept()
-                        return True
-
-                    self.note_manager.update_folder_parent(src_folder_id, new_parent)
-
-                    # 刷新文件夹树，并尽量保持选中
-                    self.load_folders()
-
-                    # 清理拖拽期间残留的“黄色选中背景”
-                    try:
-                        cur_item = self.folder_list.currentItem()
-                        cur_w = self.folder_list.itemWidget(cur_item) if cur_item else None
-                        if cur_w and cur_w.objectName() == "folder_row_widget":
-                            cur_w.setProperty("selected", False)
-                            cur_w.style().unpolish(cur_w)
-                            cur_w.style().polish(cur_w)
-                            cur_w.update()
-                    except Exception:
-                        pass
-
-                    try:
-                        self.folder_list.setCurrentRow(-1)
-                    except Exception:
-                        try:
-                            self.folder_list.setCurrentItem(None)
-                        except Exception:
-                            pass
-
-                    for i in range(self.folder_list.count()):
-                        it = self.folder_list.item(i)
-                        if not it:
-                            continue
-                        payload = it.data(Qt.ItemDataRole.UserRole)
-                        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder" and payload[1] == src_folder_id:
-                            self.folder_list.setCurrentRow(i)
-                            break
-
-                try:
-                    event.acceptProposedAction()
-                except Exception:
-                    event.accept()
-                return True
-        except Exception:
-            pass
 
         # 空文件夹：点击编辑器自动新建笔记
         try:
@@ -346,7 +433,8 @@ class MainWindow(QMainWindow):
         
         # 左侧：文件夹列表
 
-        self.folder_list = QListWidget()
+        self.folder_list = FolderListWidget()
+        self.folder_list.main_window = self  # 设置主窗口引用
         # 左侧文件夹栏：设置一个更合理的默认/最小宽度；真正的初始宽度由 QSplitter 的 sizes 决定
         self.folder_list.setMaximumWidth(300)
         self.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1252,6 +1340,11 @@ class MainWindow(QMainWindow):
                 self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
         else:
             self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
+        
+        # 强制刷新UI
+        self.folder_list.viewport().update()
+        self.folder_list.update()
+        self.folder_list.repaint()
     
     def _add_folders_recursive(self, all_folders, parent_id, level, flat_list):
         """递归添加文件夹，支持多级层级显示（带展开/折叠箭头）
@@ -1284,6 +1377,9 @@ class MainWindow(QMainWindow):
             folder_id = folder['id']
             has_children = children_count.get(folder_id, 0) > 0
             expanded = self._folder_expanded.get(folder_id, True)
+            
+            # 调试信息（打印所有文件夹）
+            print(f"[递归渲染] folder_id={folder_id}, name={folder['name']}, parent_id={parent_id}, level={level}, has_children={has_children}, expanded={expanded}, children_count={children_count.get(folder_id, 0)}")
 
             # 创建item + 自定义widget
             item = QListWidgetItem()
@@ -1363,16 +1459,16 @@ class MainWindow(QMainWindow):
 
             self.folder_list.addItem(item)
             self.folder_list.setItemWidget(item, row_widget)
+            
+            # 调试：确认item和widget已添加
+            print(f"[递归渲染] 已添加item到列表: folder_id={folder_id}, row={self.folder_list.row(item)}")
 
             # 添加到扁平列表（保持与原有逻辑兼容：用于 folder_index -> folder_id 映射）
             flat_list.append(folder)
 
-            # 未展开就不递归渲染子文件夹
-            if has_children and not expanded:
-                continue
-
-            # 递归添加子文件夹
-            self._add_folders_recursive(all_folders, folder_id, level + 1, flat_list)
+            # 如果有子文件夹且已展开，则递归添加子文件夹
+            if has_children and expanded:
+                self._add_folders_recursive(all_folders, folder_id, level + 1, flat_list)
 
     def _toggle_folder_expanded(self, folder_id: str):
         """切换文件夹展开/折叠状态并刷新左侧列表"""
