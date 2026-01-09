@@ -55,6 +55,10 @@ class PasteImageTextEdit(QTextEdit):
         # 文本选择相关
         self.text_selecting = False
         
+        # 表格选中相关
+        self.selected_table = None  # 当前选中的表格
+        self.selected_table_cursor = None  # 表格的光标位置
+        
         # 边界检测阈值
         self.handle_size = 8
         
@@ -149,6 +153,43 @@ class PasteImageTextEdit(QTextEdit):
     def paintEvent(self, event):
         """绘制事件 - 绘制选中图片的边界框"""
         super().paintEvent(event)
+        
+        # 绘制选中表格的边界框
+        if self.selected_table and self.selected_table_cursor:
+            from PyQt6.QtGui import QPainter, QPen
+            from PyQt6.QtCore import QRectF
+            
+            painter = QPainter(self.viewport())
+            
+            # 获取表格的边界框
+            table_format = self.selected_table.format()
+            
+            # 获取表格第一个单元格的光标
+            first_cell = self.selected_table.cellAt(0, 0)
+            first_cursor = first_cell.firstCursorPosition()
+            first_rect = self.cursorRect(first_cursor)
+            
+            # 获取表格最后一个单元格的光标
+            last_row = self.selected_table.rows() - 1
+            last_col = self.selected_table.columns() - 1
+            last_cell = self.selected_table.cellAt(last_row, last_col)
+            last_cursor = last_cell.lastCursorPosition()
+            last_rect = self.cursorRect(last_cursor)
+            
+            # 计算表格的边界框（近似）
+            table_rect = QRectF(
+                first_rect.left() - 10,
+                first_rect.top() - 10,
+                last_rect.right() - first_rect.left() + 20,
+                last_rect.bottom() - first_rect.top() + 20
+            )
+            
+            # 绘制蓝色边界框
+            pen = QPen(QColor("#007AFF"), 3)
+            painter.setPen(pen)
+            painter.drawRect(table_rect)
+            
+            painter.end()
         
         if self.selected_image and self.selected_image_cursor:
             # 实时计算图片位置（确保滚动时位置正确）
@@ -377,6 +418,29 @@ class PasteImageTextEdit(QTextEdit):
                     event.accept()
                     return
             
+            # 检查是否点击了表格
+            table = cursor.currentTable()
+            if table:
+                # 点击了表格，选中整个表格
+                self.selected_table = table
+                self.selected_table_cursor = cursor
+                
+                # 取消图片选中
+                if self.selected_image:
+                    self.selected_image = None
+                    self.selected_image_rect = None
+                    self.selected_image_cursor = None
+                
+                self.viewport().update()
+                event.accept()
+                return
+            else:
+                # 取消表格选中
+                if self.selected_table:
+                    self.selected_table = None
+                    self.selected_table_cursor = None
+                    self.viewport().update()
+            
             # 检查是否点击了控制点
             if self.selected_image:
                 handle = self.get_handle_at_pos(event.pos())
@@ -525,7 +589,12 @@ class PasteImageTextEdit(QTextEdit):
             if image_format:
                 self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
             else:
-                self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+                # 检查是否悬停在表格上
+                cursor = self.cursorForPosition(event.pos())
+                if cursor.currentTable():
+                    self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                else:
+                    self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         
         super().mouseMoveEvent(event)
     
@@ -627,6 +696,35 @@ class PasteImageTextEdit(QTextEdit):
     
     def keyPressEvent(self, event):
         """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
+        # 检查是否按下了删除键（Delete 或 Backspace）
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            # 如果有选中的表格，删除整个表格
+            if self.selected_table and self.selected_table_cursor:
+                # 创建光标并选中整个表格
+                cursor = QTextCursor(self.selected_table_cursor)
+                
+                # 移动到表格的开始位置
+                cursor.movePosition(QTextCursor.MoveOperation.Start)
+                
+                # 选中整个表格（通过选中表格的所有内容）
+                # 获取表格在文档中的位置
+                table_start = self.selected_table.firstPosition()
+                table_end = self.selected_table.lastPosition()
+                
+                cursor.setPosition(table_start)
+                cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
+                
+                # 删除选中的内容（包括表格）
+                cursor.removeSelectedText()
+                
+                # 清除选中状态
+                self.selected_table = None
+                self.selected_table_cursor = None
+                self.viewport().update()
+                
+                event.accept()
+                return
+        
         # 直接使用默认行为，不做任何特殊处理
         # 这样选区中的图片和文本都会被正常删除
         super().keyPressEvent(event)
@@ -1553,8 +1651,6 @@ class NoteEditor(QWidget):
             # 插入图片
             cursor.insertImage(image_format)
             
-            print(f"成功插入图片: {width}x{height}, 大小: {len(image_bytes)} 字节")
-            
         except Exception as e:
             print(f"插入图片时发生错误: {e}")
             import traceback
@@ -1691,16 +1787,7 @@ class NoteEditor(QWidget):
                 # 设置垂直对齐方式为AlignBaseline，使公式底部与文本基线对齐
                 image_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
                 
-                print(f"\n========== 插入公式到编辑器 ==========")
-                print(f"图片尺寸: {width}x{height} 像素")
-                print(f"垂直对齐: AlignBaseline")
-                print(f"公式类型: {formula_type}")
-                print(f"公式代码: {code}")
-                print(f"========== 插入完成 ==========\n")
-                
                 cursor.insertImage(image_format)
-                
-                print(f"成功插入公式: {width}x{height}, 大小: {len(image_bytes)} 字节")
                 
             except Exception as e:
                 print(f"插入公式时发生错误: {e}")
@@ -1997,6 +2084,7 @@ class LatexInputDialog(QDialog):
         examples = [
             ("分数", r"\frac{a}{b}"),
             ("根号", r"\sqrt{x}"),
+            ("次方", r"x^{2}"),
             ("求和", r"\sum_{i=1}^{n} x_i"),
             ("积分", r"\int_{a}^{b} f(x)dx"),
             ("矩阵", r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}"),
@@ -2079,8 +2167,10 @@ class MathMLInputDialog(QDialog):
         examples = [
             ("分数", "<math><mfrac><mi>a</mi><mi>b</mi></mfrac></math>"),
             ("根号", "<math><msqrt><mi>x</mi></msqrt></math>"),
-            ("上标", "<math><msup><mi>x</mi><mn>2</mn></msup></math>"),
-            ("下标", "<math><msub><mi>x</mi><mn>1</mn></msub></math>"),
+            ("次方", "<math><msup><mi>x</mi><mn>2</mn></msup></math>"),
+            ("求和", "<math><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover><msub><mi>x</mi><mi>i</mi></msub></math>"),
+            ("积分", "<math><msubsup><mo>∫</mo><mi>a</mi><mi>b</mi></msubsup><mi>f</mi><mo>(</mo><mi>x</mi><mo>)</mo><mi>d</mi><mi>x</mi></math>"),
+            ("矩阵", "<math><mfenced open='(' close=')'><mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable></mfenced></math>"),
         ]
         
         for name, code in examples:
