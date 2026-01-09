@@ -15,8 +15,8 @@ class MathRenderer:
     """数学公式渲染器"""
     
     def __init__(self):
-        self.dpi = 200  # 渲染分辨率（200 DPI适配高分辨率屏幕，提供更清晰的显示）
-        self.fontsize = 4  # 公式字体大小（更小更紧凑，适合行内显示）
+        self.dpi = 144  # 渲染分辨率（144 DPI适配高分辨率屏幕，提供清晰显示）
+        self.fontsize = 10  # 公式字体大小（适合行内显示，与正文协调）
         
     def render(self, code, formula_type):
         """
@@ -64,16 +64,21 @@ class MathRenderer:
             
             # 调整图形大小
             total_height = height + depth
-            fig.set_size_inches(width / self.dpi, total_height / self.dpi)
+            fig_width_inch = width / self.dpi
+            fig_height_inch = total_height / self.dpi
+            fig.set_size_inches(fig_width_inch, fig_height_inch)
             
             # 添加文本
-            # 使用 baseline 对齐，并根据 depth 调整垂直位置
-            # 这样可以确保公式的基线与文本基线对齐
-            y_position = depth / total_height if total_height > 0 else 0
+            # **关键修复**：使用 baseline 对齐，并精确计算垂直位置
+            # y_position 应该是基线在图片中的相对位置（从底部算起）
+            # depth 是基线以下的高度，total_height 是总高度
+            # 所以基线位置 = depth / total_height（从底部算起的比例）
+            y_position = depth / total_height if total_height > 0 else 0.5
+            
             fig.text(
                 0.5, y_position, f'${latex_code}$',
                 fontsize=self.fontsize,
-                verticalalignment='baseline',
+                verticalalignment='baseline',  # 使用baseline对齐
                 horizontalalignment='center'
             )
             
@@ -83,8 +88,8 @@ class MathRenderer:
                 buf,
                 format='png',
                 dpi=self.dpi,
-                bbox_inches='tight',
-                pad_inches=0.05,
+                bbox_inches=None,  # 不自动裁剪，保持精确尺寸
+                pad_inches=0,      # 无额外边距
                 facecolor='white',
                 edgecolor='none'
             )

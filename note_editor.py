@@ -1691,6 +1691,13 @@ class NoteEditor(QWidget):
                 # 设置垂直对齐方式为AlignBaseline，使公式底部与文本基线对齐
                 image_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
                 
+                print(f"\n========== 插入公式到编辑器 ==========")
+                print(f"图片尺寸: {width}x{height} 像素")
+                print(f"垂直对齐: AlignBaseline")
+                print(f"公式类型: {formula_type}")
+                print(f"公式代码: {code}")
+                print(f"========== 插入完成 ==========\n")
+                
                 cursor.insertImage(image_format)
                 
                 print(f"成功插入公式: {width}x{height}, 大小: {len(image_bytes)} 字节")
