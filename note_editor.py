@@ -613,19 +613,63 @@ class PasteImageTextEdit(QTextEdit):
         new_format.setWidth(new_width)
         new_format.setHeight(new_height)
         
-        # 直接使用 selected_image_cursor 定位图片
-        cursor = QTextCursor(self.selected_image_cursor)
+        # 保存原位置
+        old_pos = self.selected_image_cursor.position()
+        
+        # 创建光标对象
+        cursor = QTextCursor(self.document())
         
         # 使用编辑块确保删除和插入是原子操作
         cursor.beginEditBlock()
         
-        # 选中图片字符（向右移动一个字符并保持选中）
+        # **关键修复**：查找真正的图片字符位置（U+FFFC）
+        # 从 old_pos 开始，向右查找最多2个字符，找到真正的图片字符
+        real_image_pos = None
+        has_paragraph_separator = False
+        
+        for offset in range(2):  # 检查当前位置和下一个位置
+            check_pos = old_pos + offset
+            cursor.setPosition(check_pos)
+            
+            # 向右移动一个字符并选中
+            if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
+                selected_text = cursor.selectedText()
+                char_format = cursor.charFormat()
+                
+                # 检查是否是真正的图片字符
+                if char_format.isImageFormat() and selected_text == '\ufffc':
+                    real_image_pos = check_pos
+                    
+                    # 检查图片字符前面是否有段落分隔符
+                    if real_image_pos > 0:
+                        cursor.setPosition(real_image_pos - 1)
+                        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                        prev_text = cursor.selectedText()
+                        prev_format = cursor.charFormat()
+                        
+                        if prev_format.isImageFormat() and prev_text == '\u2029':
+                            has_paragraph_separator = True
+                    
+                    break
+            
+            # 清除选区，继续查找
+            cursor.clearSelection()
+        
+        if real_image_pos is None:
+            cursor.endEditBlock()
+            return
+        
+        # **优化**：只删除图片字符本身，保留段落分隔符（如果有）
+        # 移动到图片字符位置
+        cursor.setPosition(real_image_pos)
+        
+        # 向右选中图片字符（只删除1个字符）
         cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
         
-        # 删除旧图片
+        # 删除选中的图片字符
         cursor.removeSelectedText()
         
-        # 插入新图片
+        # 在删除位置插入新图片（段落分隔符会自动保留）
         cursor.insertImage(new_format)
         
         # 结束编辑块
