@@ -413,7 +413,10 @@ class PasteImageTextEdit(QTextEdit):
                 self.setTextCursor(cursor)
                 
                 # 调试日志
+                total_images, image_positions = self.count_all_images()
                 print(f"[图片选中] 图片位置={image_cursor.position()}, 光标选区={self.textCursor().selectionStart()}-{self.textCursor().selectionEnd()}, 是否有选区={self.textCursor().hasSelection()}")
+                print(f"[图片选中] 文档中图片总数={total_images}")
+                print(f"[图片选中] 所有图片位置={image_positions}")
                 
                 self.viewport().update()
                 event.accept()
@@ -617,42 +620,126 @@ class PasteImageTextEdit(QTextEdit):
     def move_image_to_cursor(self, target_cursor):
         """移动图片到新的光标位置"""
         if not self.selected_image or not self.selected_image_cursor:
+            print("[图片移动] 错误：没有选中的图片")
             return
         
         # 获取目标位置
         target_pos = target_cursor.position()
         current_pos = self.selected_image_cursor.position()
         
+        print(f"[图片移动] 开始移动：当前位置={current_pos}, 目标位置={target_pos}")
+        
         # 如果位置相同，不需要移动
         if target_pos == current_pos or target_pos == current_pos + 1:
+            print(f"[图片移动] 位置相同，无需移动")
             return
         
-        # 保存图片格式
+        # 统计移动前的图片数量
+        image_count_before, positions_before = self.count_all_images()
+        print(f"[图片移动] 移动前文档中的图片总数={image_count_before}, 位置={positions_before}")
+        
+        # 保存图片格式和原位置
         image_format = QTextImageFormat(self.selected_image)
         old_pos = self.selected_image_cursor.position()
         
-        # 创建一个新的光标对象，用于执行所有操作
+        # **关键修复**：使用同一个光标对象执行所有操作，确保在编辑块中
         cursor = QTextCursor(self.document())
         
         # 开始编辑块
         cursor.beginEditBlock()
+        print(f"[图片移动] 开始编辑块")
         
-        # 1. 删除图片
-        cursor.setPosition(old_pos)
-        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, 1)
-        cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 1)
+        # 1. 删除原位置的图片
+        # **关键修复**：查找真正的图片字符位置（U+FFFC）
+        # 从 old_pos 开始，向右查找最多2个字符，找到真正的图片字符
+        real_image_pos = None
+        has_paragraph_separator = False
+        
+        for offset in range(2):  # 检查当前位置和下一个位置
+            check_pos = old_pos + offset
+            cursor.setPosition(check_pos)
+            
+            # 向右移动一个字符并选中
+            if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
+                selected_text = cursor.selectedText()
+                char_format = cursor.charFormat()
+                
+                # 检查是否是真正的图片字符
+                if char_format.isImageFormat() and selected_text == '\ufffc':
+                    real_image_pos = check_pos
+                    print(f"[图片移动] 找到真正的图片字符，位置={real_image_pos}, 字符={repr(selected_text)}")
+                    
+                    # 检查图片字符前面是否有段落分隔符
+                    if real_image_pos > 0:
+                        cursor.setPosition(real_image_pos - 1)
+                        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                        prev_text = cursor.selectedText()
+                        prev_format = cursor.charFormat()
+                        
+                        if prev_format.isImageFormat() and prev_text == '\u2029':
+                            has_paragraph_separator = True
+                            print(f"[图片移动] 检测到图片前面有段落分隔符，位置={real_image_pos - 1}")
+                    
+                    break
+                else:
+                    print(f"[图片移动] 位置{check_pos}不是真正的图片字符，字符={repr(selected_text)}")
+            
+            # 清除选区，继续查找
+            cursor.clearSelection()
+        
+        if real_image_pos is None:
+            print(f"[图片移动] 错误：找不到真正的图片字符")
+            cursor.endEditBlock()
+            return
+        
+        # **关键修复**：如果有段落分隔符，从段落分隔符位置开始删除
+        delete_start_pos = real_image_pos - 1 if has_paragraph_separator else real_image_pos
+        delete_count = 2 if has_paragraph_separator else 1
+        
+        print(f"[图片移动] 开始删除：起始位置={delete_start_pos}, 删除字符数={delete_count}")
+        
+        # 移动到删除起始位置
+        cursor.setPosition(delete_start_pos)
+        
+        # 向右选中需要删除的字符（段落分隔符 + 图片字符，或只有图片字符）
+        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, delete_count)
+        
+        selected_text = cursor.selectedText()
+        print(f"[图片移动] 选中要删除的内容：{repr(selected_text)}, 长度={len(selected_text)}")
+        
+        # 删除选中的内容
         cursor.removeSelectedText()
+        print(f"[图片移动] 执行删除操作")
         
         # 调整目标位置（如果删除位置在目标位置之前）
+        adjusted_target_pos = target_pos
         if old_pos < target_pos:
-            target_pos -= 1
+            adjusted_target_pos = target_pos - 1
+            print(f"[图片移动] 调整目标位置：{target_pos} -> {adjusted_target_pos}")
         
         # 2. 在新位置插入图片
-        cursor.setPosition(target_pos)
+        cursor.setPosition(adjusted_target_pos)
+        print(f"[图片移动] 光标移动到新位置={adjusted_target_pos}")
+        
         cursor.insertImage(image_format)
+        print(f"[图片移动] 在新位置插入图片")
+        
+        # 插入后统计（在编辑块内）
+        image_count_after_insert, positions_after_insert = self.count_all_images()
+        print(f"[图片移动] 插入后图片数量={image_count_after_insert}, 位置={positions_after_insert}")
         
         # 结束编辑块
         cursor.endEditBlock()
+        print(f"[图片移动] 结束编辑块")
+        
+        # 最终统计
+        image_count_final, positions_final = self.count_all_images()
+        print(f"[图片移动] 最终图片数量={image_count_final}, 位置={positions_final}")
+        
+        if image_count_final != image_count_before:
+            print(f"[图片移动] 错误：图片数量变化了！之前={image_count_before}, 现在={image_count_final}")
+        else:
+            print(f"[图片移动] 成功：图片数量保持不变={image_count_final}")
         
         # 更新选中状态
         cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
@@ -664,18 +751,74 @@ class PasteImageTextEdit(QTextEdit):
         self.viewport().update()
     
     def count_all_images(self):
-        """统计文档中的所有图片数量"""
+        """统计文档中的所有图片数量和位置
+        
+        Returns:
+            tuple: (图片数量, 图片位置列表)
+        """
         count = 0
+        positions = []
         cursor = QTextCursor(self.document())
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         
-        while not cursor.atEnd():
-            char_format = cursor.charFormat()
-            if char_format.isImageFormat():
-                count += 1
-            cursor.movePosition(QTextCursor.MoveOperation.Right)
+        doc_length = self.document().characterCount()
+        print(f"[统计图片] 文档总字符数={doc_length}")
         
-        return count
+        iteration = 0
+        while not cursor.atEnd():
+            iteration += 1
+            # 保存当前位置
+            current_pos = cursor.position()
+            
+            # 向右移动一个字符并选中
+            move_success = cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor)
+            
+            if not move_success:
+                print(f"[统计图片] 迭代{iteration}: 位置{current_pos}, 无法向右移动，退出循环")
+                break
+            
+            # 检查选中的字符格式
+            char_format = cursor.charFormat()
+            is_image = char_format.isImageFormat()
+            
+            # 获取选中的文本（图片字符）
+            selected_text = cursor.selectedText()
+            selected_text_repr = repr(selected_text)
+            
+            # **关键修复**：只统计真正的图片字符（U+FFFC），忽略段落分隔符（U+2029）
+            # Qt在空行行首插入图片时，会插入两个字符：段落分隔符和图片字符
+            # 我们只需要统计图片字符
+            is_real_image = is_image and selected_text == '\ufffc'
+            
+            if is_real_image:
+                count += 1
+                positions.append(current_pos)
+                # 获取图片详细信息
+                img_format = char_format.toImageFormat()
+                img_name = img_format.name()
+                img_width = img_format.width()
+                img_height = img_format.height()
+                print(f"[统计图片] 迭代{iteration}: 位置{current_pos}, 找到图片#{count}")
+                print(f"[统计图片]   图片尺寸={img_width}x{img_height}, 名称前缀={img_name[:50]}...")
+                print(f"[统计图片]   选中文本={selected_text_repr}, 长度={len(selected_text)}")
+            elif is_image and selected_text != '\ufffc':
+                # 这是段落分隔符或其他非图片字符，跳过
+                print(f"[统计图片] 迭代{iteration}: 位置{current_pos}, 跳过非图片字符（格式为图片但字符不是U+FFFC）: {selected_text_repr}")
+            
+            # 清除选区后，光标会移动到选区的末尾（即 current_pos + 1）
+            cursor.clearSelection()
+            new_pos = cursor.position()
+            
+            if iteration <= 5 or is_image:  # 只打印前5次迭代或找到图片时的信息
+                print(f"[统计图片] 迭代{iteration}: 检查位置{current_pos}, 是图片={is_image}, 清除选区后位置={new_pos}")
+            
+            # 防止无限循环
+            if iteration > doc_length + 100:
+                print(f"[统计图片] 警告：迭代次数超过文档长度，强制退出")
+                break
+        
+        print(f"[统计图片] 完成：总迭代{iteration}次，找到{count}张图片")
+        return count, positions
     
 
     def canInsertFromMimeData(self, source):
