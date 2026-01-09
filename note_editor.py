@@ -282,9 +282,11 @@ class PasteImageTextEdit(QTextEdit):
             # 注意：需要先向右移动一个字符，再检查格式
             cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor)
             char_format = cursor.charFormat()
+            selected_text = cursor.selectedText()
             
-            if char_format.isImageFormat():
-                # 找到一个图片
+            # **关键修复**：只检测真正的图片字符（U+FFFC），忽略段落分隔符（U+2029）
+            if char_format.isImageFormat() and selected_text == '\ufffc':
+                # 找到一个真正的图片字符
                 # 创建一个新光标，指向图片字符的起始位置
                 image_cursor = QTextCursor(self.document())
                 image_cursor.setPosition(current_pos)
@@ -607,12 +609,6 @@ class PasteImageTextEdit(QTextEdit):
         if not self.selected_image or not self.selected_image_cursor:
             return
         
-        # 创建新的图片格式
-        new_format = QTextImageFormat()
-        new_format.setName(self.selected_image.name())
-        new_format.setWidth(new_width)
-        new_format.setHeight(new_height)
-        
         # 保存原位置
         old_pos = self.selected_image_cursor.position()
         
@@ -659,6 +655,22 @@ class PasteImageTextEdit(QTextEdit):
             cursor.endEditBlock()
             return
         
+        # **关键修复**：检查图片是否是公式（通过检查图片名称中的元数据）
+        # 新格式：data:image/png;base64,...|||MATH:type:code
+        image_name = self.selected_image.name()
+        
+        is_formula = False
+        formula_metadata = None
+        image_base_name = image_name
+        
+        # 检查是否包含公式元数据（使用 ||| 分隔符）
+        if '|||MATH:' in image_name:
+            parts = image_name.split('|||', 1)
+            if len(parts) == 2:
+                is_formula = True
+                image_base_name = parts[0]  # data:image/png;base64,...
+                formula_metadata = parts[1]  # MATH:type:code
+        
         # **优化**：只删除图片字符本身，保留段落分隔符（如果有）
         # 移动到图片字符位置
         cursor.setPosition(real_image_pos)
@@ -669,7 +681,17 @@ class PasteImageTextEdit(QTextEdit):
         # 删除选中的图片字符
         cursor.removeSelectedText()
         
-        # 在删除位置插入新图片（段落分隔符会自动保留）
+        # 在删除位置插入新图片
+        new_format = QTextImageFormat()
+        if is_formula and formula_metadata:
+            # 如果是公式，重新组合图片名称（保留元数据）
+            new_format.setName(f"{image_base_name}|||{formula_metadata}")
+        else:
+            # 普通图片
+            new_format.setName(image_name)
+        
+        new_format.setWidth(new_width)
+        new_format.setHeight(new_height)
         cursor.insertImage(new_format)
         
         # 结束编辑块
@@ -677,7 +699,15 @@ class PasteImageTextEdit(QTextEdit):
         
         # 更新选中状态（光标现在在图片之后，需要向左移动一个位置）
         cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
-        self.selected_image = new_format
+        
+        # 重新获取图片格式（因为可能已经改变）
+        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+        new_char_format = cursor.charFormat()
+        if new_char_format.isImageFormat():
+            self.selected_image = new_char_format.toImageFormat()
+        cursor.clearSelection()
+        cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
+        
         self.selected_image_cursor = cursor
         self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
         
@@ -1306,56 +1336,122 @@ class NoteEditor(QWidget):
             self._insert_attachment_with_path(file_path)
     
     def rerender_formulas(self):
-        """重新渲染HTML中的所有数学公式"""
-        html_content = self.text_edit.toHtml()
+        """重新渲染文档中的所有数学公式"""
+        # **关键修复**：现在公式是通过 insertImage() 插入的真正图片字符（U+FFFC）
+        # 元数据存储在图片名称中（格式：data:image/png;base64,...|||MATH:type:code）
+        # 需要遍历文档中的所有图片字符，找到公式并重新渲染
         
-        # 查找所有带有MATH:前缀的图片标签
-        # 格式: <img ... alt="MATH:type:code" ... />
-        # 支持带或不带style属性的img标签
-        pattern = r'<img\s+src="data:image/png;base64,[^"]*"\s+alt="MATH:([^:]+):([^"]+)"(?:\s+style="[^"]*")?\s*/>'
+        cursor = QTextCursor(self.text_edit.document())
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
         
-        def replace_formula(match):
-            formula_type = match.group(1)
-            escaped_code = match.group(2)
-            # 反转义HTML实体
-            code = html.unescape(escaped_code)
+        # 收集所有需要重新渲染的公式
+        formulas_to_rerender = []  # [(position, formula_type, code, width, height), ...]
+        
+        while not cursor.atEnd():
+            # 保存当前位置
+            current_pos = cursor.position()
             
+            # 向右移动一个字符并选中
+            if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor):
+                char_format = cursor.charFormat()
+                selected_text = cursor.selectedText()
+                
+                # 检查是否是真正的图片字符
+                if char_format.isImageFormat() and selected_text == '\ufffc':
+                    img_format = char_format.toImageFormat()
+                    image_name = img_format.name()
+                    
+                    # 检查是否是公式（包含 |||MATH: 分隔符）
+                    if '|||MATH:' in image_name:
+                        parts = image_name.split('|||', 1)
+                        if len(parts) == 2:
+                            metadata = parts[1]  # MATH:type:code
+                            
+                            # 解析元数据
+                            if metadata.startswith('MATH:'):
+                                metadata_parts = metadata[5:].split(':', 1)  # 去掉 'MATH:' 前缀
+                                if len(metadata_parts) == 2:
+                                    formula_type = metadata_parts[0]
+                                    escaped_code = metadata_parts[1]
+                                    # 反转义HTML实体
+                                    code = html.unescape(escaped_code)
+                                    
+                                    # 保存公式信息
+                                    formulas_to_rerender.append((
+                                        current_pos,
+                                        formula_type,
+                                        code,
+                                        img_format.width(),
+                                        img_format.height()
+                                    ))
+                
+                # 清除选区
+                cursor.clearSelection()
+            else:
+                break
+        
+        # 如果没有公式需要重新渲染，直接返回
+        if not formulas_to_rerender:
+            return
+        
+        # 开始编辑块
+        edit_cursor = QTextCursor(self.text_edit.document())
+        edit_cursor.beginEditBlock()
+        
+        # 从后往前处理，避免位置偏移
+        for pos, formula_type, code, width, height in reversed(formulas_to_rerender):
             # 重新渲染公式
             image_data = self.math_renderer.render(code, formula_type)
             
-            if image_data:
-                # 将图片转换为base64
-                byte_array = QByteArray()
-                buffer = QBuffer(byte_array)
-                buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-                image_data.save(buffer, "PNG")
-                
-                image_base64 = byte_array.toBase64().data().decode()
-                
-                # 返回新的HTML（保留alt属性中的元数据）
-                alt_text = f"MATH:{formula_type}:{escaped_code}"
-                return f'<img src="data:image/png;base64,{image_base64}" alt="{alt_text}" style="vertical-align: middle;" />'
-            else:
-                # 渲染失败，保留原样
-                return match.group(0)
+            if image_data and not image_data.isNull():
+                try:
+                    from PIL import Image as PILImage
+                    import io
+                    
+                    # 将 QImage 转换为 PIL Image
+                    new_width = image_data.width()
+                    new_height = image_data.height()
+                    
+                    image_data = image_data.convertToFormat(QImage.Format.Format_RGBA8888)
+                    ptr = image_data.constBits()
+                    ptr.setsize(image_data.sizeInBytes())
+                    
+                    pil_image = PILImage.frombytes('RGBA', (new_width, new_height), bytes(ptr), 'raw', 'RGBA', 0, 1)
+                    
+                    if pil_image.mode == 'RGBA':
+                        background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
+                        background.paste(pil_image, mask=pil_image.split()[3])
+                        pil_image = background
+                    
+                    buffer = io.BytesIO()
+                    pil_image.save(buffer, format='PNG', optimize=True)
+                    image_bytes = buffer.getvalue()
+                    
+                    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                    
+                    # 重新组合图片名称（保留元数据）
+                    escaped_code = html.escape(code)
+                    new_image_name = f"data:image/png;base64,{image_base64}|||MATH:{formula_type}:{escaped_code}"
+                    
+                    # 删除旧图片
+                    edit_cursor.setPosition(pos)
+                    edit_cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                    edit_cursor.removeSelectedText()
+                    
+                    # 插入新图片（保持原尺寸）
+                    new_format = QTextImageFormat()
+                    new_format.setName(new_image_name)
+                    new_format.setWidth(width)
+                    new_format.setHeight(height)
+                    edit_cursor.insertImage(new_format)
+                    
+                except Exception as e:
+                    print(f"重新渲染公式失败: {e}")
+                    import traceback
+                    traceback.print_exc()
         
-        # 替换所有公式
-        new_html = re.sub(pattern, replace_formula, html_content)
-        
-        # 如果有变化，更新HTML
-        if new_html != html_content:
-            # 保存当前光标位置
-            cursor = self.text_edit.textCursor()
-            position = cursor.position()
-            
-            # 阻止信号以避免触发自动保存
-            self.text_edit.blockSignals(True)
-            self.text_edit.setHtml(new_html)
-            self.text_edit.blockSignals(False)
-            
-            # 恢复光标位置
-            cursor.setPosition(min(position, len(self.text_edit.toPlainText())))
-            self.text_edit.setTextCursor(cursor)
+        # 结束编辑块
+        edit_cursor.endEditBlock()
     
     def insert_image_to_editor(self, image):
         """插入图片到编辑器"""
@@ -1546,15 +1642,21 @@ class NoteEditor(QWidget):
                 # 转换为 base64
                 image_base64 = base64.b64encode(image_bytes).decode('utf-8')
                 
-                # 使用alt属性保存公式元数据（格式: MATH:type:code）
-                # alt属性会被QTextEdit保留
+                # **关键修复**：使用 insertImage() 而不是 insertHtml()
+                # 这样公式会成为真正的图片字符（U+FFFC），可以被点击选中
+                # 在图片名称中编码公式元数据（格式: data:image/png;base64,...|||MATH:type:code）
                 import html
                 escaped_code = html.escape(code)
-                alt_text = f"MATH:{formula_type}:{escaped_code}"
+                # 使用 ||| 作为分隔符，将元数据附加到图片名称后面
+                image_name = f"data:image/png;base64,{image_base64}|||MATH:{formula_type}:{escaped_code}"
                 
-                # 公式图片添加样式（vertical-align: middle 使公式与文本在行高中间对齐）
-                formula_html = f'<img src="data:image/png;base64,{image_base64}" alt="{alt_text}" style="vertical-align: bottom;" />'
-                cursor.insertHtml(formula_html)
+                # 使用 QTextImageFormat 插入图片
+                image_format = QTextImageFormat()
+                image_format.setName(image_name)
+                image_format.setWidth(width)
+                image_format.setHeight(height)
+                
+                cursor.insertImage(image_format)
                 
                 print(f"成功插入公式: {width}x{height}, 大小: {len(image_bytes)} 字节")
                 
