@@ -692,6 +692,8 @@ class PasteImageTextEdit(QTextEdit):
         
         new_format.setWidth(new_width)
         new_format.setHeight(new_height)
+        # 设置垂直对齐方式为AlignBaseline，使图片底部与文本基线对齐
+        new_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
         cursor.insertImage(new_format)
         
         # 结束编辑块
@@ -1443,6 +1445,8 @@ class NoteEditor(QWidget):
                     new_format.setName(new_image_name)
                     new_format.setWidth(width)
                     new_format.setHeight(height)
+                    # 设置垂直对齐方式为AlignBaseline，使图片底部与文本基线对齐
+                    new_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
                     edit_cursor.insertImage(new_format)
                     
                 except Exception as e:
@@ -1516,6 +1520,8 @@ class NoteEditor(QWidget):
             image_format.setName(f"data:image/png;base64,{image_data}")
             image_format.setWidth(width)
             image_format.setHeight(height)
+            # 设置垂直对齐方式为AlignBaseline，使图片底部与文本基线对齐
+            image_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
             
             # 插入图片
             cursor.insertImage(image_format)
@@ -1655,6 +1661,8 @@ class NoteEditor(QWidget):
                 image_format.setName(image_name)
                 image_format.setWidth(width)
                 image_format.setHeight(height)
+                # 设置垂直对齐方式为AlignBaseline，使公式底部与文本基线对齐
+                image_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
                 
                 cursor.insertImage(image_format)
                 

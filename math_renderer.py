@@ -15,8 +15,8 @@ class MathRenderer:
     """数学公式渲染器"""
     
     def __init__(self):
-        self.dpi = 72  # 渲染分辨率（72 DPI匹配屏幕显示）
-        self.fontsize = 12  # 公式字体大小（略小于正文以匹配行高）
+        self.dpi = 144  # 渲染分辨率（144 DPI适配高分辨率屏幕，提供更清晰的显示）
+        self.fontsize = 8  # 公式字体大小（更小更紧凑，适合行内显示）
         
     def render(self, code, formula_type):
         """
