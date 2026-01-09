@@ -493,6 +493,35 @@ class PasteImageTextEdit(QTextEdit):
         
         super().mouseReleaseEvent(event)
     
+    def mouseDoubleClickEvent(self, event):
+        """鼠标双击事件 - 防止双击图片时被删除"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            # 检查是否双击了图片
+            cursor = self.cursorForPosition(event.pos())
+            char_format = cursor.charFormat()
+            
+            if char_format.isImageFormat():
+                # 双击图片时，只选中图片，不执行其他操作
+                self.selected_image = char_format.toImageFormat()
+                self.selected_image_cursor = cursor
+                self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
+                self.viewport().update()
+                # 阻止默认的双击行为（选中文字等）
+                event.accept()
+                return
+            
+            # 检查是否双击了链接（附件）
+            if char_format.isAnchor():
+                # 双击链接时打开附件
+                anchor_href = char_format.anchorHref()
+                if anchor_href:
+                    self.open_attachment(anchor_href)
+                    event.accept()
+                    return
+        
+        # 其他情况使用默认行为
+        super().mouseDoubleClickEvent(event)
+    
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
         if not self.selected_image or not self.selected_image_cursor:
