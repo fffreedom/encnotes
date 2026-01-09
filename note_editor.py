@@ -389,6 +389,13 @@ class PasteImageTextEdit(QTextEdit):
                 self.selected_image = image_format
                 self.selected_image_cursor = image_cursor
                 self.selected_image_rect = image_rect
+                
+                # **关键修复**：将编辑器的光标移动到图片位置并选中图片字符
+                # 这样按删除键时才能正确删除图片
+                cursor = QTextCursor(image_cursor)
+                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                self.setTextCursor(cursor)
+                
                 self.viewport().update()
                 event.accept()
                 return
@@ -640,38 +647,32 @@ class PasteImageTextEdit(QTextEdit):
         new_format.setWidth(new_width)
         new_format.setHeight(new_height)
         
-        # 查找并替换图片
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        # 直接使用 selected_image_cursor 定位图片
+        cursor = QTextCursor(self.selected_image_cursor)
         
-        found = False
-        while not cursor.atEnd():
-            char_format = cursor.charFormat()
-            if char_format.isImageFormat():
-                img_format = char_format.toImageFormat()
-                if img_format.name() == self.selected_image.name():
-                    # 找到图片
-                    found = True
-                    # 选中图片字符
-                    cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-                    # 删除旧图片
-                    cursor.removeSelectedText()
-                    # 插入新图片
-                    cursor.insertImage(new_format)
-                    
-                    # 更新选中状态
-                    cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
-                    self.selected_image = new_format
-                    self.selected_image_cursor = cursor
-                    self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
-                    
-                    # 刷新显示
-                    self.viewport().update()
-                    break
-            cursor.movePosition(QTextCursor.MoveOperation.Right)
+        # 使用编辑块确保删除和插入是原子操作
+        cursor.beginEditBlock()
         
-        if not found:
-            print("警告：未找到要调整的图片")
+        # 选中图片字符（向右移动一个字符并保持选中）
+        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+        
+        # 删除旧图片
+        cursor.removeSelectedText()
+        
+        # 插入新图片
+        cursor.insertImage(new_format)
+        
+        # 结束编辑块
+        cursor.endEditBlock()
+        
+        # 更新选中状态（光标现在在图片之后，需要向左移动一个位置）
+        cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
+        self.selected_image = new_format
+        self.selected_image_cursor = cursor
+        self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
+        
+        # 刷新显示
+        self.viewport().update()
     
     def move_image_to_cursor(self, target_cursor):
         """移动图片到新的光标位置"""
