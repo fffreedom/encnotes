@@ -337,9 +337,22 @@ class PasteImageTextEdit(QTextEdit):
         # 图片的左边界是光标的左边界
         image_left = cursor_rect.left()
         
-        # **关键修复**：图片的顶部应该是光标底部减去图片高度
-        # 因为图片是从基线向上绘制的（vertical-align: bottom）
-        image_top = cursor_rect.bottom() - int(height)
+        # **关键修复**：图片的顶部应该根据图片在行中的实际渲染位置计算
+        # Qt 的 QTextEdit 中，图片作为内联元素，底部对齐文本基线
+        # 但是当图片很高时，行高会自动扩展以容纳图片
+        # 我们需要找到图片实际显示的顶部位置
+        
+        # 方法：向右移动光标到图片之后，获取该位置的光标矩形
+        # 图片之后的光标矩形的 bottom() 就是图片底部的位置
+        temp_cursor2 = QTextCursor(image_cursor)
+        temp_cursor2.movePosition(QTextCursor.MoveOperation.Right)
+        cursor_rect_after = self.cursorRect(temp_cursor2)
+        
+        # 图片底部 = 图片之后光标的底部
+        image_bottom = cursor_rect_after.bottom()
+        
+        # 图片顶部 = 图片底部 - 图片高度
+        image_top = image_bottom - int(height)
         
         result_rect = QRect(image_left, image_top, int(width), int(height))
         
@@ -398,6 +411,9 @@ class PasteImageTextEdit(QTextEdit):
                 cursor = QTextCursor(image_cursor)
                 cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
                 self.setTextCursor(cursor)
+                
+                # 调试日志
+                print(f"[图片选中] 图片位置={image_cursor.position()}, 光标选区={self.textCursor().selectionStart()}-{self.textCursor().selectionEnd()}, 是否有选区={self.textCursor().hasSelection()}")
                 
                 self.viewport().update()
                 event.accept()
@@ -589,6 +605,14 @@ class PasteImageTextEdit(QTextEdit):
                 # Delete、Backspace 或输入可打印字符时
                 if (key in [Qt.Key.Key_Delete, Qt.Key.Key_Backspace] or 
                     (event.text() and event.text().isprintable())):
+                    
+                    # **关键修复**：如果选区只包含一个图片字符（长度为1），说明用户点击选中了图片
+                    # 这种情况下应该允许删除图片，使用默认行为
+                    selection_length = end - start
+                    if selection_length == 1 and len(images_in_selection) == 1:
+                        # 只选中了一个图片，使用默认删除行为
+                        super().keyPressEvent(event)
+                        return
                     
                     # 保存选区范围
                     selection_start = start
