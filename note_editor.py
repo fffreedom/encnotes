@@ -571,96 +571,9 @@ class PasteImageTextEdit(QTextEdit):
         super().mouseDoubleClickEvent(event)
     
     def keyPressEvent(self, event):
-        """键盘事件 - 防止通过删除键或输入文字删除选区中的图片"""
-        cursor = self.textCursor()
-        
-        # 检查是否有选中的文本
-        if cursor.hasSelection():
-            # 检查选区中是否包含图片
-            images_in_selection = []
-            
-            # 获取选区的起始和结束位置
-            start = cursor.selectionStart()
-            end = cursor.selectionEnd()
-            
-            # 遍历选区，查找图片
-            temp_cursor = QTextCursor(self.document())
-            temp_cursor.setPosition(start)
-            
-            while temp_cursor.position() < end:
-                char_format = temp_cursor.charFormat()
-                if char_format.isImageFormat():
-                    # 保存图片信息
-                    images_in_selection.append({
-                        'position': temp_cursor.position(),
-                        'format': QTextImageFormat(char_format.toImageFormat())
-                    })
-                temp_cursor.movePosition(QTextCursor.MoveOperation.Right)
-            
-            # 如果选区中包含图片
-            if images_in_selection:
-                # 检查按键类型
-                key = event.key()
-                
-                # Delete、Backspace 或输入可打印字符时
-                if (key in [Qt.Key.Key_Delete, Qt.Key.Key_Backspace] or 
-                    (event.text() and event.text().isprintable())):
-                    
-                    # **关键修复**：如果选区只包含一个图片字符（长度为1），说明用户点击选中了图片
-                    # 这种情况下应该允许删除图片，使用默认行为
-                    selection_length = end - start
-                    if selection_length == 1 and len(images_in_selection) == 1:
-                        # 只选中了一个图片，使用默认删除行为
-                        super().keyPressEvent(event)
-                        return
-                    
-                    # 保存选区范围
-                    selection_start = start
-                    selection_end = end
-                    
-                    # 删除选区中的文本（但保留图片）
-                    cursor.beginEditBlock()
-                    
-                    # 从后向前删除，避免位置偏移
-                    temp_cursor = QTextCursor(self.document())
-                    
-                    # 先收集所有非图片的文本段
-                    segments_to_delete = []
-                    current_pos = selection_start
-                    
-                    for img_info in images_in_selection:
-                        img_pos = img_info['position']
-                        if current_pos < img_pos:
-                            # 图片前面有文本，需要删除
-                            segments_to_delete.append((current_pos, img_pos))
-                        current_pos = img_pos + 1  # 跳过图片字符
-                    
-                    # 最后一个图片后面的文本
-                    if current_pos < selection_end:
-                        segments_to_delete.append((current_pos, selection_end))
-                    
-                    # 从后向前删除文本段（避免位置偏移）
-                    for seg_start, seg_end in reversed(segments_to_delete):
-                        temp_cursor.setPosition(seg_start)
-                        temp_cursor.setPosition(seg_end, QTextCursor.MoveMode.KeepAnchor)
-                        temp_cursor.removeSelectedText()
-                    
-                    # 如果是输入字符，在第一个位置插入
-                    if event.text() and event.text().isprintable():
-                        temp_cursor.setPosition(selection_start)
-                        temp_cursor.insertText(event.text())
-                    
-                    cursor.endEditBlock()
-                    
-                    # 取消选中状态
-                    cursor.clearSelection()
-                    cursor.setPosition(selection_start)
-                    self.setTextCursor(cursor)
-                    
-                    event.accept()
-                    return
-        
-        # 其他情况使用默认行为
+        """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
+        # 直接使用默认行为，不做任何特殊处理
+        # 这样选区中的图片和文本都会被正常删除
         super().keyPressEvent(event)
     
     def update_image_size(self, new_width, new_height):
