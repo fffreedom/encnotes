@@ -52,12 +52,17 @@ class PasteImageTextEdit(QTextEdit):
         self.drag_start_cursor_pos = None
         self.drag_preview_cursor = None  # 拖动预览光标位置
         
+        # 文本选择相关
+        self.text_selecting = False
+        
         # 边界检测阈值
         self.handle_size = 8
         
         # 监听滚动事件
         self.verticalScrollBar().valueChanged.connect(self.on_scroll)
         self.horizontalScrollBar().valueChanged.connect(self.on_scroll)
+        
+
     
     def on_scroll(self):
         """滚动事件处理 - 更新边界框位置"""
@@ -66,6 +71,8 @@ class PasteImageTextEdit(QTextEdit):
             self.selected_image_rect = self.get_image_rect_at_cursor(self.selected_image_cursor)
             # 触发重绘
             self.viewport().update()
+    
+
     
     def open_attachment(self, url_or_path):
         """处理链接点击事件 - 打开附件
@@ -254,9 +261,63 @@ class PasteImageTextEdit(QTextEdit):
         }
         return cursor_map.get(handle, Qt.CursorShape.ArrowCursor)
     
+    def find_image_at_position(self, pos):
+        """通过鼠标位置查找图片
+        
+        Args:
+            pos: 鼠标点击的位置（视口坐标）
+            
+        Returns:
+            tuple: (image_format, image_cursor, image_rect) 如果找到图片，否则返回 (None, None, None)
+        """
+        # 遍历文档中的所有字符，查找图片
+        cursor = QTextCursor(self.document())
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        
+        while not cursor.atEnd():
+            # 保存当前位置（图片字符的起始位置）
+            current_pos = cursor.position()
+            
+            # 检查当前位置的字符格式
+            # 注意：需要先向右移动一个字符，再检查格式
+            cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor)
+            char_format = cursor.charFormat()
+            
+            if char_format.isImageFormat():
+                # 找到一个图片
+                # 创建一个新光标，指向图片字符的起始位置
+                image_cursor = QTextCursor(self.document())
+                image_cursor.setPosition(current_pos)
+                
+                # 计算图片的矩形区域
+                img_format = char_format.toImageFormat()
+                img_rect = self.get_image_rect_at_cursor(image_cursor)
+                
+                # 检查鼠标位置是否在这个图片的矩形内
+                if img_rect and img_rect.contains(pos):
+                    return (img_format, image_cursor, img_rect)
+            
+            # 清除选区，移动到下一个字符
+            cursor.clearSelection()
+        
+        return (None, None, None)
+    
     def get_image_rect_at_cursor(self, cursor):
-        """获取光标位置图片的矩形区域"""
-        char_format = cursor.charFormat()
+        """获取光标位置图片的矩形区域
+        
+        Args:
+            cursor: 指向图片字符起始位置的光标
+            
+        Returns:
+            QRect: 图片的矩形区域，如果不是图片则返回None
+        """
+        # 创建一个光标副本，避免修改原光标
+        temp_cursor = QTextCursor(cursor)
+        
+        # 向右移动一个字符并选中，这样charFormat()才能返回图片字符的格式
+        temp_cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor)
+        char_format = temp_cursor.charFormat()
+        
         if not char_format.isImageFormat():
             return None
         
@@ -265,69 +326,26 @@ class PasteImageTextEdit(QTextEdit):
         width = img_format.width()
         height = img_format.height()
         
-        # 创建一个新光标，定位到图片的开始位置
-        # 这样可以确保获取的是图片左上角的位置，而不是点击位置
+        # 创建一个新光标，指向图片字符的起始位置
         image_cursor = QTextCursor(cursor)
         
-        # 如果光标在图片字符的右侧，需要向左移动一个字符
-        # 检查当前位置的字符格式
-        test_cursor = QTextCursor(cursor)
-        test_cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
-        if test_cursor.charFormat().isImageFormat():
-            # 光标在图片右侧，使用左移后的位置
-            image_cursor = test_cursor
-        
-        # 使用文档布局来获取图片的精确位置
-        doc = self.document()
-        layout = doc.documentLayout()
-        
-        # 获取图片字符在文档中的位置
-        block = image_cursor.block()
-        block_layout = block.layout()
-        
-        if block_layout:
-            # 获取字符在块中的相对位置
-            pos_in_block = image_cursor.positionInBlock()
-            
-            # 获取字符的位置（相对于块）
-            line = block_layout.lineForTextPosition(pos_in_block)
-            if line.isValid():
-                # 获取字符在行中的x坐标
-                # cursorToX 返回元组 (x, y)，我们只需要 x
-                cursor_x_result = line.cursorToX(pos_in_block)
-                if isinstance(cursor_x_result, tuple):
-                    x = cursor_x_result[0]
-                else:
-                    x = cursor_x_result
-                
-                # 获取块在文档中的位置
-                block_pos = layout.blockBoundingRect(block).topLeft()
-                
-                # 获取行在块中的位置
-                line_pos = line.position()
-                
-                # 计算图片在文档中的绝对位置
-                doc_x = block_pos.x() + x
-                doc_y = block_pos.y() + line_pos.y()
-                
-                # 转换为视口坐标
-                # 需要减去滚动偏移
-                viewport_x = doc_x - self.horizontalScrollBar().value()
-                viewport_y = doc_y - self.verticalScrollBar().value()
-                
-                from PyQt6.QtCore import QRect
-                
-                # 返回图片的矩形区域（在视口坐标系中）
-                return QRect(int(viewport_x), int(viewport_y), int(width), int(height))
-        
-        # 如果无法通过布局获取，使用cursorRect作为后备方案
+        # 获取图片字符的光标矩形
         cursor_rect = self.cursorRect(image_cursor)
         
         from PyQt6.QtCore import QRect
-        return QRect(cursor_rect.left(), cursor_rect.top(), int(width), int(height))
+        
+        # 图片的左上角坐标就是光标位置
+        image_left = cursor_rect.left()
+        image_top = cursor_rect.top()
+        
+        result_rect = QRect(image_left, image_top, int(width), int(height))
+        
+        # 返回图片的矩形区域（在视口坐标系中）
+        return result_rect
     
     def mousePressEvent(self, event):
         """鼠标按下事件"""
+        
         if event.button() == Qt.MouseButton.LeftButton:
             # 首先检查是否点击了链接（附件）
             cursor = self.cursorForPosition(event.pos())
@@ -362,12 +380,15 @@ class PasteImageTextEdit(QTextEdit):
                     event.accept()
                     return
             
-            # 检查是否点击了图片
-            if char_format.isImageFormat():
+            # **关键修复**：使用像素位置而非光标位置来检测图片点击
+            # 通过遍历文档中的所有图片，计算它们的矩形区域，检查鼠标是否点击在图片上
+            image_format, image_cursor, image_rect = self.find_image_at_position(event.pos())
+            
+            if image_format and image_cursor:
                 # 选中图片
-                self.selected_image = char_format.toImageFormat()
-                self.selected_image_cursor = cursor
-                self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
+                self.selected_image = image_format
+                self.selected_image_cursor = image_cursor
+                self.selected_image_rect = image_rect
                 self.viewport().update()
                 event.accept()
                 return
@@ -378,7 +399,7 @@ class PasteImageTextEdit(QTextEdit):
                     self.selected_image_rect = None
                     self.selected_image_cursor = None
                     self.viewport().update()
-        
+            
         super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
@@ -445,10 +466,9 @@ class PasteImageTextEdit(QTextEdit):
                 else:
                     self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         else:
-            # 检查是否悬停在图片上
-            cursor = self.cursorForPosition(event.pos())
-            char_format = cursor.charFormat()
-            if char_format.isImageFormat():
+            # 检查是否悬停在图片上（使用像素位置检测）
+            image_format, _, _ = self.find_image_at_position(event.pos())
+            if image_format:
                 self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
             else:
                 self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
@@ -457,6 +477,7 @@ class PasteImageTextEdit(QTextEdit):
     
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
+        
         if self.resizing:
             self.resizing = False
             self.resize_handle = None
@@ -496,21 +517,22 @@ class PasteImageTextEdit(QTextEdit):
     def mouseDoubleClickEvent(self, event):
         """鼠标双击事件 - 防止双击图片时被删除"""
         if event.button() == Qt.MouseButton.LeftButton:
-            # 检查是否双击了图片
-            cursor = self.cursorForPosition(event.pos())
-            char_format = cursor.charFormat()
+            # **使用像素位置检测图片**
+            image_format, image_cursor, image_rect = self.find_image_at_position(event.pos())
             
-            if char_format.isImageFormat():
+            if image_format and image_cursor:
                 # 双击图片时，只选中图片，不执行其他操作
-                self.selected_image = char_format.toImageFormat()
-                self.selected_image_cursor = cursor
-                self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
+                self.selected_image = image_format
+                self.selected_image_cursor = image_cursor
+                self.selected_image_rect = image_rect
                 self.viewport().update()
                 # 阻止默认的双击行为（选中文字等）
                 event.accept()
                 return
             
             # 检查是否双击了链接（附件）
+            cursor = self.cursorForPosition(event.pos())
+            char_format = cursor.charFormat()
             if char_format.isAnchor():
                 # 双击链接时打开附件
                 anchor_href = char_format.anchorHref()
@@ -521,6 +543,91 @@ class PasteImageTextEdit(QTextEdit):
         
         # 其他情况使用默认行为
         super().mouseDoubleClickEvent(event)
+    
+    def keyPressEvent(self, event):
+        """键盘事件 - 防止通过删除键或输入文字删除选区中的图片"""
+        cursor = self.textCursor()
+        
+        # 检查是否有选中的文本
+        if cursor.hasSelection():
+            # 检查选区中是否包含图片
+            images_in_selection = []
+            
+            # 获取选区的起始和结束位置
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            
+            # 遍历选区，查找图片
+            temp_cursor = QTextCursor(self.document())
+            temp_cursor.setPosition(start)
+            
+            while temp_cursor.position() < end:
+                char_format = temp_cursor.charFormat()
+                if char_format.isImageFormat():
+                    # 保存图片信息
+                    images_in_selection.append({
+                        'position': temp_cursor.position(),
+                        'format': QTextImageFormat(char_format.toImageFormat())
+                    })
+                temp_cursor.movePosition(QTextCursor.MoveOperation.Right)
+            
+            # 如果选区中包含图片
+            if images_in_selection:
+                # 检查按键类型
+                key = event.key()
+                
+                # Delete、Backspace 或输入可打印字符时
+                if (key in [Qt.Key.Key_Delete, Qt.Key.Key_Backspace] or 
+                    (event.text() and event.text().isprintable())):
+                    
+                    # 保存选区范围
+                    selection_start = start
+                    selection_end = end
+                    
+                    # 删除选区中的文本（但保留图片）
+                    cursor.beginEditBlock()
+                    
+                    # 从后向前删除，避免位置偏移
+                    temp_cursor = QTextCursor(self.document())
+                    
+                    # 先收集所有非图片的文本段
+                    segments_to_delete = []
+                    current_pos = selection_start
+                    
+                    for img_info in images_in_selection:
+                        img_pos = img_info['position']
+                        if current_pos < img_pos:
+                            # 图片前面有文本，需要删除
+                            segments_to_delete.append((current_pos, img_pos))
+                        current_pos = img_pos + 1  # 跳过图片字符
+                    
+                    # 最后一个图片后面的文本
+                    if current_pos < selection_end:
+                        segments_to_delete.append((current_pos, selection_end))
+                    
+                    # 从后向前删除文本段（避免位置偏移）
+                    for seg_start, seg_end in reversed(segments_to_delete):
+                        temp_cursor.setPosition(seg_start)
+                        temp_cursor.setPosition(seg_end, QTextCursor.MoveMode.KeepAnchor)
+                        temp_cursor.removeSelectedText()
+                    
+                    # 如果是输入字符，在第一个位置插入
+                    if event.text() and event.text().isprintable():
+                        temp_cursor.setPosition(selection_start)
+                        temp_cursor.insertText(event.text())
+                    
+                    cursor.endEditBlock()
+                    
+                    # 取消选中状态
+                    cursor.clearSelection()
+                    cursor.setPosition(selection_start)
+                    self.setTextCursor(cursor)
+                    
+                    event.accept()
+                    return
+        
+        # 其他情况使用默认行为
+        super().keyPressEvent(event)
     
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
@@ -581,51 +688,30 @@ class PasteImageTextEdit(QTextEdit):
         
         # 保存图片格式
         image_format = QTextImageFormat(self.selected_image)
+        old_pos = self.selected_image_cursor.position()
         
-        # 查找并删除原图片
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        # 创建一个新的光标对象，用于执行所有操作
+        cursor = QTextCursor(self.document())
         
-        found = False
-        while not cursor.atEnd():
-            char_format = cursor.charFormat()
-            if char_format.isImageFormat():
-                img_format = char_format.toImageFormat()
-                if img_format.name() == self.selected_image.name():
-                    # 找到图片
-                    found = True
-                    old_pos = cursor.position()
-                    
-                    # 选中并删除图片
-                    cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-                    cursor.removeSelectedText()
-                    
-                    # 调整目标位置（如果删除位置在目标位置之前）
-                    if old_pos < target_pos:
-                        target_pos -= 1
-                    
-                    break
-            cursor.movePosition(QTextCursor.MoveOperation.Right)
+        # 开始编辑块
+        cursor.beginEditBlock()
         
-        if not found:
-            print("警告：未找到要移动的图片")
-            return
+        # 1. 删除图片
+        cursor.setPosition(old_pos)
+        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, 1)
+        cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 1)
+        cursor.removeSelectedText()
         
-        # 在新位置插入图片
-        cursor = self.textCursor()
+        # 调整目标位置（如果删除位置在目标位置之前）
+        if old_pos < target_pos:
+            target_pos -= 1
+        
+        # 2. 在新位置插入图片
         cursor.setPosition(target_pos)
-        
-        # 检查目标位置是否在一行文字的中间
-        # 如果光标不在行首，说明前面有内容，需要添加换行
-        block = cursor.block()
-        pos_in_block = cursor.positionInBlock()
-        
-        # 如果不在块的开头（即不在行首），在图片前插入换行
-        if pos_in_block > 0:
-            cursor.insertBlock()
-        
-        # 插入图片
         cursor.insertImage(image_format)
+        
+        # 结束编辑块
+        cursor.endEditBlock()
         
         # 更新选中状态
         cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
@@ -636,6 +722,21 @@ class PasteImageTextEdit(QTextEdit):
         # 刷新显示
         self.viewport().update()
     
+    def count_all_images(self):
+        """统计文档中的所有图片数量"""
+        count = 0
+        cursor = QTextCursor(self.document())
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        
+        while not cursor.atEnd():
+            char_format = cursor.charFormat()
+            if char_format.isImageFormat():
+                count += 1
+            cursor.movePosition(QTextCursor.MoveOperation.Right)
+        
+        return count
+    
+
     def canInsertFromMimeData(self, source):
         """检查是否可以从MIME数据插入"""
         if source.hasImage() or source.hasUrls():
@@ -644,6 +745,7 @@ class PasteImageTextEdit(QTextEdit):
     
     def insertFromMimeData(self, source):
         """从MIME数据插入（支持截图粘贴）"""
+        
         # 处理图片
         if source.hasImage():
             image = QImage(source.imageData())
@@ -925,6 +1027,12 @@ class NoteEditor(QWidget):
         
         # 获取当前光标
         current_cursor = self.text_edit.textCursor()
+        
+        # **关键修复**：如果当前有选区（用户正在拖选），不要执行格式化
+        # 因为格式化操作可能会影响选区内容，导致图片等特殊字符丢失
+        if current_cursor.hasSelection():
+            return
+        
         current_block = current_cursor.block()
         current_block_number = current_block.blockNumber()
         
@@ -1220,9 +1328,6 @@ class NoteEditor(QWidget):
             
             # 插入图片
             cursor.insertImage(image_format)
-            
-            # 添加换行
-            cursor.insertBlock()
             
             print(f"成功插入图片: {width}x{height}, 大小: {len(image_bytes)} 字节")
             
