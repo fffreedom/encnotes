@@ -11,11 +11,12 @@ NC='\033[0m'
 echo -e "${GREEN}快速构建 encnotes.app...${NC}"
 
 BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SPEC_FILE="${BUILD_DIR}/build_scripts/encnotes.spec"
+SCRIPT_DIR="${BUILD_DIR}/build_scripts"
+SPEC_FILE="${SCRIPT_DIR}/encnotes.spec"
 
 # 清理
-rm -rf "${BUILD_DIR}/build"
-rm -rf "${BUILD_DIR}/dist"
+rm -rf "${SCRIPT_DIR}/build"
+rm -rf "${SCRIPT_DIR}/dist"
 
 # 检查 PyInstaller
 if ! command -v pyinstaller &> /dev/null; then
@@ -24,8 +25,8 @@ if ! command -v pyinstaller &> /dev/null; then
 fi
 
 # 打包
-cd "${BUILD_DIR}/build_scripts"
+cd "${SCRIPT_DIR}"
 pyinstaller --clean --noconfirm "${SPEC_FILE}"
 
-echo -e "${GREEN}构建完成: ${BUILD_DIR}/dist/encnotes.app${NC}"
+echo -e "${GREEN}构建完成: ${SCRIPT_DIR}/dist/encnotes.app${NC}"
 echo -e "${YELLOW}提示: 可以直接运行 dist/encnotes.app 测试应用${NC}"

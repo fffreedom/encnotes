@@ -19,18 +19,39 @@ APP_DISPLAY_NAME="加密笔记"
 VERSION="3.4.0"
 DMG_NAME="${APP_NAME}-${VERSION}"
 BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DIST_DIR="${BUILD_DIR}/dist"
+SCRIPT_DIR="${BUILD_DIR}/build_scripts"
+DIST_DIR="${SCRIPT_DIR}/dist"
 DMG_DIR="${BUILD_DIR}/dmg_build"
-SPEC_FILE="${BUILD_DIR}/build_scripts/${APP_NAME}.spec"
+SPEC_FILE="${SCRIPT_DIR}/${APP_NAME}.spec"
 
 echo -e "${YELLOW}项目目录: ${BUILD_DIR}${NC}"
 echo -e "${YELLOW}输出目录: ${DIST_DIR}${NC}"
 
 # 1. 清理旧的构建文件
 echo -e "\n${GREEN}[1/6] 清理旧的构建文件...${NC}"
-rm -rf "${BUILD_DIR}/build"
-rm -rf "${DIST_DIR}"
-rm -rf "${DMG_DIR}"
+
+# 先卸载任何挂载的 DMG
+echo -e "${YELLOW}卸载挂载的 DMG 镜像...${NC}"
+for mount_point in $(hdiutil info | grep -E "^/dev/disk" | grep -oE "/Volumes/[^,]+" | sort -u); do
+    if [[ "$mount_point" == *"encnotes"* ]] || [[ "$mount_point" == *"dmg"* ]]; then
+        echo -e "${YELLOW}卸载: $mount_point${NC}"
+        hdiutil detach "$mount_point" 2>/dev/null || true
+    fi
+done
+
+# 强制删除构建目录
+echo -e "${YELLOW}删除构建文件...${NC}"
+rm -rf "${BUILD_DIR}/build" 2>/dev/null || true
+rm -rf "${DIST_DIR}" 2>/dev/null || true
+rm -rf "${DMG_DIR}" 2>/dev/null || true
+
+# 再次尝试删除，确保彻底清理
+sleep 1
+rm -rf "${BUILD_DIR}/build" 2>/dev/null || true
+rm -rf "${DIST_DIR}" 2>/dev/null || true
+rm -rf "${DMG_DIR}" 2>/dev/null || true
+
+# 创建新的目录
 mkdir -p "${DIST_DIR}"
 mkdir -p "${DMG_DIR}"
 
@@ -63,8 +84,8 @@ echo -e "${GREEN}应用打包成功: ${DIST_DIR}/${APP_NAME}.app${NC}"
 echo -e "\n${GREEN}[4/6] 准备 DMG 内容...${NC}"
 cp -R "${DIST_DIR}/${APP_NAME}.app" "${DMG_DIR}/"
 
-# 创建 Applications 符号链接
-ln -s /Applications "${DMG_DIR}/Applications"
+# 注意：不需要手动创建 Applications 符号链接
+# create-dmg 会通过 --app-drop-link 参数自动创建
 
 # 5. 创建 DMG
 echo -e "\n${GREEN}[5/6] 创建 DMG 镜像...${NC}"
@@ -74,17 +95,30 @@ create-dmg \
   --window-pos 200 120 \
   --window-size 800 400 \
   --icon-size 100 \
+  --app-drop-link 600 185 \
   --icon "${APP_NAME}.app" 200 190 \
   --hide-extension "${APP_NAME}.app" \
-  --app-drop-link 600 185 \
   --no-internet-enable \
   "${DIST_DIR}/${DMG_NAME}.dmg" \
   "${DMG_DIR}/"
 
 # 6. 清理临时文件
 echo -e "\n${GREEN}[6/6] 清理临时文件...${NC}"
-rm -rf "${DMG_DIR}"
-rm -rf "${BUILD_DIR}/build"
+
+# 先卸载任何挂载的 DMG
+echo -e "${YELLOW}卸载挂载的 DMG 镜像...${NC}"
+for mount_point in $(hdiutil info | grep -E "^/dev/disk" | grep -oE "/Volumes/[^,]+" | sort -u); do
+    if [[ "$mount_point" == *"encnotes"* ]] || [[ "$mount_point" == *"dmg"* ]]; then
+        echo -e "${YELLOW}卸载: $mount_point${NC}"
+        hdiutil detach "$mount_point" 2>/dev/null || true
+    fi
+done
+
+sleep 1
+
+# 删除临时目录
+rm -rf "${DMG_DIR}" 2>/dev/null || true
+rm -rf "${BUILD_DIR}/build" 2>/dev/null || true
 
 # 完成
 echo -e "\n${GREEN}========================================${NC}"
