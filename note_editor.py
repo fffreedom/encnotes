@@ -58,6 +58,7 @@ class PasteImageTextEdit(QTextEdit):
         # 表格选中相关
         self.selected_table = None  # 当前选中的表格
         self.selected_table_cursor = None  # 表格的光标位置
+        self.table_select_handle_size = 20  # 表格全选图标的大小
         
         # 边界检测阈值
         self.handle_size = 8
@@ -75,6 +76,114 @@ class PasteImageTextEdit(QTextEdit):
             self.selected_image_rect = self.get_image_rect_at_cursor(self.selected_image_cursor)
             # 触发重绘
             self.viewport().update()
+    
+    def get_table_rect(self, table):
+        """获取表格的精确边界框
+        
+        Args:
+            table: QTextTable对象
+            
+        Returns:
+            QRectF: 表格的边界框，如果计算失败则返回None
+        """
+        if not table:
+            return None
+        
+        from PyQt6.QtCore import QRectF
+        
+        # 获取表格的第一个和最后一个单元格
+        first_cell = table.cellAt(0, 0)
+        last_cell = table.cellAt(table.rows() - 1, table.columns() - 1)
+        
+        if not first_cell.isValid() or not last_cell.isValid():
+            return None
+        
+        # 获取第一个单元格的光标和矩形
+        first_cursor = first_cell.firstCursorPosition()
+        first_rect = self.cursorRect(first_cursor)
+        
+        # 获取最后一个单元格的光标和矩形
+        last_cursor = last_cell.lastCursorPosition()
+        last_rect = self.cursorRect(last_cursor)
+        
+        # 计算表格的边界框
+        # 左边界：第一个单元格的左边界减去一些边距
+        left = first_rect.left() - 5
+        
+        # 上边界：第一个单元格的上边界减去一些边距
+        top = first_rect.top() - 5
+        
+        # 右边界：最后一个单元格的右边界加上一些边距
+        # 需要考虑单元格的实际宽度
+        right = last_rect.right() + 5
+        
+        # 下边界：最后一个单元格的下边界加上一些边距
+        bottom = last_rect.bottom() + 5
+        
+        # 创建矩形
+        table_rect = QRectF(left, top, right - left, bottom - top)
+        
+        return table_rect
+    
+    def is_click_on_table_select_handle(self, pos, table):
+        """检查点击位置是否在表格的全选图标上
+        
+        Args:
+            pos: 鼠标点击位置
+            table: QTextTable对象
+            
+        Returns:
+            bool: 如果点击在全选图标上返回True，否则返回False
+        """
+        if not table:
+            return False
+        
+        table_rect = self.get_table_rect(table)
+        if not table_rect:
+            return False
+        
+        from PyQt6.QtCore import QRect
+        
+        handle_size = self.table_select_handle_size
+        
+        # 定义四个角的全选图标区域
+        handles = [
+            # 左上角
+            QRect(
+                int(table_rect.left() - handle_size // 2),
+                int(table_rect.top() - handle_size // 2),
+                handle_size,
+                handle_size
+            ),
+            # 右上角
+            QRect(
+                int(table_rect.right() - handle_size // 2),
+                int(table_rect.top() - handle_size // 2),
+                handle_size,
+                handle_size
+            ),
+            # 左下角
+            QRect(
+                int(table_rect.left() - handle_size // 2),
+                int(table_rect.bottom() - handle_size // 2),
+                handle_size,
+                handle_size
+            ),
+            # 右下角
+            QRect(
+                int(table_rect.right() - handle_size // 2),
+                int(table_rect.bottom() - handle_size // 2),
+                handle_size,
+                handle_size
+            ),
+        ]
+        
+        # 检查点击位置是否在任何一个全选图标内
+        for handle_rect in handles:
+            if handle_rect.contains(pos):
+                return True
+        
+        return False
     
 
     
@@ -154,40 +263,57 @@ class PasteImageTextEdit(QTextEdit):
         """绘制事件 - 绘制选中图片的边界框"""
         super().paintEvent(event)
         
-        # 绘制选中表格的边界框
+        # 绘制选中表格的边界框和全选图标
         if self.selected_table and self.selected_table_cursor:
-            from PyQt6.QtGui import QPainter, QPen
-            from PyQt6.QtCore import QRectF
+            from PyQt6.QtGui import QPainter, QPen, QBrush
+            from PyQt6.QtCore import QRectF, QRect
             
             painter = QPainter(self.viewport())
             
-            # 获取表格的边界框
-            table_format = self.selected_table.format()
+            # 计算表格的实际边界框
+            table_rect = self.get_table_rect(self.selected_table)
             
-            # 获取表格第一个单元格的光标
-            first_cell = self.selected_table.cellAt(0, 0)
-            first_cursor = first_cell.firstCursorPosition()
-            first_rect = self.cursorRect(first_cursor)
-            
-            # 获取表格最后一个单元格的光标
-            last_row = self.selected_table.rows() - 1
-            last_col = self.selected_table.columns() - 1
-            last_cell = self.selected_table.cellAt(last_row, last_col)
-            last_cursor = last_cell.lastCursorPosition()
-            last_rect = self.cursorRect(last_cursor)
-            
-            # 计算表格的边界框（近似）
-            table_rect = QRectF(
-                first_rect.left() - 10,
-                first_rect.top() - 10,
-                last_rect.right() - first_rect.left() + 20,
-                last_rect.bottom() - first_rect.top() + 20
-            )
-            
-            # 绘制蓝色边界框
-            pen = QPen(QColor("#007AFF"), 3)
-            painter.setPen(pen)
-            painter.drawRect(table_rect)
+            if table_rect:
+                # 绘制蓝色边界框
+                pen = QPen(QColor("#007AFF"), 3)
+                painter.setPen(pen)
+                painter.drawRect(table_rect)
+                
+                # 在四个角绘制全选图标（小方块）
+                handle_size = self.table_select_handle_size
+                painter.setBrush(QBrush(QColor("#007AFF")))
+                
+                # 左上角
+                painter.drawRect(QRect(
+                    int(table_rect.left() - handle_size // 2),
+                    int(table_rect.top() - handle_size // 2),
+                    handle_size,
+                    handle_size
+                ))
+                
+                # 右上角
+                painter.drawRect(QRect(
+                    int(table_rect.right() - handle_size // 2),
+                    int(table_rect.top() - handle_size // 2),
+                    handle_size,
+                    handle_size
+                ))
+                
+                # 左下角
+                painter.drawRect(QRect(
+                    int(table_rect.left() - handle_size // 2),
+                    int(table_rect.bottom() - handle_size // 2),
+                    handle_size,
+                    handle_size
+                ))
+                
+                # 右下角
+                painter.drawRect(QRect(
+                    int(table_rect.right() - handle_size // 2),
+                    int(table_rect.bottom() - handle_size // 2),
+                    handle_size,
+                    handle_size
+                ))
             
             painter.end()
         
@@ -421,19 +547,31 @@ class PasteImageTextEdit(QTextEdit):
             # 检查是否点击了表格
             table = cursor.currentTable()
             if table:
-                # 点击了表格，选中整个表格
-                self.selected_table = table
-                self.selected_table_cursor = cursor
-                
-                # 取消图片选中
-                if self.selected_image:
-                    self.selected_image = None
-                    self.selected_image_rect = None
-                    self.selected_image_cursor = None
-                
-                self.viewport().update()
-                event.accept()
-                return
+                # 检查是否点击了全选图标
+                if self.is_click_on_table_select_handle(event.pos(), table):
+                    # 点击了全选图标，选中整个表格
+                    self.selected_table = table
+                    self.selected_table_cursor = cursor
+                    
+                    # 取消图片选中
+                    if self.selected_image:
+                        self.selected_image = None
+                        self.selected_image_rect = None
+                        self.selected_image_cursor = None
+                    
+                    self.viewport().update()
+                    event.accept()
+                    return
+                else:
+                    # 点击了表格内容区域，取消表格选中，进入编辑模式
+                    if self.selected_table:
+                        self.selected_table = None
+                        self.selected_table_cursor = None
+                        self.viewport().update()
+                    
+                    # 使用默认行为，进入单元格编辑模式
+                    super().mousePressEvent(event)
+                    return
             else:
                 # 取消表格选中
                 if self.selected_table:
@@ -591,8 +729,13 @@ class PasteImageTextEdit(QTextEdit):
             else:
                 # 检查是否悬停在表格上
                 cursor = self.cursorForPosition(event.pos())
-                if cursor.currentTable():
-                    self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                table = cursor.currentTable()
+                if table:
+                    # 检查是否悬停在全选图标上
+                    if self.is_click_on_table_select_handle(event.pos(), table):
+                        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                    else:
+                        self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
                 else:
                     self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         
@@ -698,15 +841,26 @@ class PasteImageTextEdit(QTextEdit):
         """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
         # 检查是否按下了删除键（Delete 或 Backspace）
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            # 如果有选中的表格，删除整个表格
+            # 如果有选中的表格，需要判断是否在编辑表格内容
             if self.selected_table and self.selected_table_cursor:
+                # 获取当前光标
+                current_cursor = self.textCursor()
+                
+                # 检查当前光标是否在表格内（正在编辑单元格）
+                current_table = current_cursor.currentTable()
+                
+                # 如果当前光标在表格内，说明用户正在编辑单元格内容
+                # 此时不应该删除整个表格，而是使用默认行为删除单元格内容
+                if current_table == self.selected_table:
+                    # 用户正在编辑表格内容，使用默认行为
+                    super().keyPressEvent(event)
+                    return
+                
+                # 如果当前光标不在表格内，说明用户选中了整个表格
+                # 此时应该删除整个表格
                 # 创建光标并选中整个表格
-                cursor = QTextCursor(self.selected_table_cursor)
+                cursor = QTextCursor(self.document())
                 
-                # 移动到表格的开始位置
-                cursor.movePosition(QTextCursor.MoveOperation.Start)
-                
-                # 选中整个表格（通过选中表格的所有内容）
                 # 获取表格在文档中的位置
                 table_start = self.selected_table.firstPosition()
                 table_end = self.selected_table.lastPosition()
