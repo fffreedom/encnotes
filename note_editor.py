@@ -575,7 +575,34 @@ class PasteImageTextEdit(QTextEdit):
             image_format, image_cursor, image_rect = self.find_image_at_position(event.pos())
             
             if image_format and image_cursor:
-                # 双击图片时，只选中图片，不执行其他操作
+                # 检查是否是公式图片
+                image_name = image_format.name()
+                
+                if '|||MATH:' in image_name:
+                    # 这是一个公式图片，弹出编辑对话框
+                    parts = image_name.split('|||', 1)
+                    if len(parts) == 2:
+                        metadata = parts[1]  # MATH:type:code
+                        
+                        # 解析元数据
+                        if metadata.startswith('MATH:'):
+                            metadata_parts = metadata[5:].split(':', 1)  # 去掉 'MATH:' 前缀
+                            if len(metadata_parts) == 2:
+                                formula_type = metadata_parts[0]
+                                escaped_code = metadata_parts[1]
+                                # 反转义HTML实体
+                                code = html.unescape(escaped_code)
+                                
+                                # 调用父编辑器的编辑公式方法
+                                if self.parent_editor:
+                                    self.parent_editor.edit_math_formula(
+                                        code, formula_type, image_cursor, image_format
+                                    )
+                                
+                                event.accept()
+                                return
+                
+                # 普通图片，只选中图片，不执行其他操作
                 self.selected_image = image_format
                 self.selected_image_cursor = image_cursor
                 self.selected_image_rect = image_rect
@@ -1683,6 +1710,139 @@ class NoteEditor(QWidget):
                 cursor.insertText(f"$${code}$$")
             else:
                 cursor.insertText(f"[MathML: {code[:50]}...]")
+    
+    def edit_math_formula(self, code, formula_type, image_cursor, image_format):
+        """编辑已存在的数学公式
+        
+        Args:
+            code: 公式代码
+            formula_type: 公式类型（'latex' 或 'mathml'）
+            image_cursor: 图片字符的光标位置
+            image_format: 图片格式
+        """
+        # 根据公式类型弹出对应的编辑对话框
+        if formula_type == 'latex':
+            dialog = LatexInputDialog(self)
+            # 设置对话框中的初始内容为原公式代码
+            dialog.input_edit.setPlainText(code)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                new_code = dialog.get_latex()
+                if new_code and new_code != code:
+                    # 用户修改了公式，更新公式图片
+                    self._update_formula_image(new_code, formula_type, image_cursor, image_format)
+        
+        elif formula_type == 'mathml':
+            dialog = MathMLInputDialog(self)
+            # 设置对话框中的初始内容为原公式代码
+            dialog.input_edit.setPlainText(code)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                new_code = dialog.get_mathml()
+                if new_code and new_code != code:
+                    # 用户修改了公式，更新公式图片
+                    self._update_formula_image(new_code, formula_type, image_cursor, image_format)
+    
+    def _update_formula_image(self, code, formula_type, image_cursor, old_image_format):
+        """更新公式图片
+        
+        Args:
+            code: 新的公式代码
+            formula_type: 公式类型
+            image_cursor: 图片字符的光标位置
+            old_image_format: 旧的图片格式
+        """
+        # 渲染新公式为图片
+        image_data = self.math_renderer.render(code, formula_type)
+        
+        if image_data and not image_data.isNull():
+            try:
+                from PIL import Image as PILImage
+                import io
+                
+                # 将 QImage 转换为 PIL Image
+                width = image_data.width()
+                height = image_data.height()
+                
+                image_data = image_data.convertToFormat(QImage.Format.Format_RGBA8888)
+                ptr = image_data.constBits()
+                ptr.setsize(image_data.sizeInBytes())
+                
+                pil_image = PILImage.frombytes('RGBA', (width, height), bytes(ptr), 'raw', 'RGBA', 0, 1)
+                
+                if pil_image.mode == 'RGBA':
+                    background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
+                    background.paste(pil_image, mask=pil_image.split()[3])
+                    pil_image = background
+                
+                buffer = io.BytesIO()
+                pil_image.save(buffer, format='PNG', optimize=True)
+                image_bytes = buffer.getvalue()
+                
+                image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                
+                # 创建新的图片名称（包含元数据）
+                escaped_code = html.escape(code)
+                new_image_name = f"data:image/png;base64,{image_base64}|||MATH:{formula_type}:{escaped_code}"
+                
+                # 查找真正的图片字符位置
+                old_pos = image_cursor.position()
+                cursor = QTextCursor(self.text_edit.document())
+                real_image_pos = None
+                
+                for offset in range(2):
+                    check_pos = old_pos + offset
+                    cursor.setPosition(check_pos)
+                    
+                    if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
+                        selected_text = cursor.selectedText()
+                        char_format = cursor.charFormat()
+                        
+                        if char_format.isImageFormat() and selected_text == '\ufffc':
+                            real_image_pos = check_pos
+                            break
+                    
+                    cursor.clearSelection()
+                
+                if real_image_pos is None:
+                    print("错误：找不到图片字符")
+                    return
+                
+                # 开始编辑块
+                cursor.beginEditBlock()
+                
+                # 删除旧图片
+                cursor.setPosition(real_image_pos)
+                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                cursor.removeSelectedText()
+                
+                # 插入新图片（保持原尺寸或使用新尺寸）
+                new_format = QTextImageFormat()
+                new_format.setName(new_image_name)
+                # 保持原图片的尺寸
+                new_format.setWidth(old_image_format.width())
+                new_format.setHeight(old_image_format.height())
+                new_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
+                cursor.insertImage(new_format)
+                
+                cursor.endEditBlock()
+                
+                print(f"成功更新公式: {width}x{height}")
+                
+                # 取消选中状态
+                if hasattr(self.text_edit, 'selected_image'):
+                    self.text_edit.selected_image = None
+                    self.text_edit.selected_image_rect = None
+                    self.text_edit.selected_image_cursor = None
+                    self.text_edit.viewport().update()
+                
+            except Exception as e:
+                print(f"更新公式时发生错误: {e}")
+                import traceback
+                traceback.print_exc()
+                QMessageBox.warning(self, "错误", f"更新公式失败: {str(e)}")
+        else:
+            QMessageBox.warning(self, "错误", "公式渲染失败")
 
 
 class TableInsertDialog(QDialog):

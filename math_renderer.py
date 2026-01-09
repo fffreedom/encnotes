@@ -15,8 +15,8 @@ class MathRenderer:
     """数学公式渲染器"""
     
     def __init__(self):
-        self.dpi = 144  # 渲染分辨率（144 DPI适配高分辨率屏幕，提供更清晰的显示）
-        self.fontsize = 8  # 公式字体大小（更小更紧凑，适合行内显示）
+        self.dpi = 200  # 渲染分辨率（200 DPI适配高分辨率屏幕，提供更清晰的显示）
+        self.fontsize = 4  # 公式字体大小（更小更紧凑，适合行内显示）
         
     def render(self, code, formula_type):
         """
@@ -45,28 +45,35 @@ class MathRenderer:
             matplotlib.use('Agg')  # 使用非GUI后端
             import matplotlib.pyplot as plt
             from matplotlib import mathtext
+            from matplotlib.font_manager import FontProperties
+            
+            # 创建字体属性对象，指定字体大小
+            font_prop = FontProperties(size=self.fontsize)
             
             # 创建图形
             fig = plt.figure(figsize=(0.01, 0.01))
             fig.patch.set_facecolor('white')
             
-            # 渲染LaTeX
+            # 渲染LaTeX（传入字体属性，让图片尺寸根据字体大小计算）
             parser = mathtext.MathTextParser("path")
             width, height, depth, _, _ = parser.parse(
                 f'${latex_code}$',
                 dpi=self.dpi,
-                prop=None
+                prop=font_prop  # **关键修复**：传入字体属性，影响尺寸计算
             )
             
             # 调整图形大小
             total_height = height + depth
             fig.set_size_inches(width / self.dpi, total_height / self.dpi)
             
-            # 添加文本（使用center对齐，让公式在图片中居中）
+            # 添加文本
+            # 使用 baseline 对齐，并根据 depth 调整垂直位置
+            # 这样可以确保公式的基线与文本基线对齐
+            y_position = depth / total_height if total_height > 0 else 0
             fig.text(
-                0.5, 0.5, f'${latex_code}$',
+                0.5, y_position, f'${latex_code}$',
                 fontsize=self.fontsize,
-                verticalalignment='bottom',
+                verticalalignment='baseline',
                 horizontalalignment='center'
             )
             
