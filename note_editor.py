@@ -334,9 +334,12 @@ class PasteImageTextEdit(QTextEdit):
         
         from PyQt6.QtCore import QRect
         
-        # 图片的左上角坐标就是光标位置
+        # 图片的左边界是光标的左边界
         image_left = cursor_rect.left()
-        image_top = cursor_rect.top()
+        
+        # **关键修复**：图片的顶部应该是光标底部减去图片高度
+        # 因为图片是从基线向上绘制的（vertical-align: bottom）
+        image_top = cursor_rect.bottom() - int(height)
         
         result_rect = QRect(image_left, image_top, int(width), int(height))
         
