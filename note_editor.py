@@ -1816,7 +1816,13 @@ class NoteEditor(QWidget):
             cursor.setBlockFormat(block_fmt)
         else:
             # 否则创建项目符号列表
-            cursor.insertList(QTextListFormat.Style.ListDisc)
+            if cursor.hasSelection():
+                # 如果有选中文字，保存选中的文字并转换为列表
+                selected_text = cursor.selectedText()
+                cursor.insertList(QTextListFormat.Style.ListDisc)
+                cursor.insertText(selected_text)
+            else:
+                cursor.insertList(QTextListFormat.Style.ListDisc)
     
     def toggle_numbered_list(self):
         """切换编号列表"""
@@ -1830,7 +1836,13 @@ class NoteEditor(QWidget):
             cursor.setBlockFormat(block_fmt)
         else:
             # 否则创建编号列表
-            cursor.insertList(QTextListFormat.Style.ListDecimal)
+            if cursor.hasSelection():
+                # 如果有选中文字，保存选中的文字并转换为列表
+                selected_text = cursor.selectedText()
+                cursor.insertList(QTextListFormat.Style.ListDecimal)
+                cursor.insertText(selected_text)
+            else:
+                cursor.insertList(QTextListFormat.Style.ListDecimal)
     
     def update_format_menu_state(self):
         """更新格式菜单的状态（显示当前格式）"""
