@@ -2230,6 +2230,7 @@ class MainWindow(QMainWindow):
         # 添加标签标题（与iCloud并列）
         tag_header = QListWidgetItem("🏷️ 标签")
         tag_header.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
+        tag_header.setData(Qt.ItemDataRole.UserRole, ("tag_header", None))  # 标记为标签标题
         font = tag_header.font()
         font.setBold(True)
         tag_header.setFont(font)
@@ -2240,7 +2241,9 @@ class MainWindow(QMainWindow):
         for tag in self.tags:
             count = self.note_manager.get_tag_count(tag['id'])
             item_text = f"    # {tag['name']} ({count})"
-            self.folder_list.addItem(item_text)
+            tag_item = QListWidgetItem(item_text)
+            tag_item.setData(Qt.ItemDataRole.UserRole, ("tag", tag['id']))  # 标记为标签项
+            self.folder_list.addItem(tag_item)
         
         # 恢复选中状态
         if current_row >= 0 and current_row < self.folder_list.count():
@@ -2822,49 +2825,101 @@ class MainWindow(QMainWindow):
         item = self.folder_list.itemAt(position)
         menu = QMenu(self)
         
-        # 获取当前行
-        current_row = self.folder_list.currentRow()
-        folder_count = len(self.custom_folders)
-        
-        # 判断是否点击在自定义文件夹上（索引从2开始，到2+folder_count-1）
-        if item and 2 <= current_row < 2 + folder_count:
-            # 点击在文件夹上
-            folder_index = current_row - 2
-            if 0 <= folder_index < len(self.custom_folders):
-                folder_id = self.custom_folders[folder_index]['id']
-                
-                # 新建笔记（若该文件夹已存在“空的新笔记草稿”，则禁用）
-                new_note_action = QAction("新建笔记", self)
-                try:
-                    notes = self.note_manager.get_notes_by_folder(folder_id)
-                except Exception:
-                    notes = []
-                if any(self._is_empty_new_note(n) for n in notes):
-                    new_note_action.setEnabled(False)
-                new_note_action.triggered.connect(lambda: self.create_note_in_folder(folder_id))
-                menu.addAction(new_note_action)
-                
-                # 新建子文件夹
-                new_subfolder_action = QAction("新建文件夹", self)
-                new_subfolder_action.triggered.connect(lambda: self.create_subfolder(folder_id))
-                menu.addAction(new_subfolder_action)
-                
-                menu.addSeparator()
-                
-                # 重命名文件夹
-                rename_action = QAction("重命名文件夹", self)
-                rename_action.triggered.connect(lambda: self.rename_folder(folder_id))
-                menu.addAction(rename_action)
-                
-                # 删除文件夹
-                delete_action = QAction("删除文件夹", self)
-                delete_action.triggered.connect(lambda: self.delete_folder_confirm(folder_id))
-                menu.addAction(delete_action)
-        else:
-            # 点击在空白区域或其他位置，只显示新建文件夹
+        if not item:
+            # 点击在空白区域，显示统一的三项菜单
+            new_note_action = QAction("新建笔记", self)
+            new_note_action.triggered.connect(self.create_new_note)
+            menu.addAction(new_note_action)
+            
             new_folder_action = QAction("新建文件夹", self)
             new_folder_action.triggered.connect(self.create_new_folder)
             menu.addAction(new_folder_action)
+            
+            new_tag_action = QAction("新建标签", self)
+            new_tag_action.triggered.connect(self.create_new_tag)
+            menu.addAction(new_tag_action)
+            
+            menu.exec(self.folder_list.mapToGlobal(position))
+            return
+        
+        # 获取item的数据标识
+        payload = item.data(Qt.ItemDataRole.UserRole)
+        
+        # 判断是否是系统文件夹（所有笔记、最近删除）
+        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "system":
+            # 系统文件夹只显示"新建文件夹"
+            new_folder_action = QAction("新建文件夹", self)
+            new_folder_action.triggered.connect(self.create_new_folder)
+            menu.addAction(new_folder_action)
+            
+            menu.exec(self.folder_list.mapToGlobal(position))
+            return
+        
+        # 判断是否是标签标题或标签项
+        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] in ("tag_header", "tag"):
+            # 点击在标签标题或标签上，显示统一的三项菜单
+            new_note_action = QAction("新建笔记", self)
+            new_note_action.triggered.connect(self.create_new_note)
+            menu.addAction(new_note_action)
+            
+            new_folder_action = QAction("新建文件夹", self)
+            new_folder_action.triggered.connect(self.create_new_folder)
+            menu.addAction(new_folder_action)
+            
+            new_tag_action = QAction("新建标签", self)
+            new_tag_action.triggered.connect(self.create_new_tag)
+            menu.addAction(new_tag_action)
+            
+            menu.exec(self.folder_list.mapToGlobal(position))
+            return
+        
+        # 判断是否是文件夹
+        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder":
+            folder_id = payload[1]
+            # 点击在文件夹上，显示文件夹特定操作菜单
+            # 新建笔记（若该文件夹已存在"空的新笔记草稿"，则禁用）
+            new_note_action = QAction("新建笔记", self)
+            try:
+                notes = self.note_manager.get_notes_by_folder(folder_id)
+            except Exception:
+                notes = []
+            if any(self._is_empty_new_note(n) for n in notes):
+                new_note_action.setEnabled(False)
+            new_note_action.triggered.connect(lambda: self.create_note_in_folder(folder_id))
+            menu.addAction(new_note_action)
+            
+            # 新建子文件夹
+            new_subfolder_action = QAction("新建文件夹", self)
+            new_subfolder_action.triggered.connect(lambda: self.create_subfolder(folder_id))
+            menu.addAction(new_subfolder_action)
+            
+            menu.addSeparator()
+            
+            # 重命名文件夹
+            rename_action = QAction("重命名文件夹", self)
+            rename_action.triggered.connect(lambda: self.rename_folder(folder_id))
+            menu.addAction(rename_action)
+            
+            # 删除文件夹
+            delete_action = QAction("删除文件夹", self)
+            delete_action.triggered.connect(lambda: self.delete_folder_confirm(folder_id))
+            menu.addAction(delete_action)
+            
+            menu.exec(self.folder_list.mapToGlobal(position))
+            return
+        
+        # 其他情况（系统项等），显示统一的三项菜单
+        new_note_action = QAction("新建笔记", self)
+        new_note_action.triggered.connect(self.create_new_note)
+        menu.addAction(new_note_action)
+        
+        new_folder_action = QAction("新建文件夹", self)
+        new_folder_action.triggered.connect(self.create_new_folder)
+        menu.addAction(new_folder_action)
+        
+        new_tag_action = QAction("新建标签", self)
+        new_tag_action.triggered.connect(self.create_new_tag)
+        menu.addAction(new_tag_action)
         
         menu.exec(self.folder_list.mapToGlobal(position))
     
@@ -3189,8 +3244,9 @@ class MainWindow(QMainWindow):
         # 清除多选状态
         self.selected_note_rows.clear()
         
-        # 重新加载笔记列表（如果在标签视图下）
+        # 重新加载笔记列表和文件夹列表（更新标签数字）
         self.load_notes()
+        self.load_folders()
         
         count = len(note_ids)
         self.statusBar().showMessage(f"已为 {count} 条笔记添加标签 '{tag_name}'", 2000)
