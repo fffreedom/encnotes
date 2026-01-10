@@ -705,6 +705,9 @@ class NoteListWidget(QListWidget):
         self.press_pos = None  # 记录鼠标按下的位置
         self.press_row = None  # 记录鼠标按下时的行号
         self.was_in_multi_select = False  # 记录按下时是否处于多选状态
+        
+        # 启用右键菜单
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -752,11 +755,7 @@ class NoteListWidget(QListWidget):
         painter.end()
 
     def mousePressEvent(self, event):
-        """处理鼠标点击事件，支持Shift范围选择和Command跳选"""
-        if event.button() != Qt.MouseButton.LeftButton:
-            super().mousePressEvent(event)
-            return
-        
+        """处理鼠标按下事件，支持多选"""
         # 获取点击的item
         item = self.itemAt(event.pos())
         if not item:
@@ -770,6 +769,17 @@ class NoteListWidget(QListWidget):
         
         clicked_row = self.row(item)
         modifiers = event.modifiers()
+        
+        # 日志：记录鼠标按钮类型和当前选中状态
+        button_name = "Left" if event.button() == Qt.MouseButton.LeftButton else "Right" if event.button() == Qt.MouseButton.RightButton else "Other"
+        selected_count = len(self.main_window.selected_note_rows) if self.main_window else 0
+        print(f"[mousePressEvent] Button: {button_name}, Clicked row: {clicked_row}, Selected count: {selected_count}, Selected rows: {self.main_window.selected_note_rows if self.main_window else set()}")
+        
+        # 只处理左键点击的多选逻辑，右键用于显示菜单
+        if event.button() != Qt.MouseButton.LeftButton:
+            print(f"[mousePressEvent] Non-left button, ignoring and returning (let contextMenuEvent handle it)")
+            # 不调用super()，直接返回，让Qt的事件系统继续传递到contextMenuEvent
+            return
         
         # Command键：跳选（添加/移除单个项）
         if modifiers & Qt.KeyboardModifier.ControlModifier or modifiers & Qt.KeyboardModifier.MetaModifier:
@@ -810,16 +820,23 @@ class NoteListWidget(QListWidget):
 
     def mouseReleaseEvent(self, event):
         """处理鼠标释放事件，如果是点击而非拖动，则取消多选状态"""
+        # 日志：记录鼠标释放事件
+        button_name = "Left" if event.button() == Qt.MouseButton.LeftButton else "Right" if event.button() == Qt.MouseButton.RightButton else "Other"
+        print(f"[mouseReleaseEvent] Button: {button_name}, press_pos: {self.press_pos}, was_in_multi_select: {self.was_in_multi_select}")
+        
+        # 只处理左键释放事件，右键用于显示菜单，不应该影响选中状态
         if event.button() == Qt.MouseButton.LeftButton:
             # 检查是否记录了按下位置（说明是在多选状态下点击的）
             if self.press_pos is not None and self.was_in_multi_select:
                 # 计算鼠标移动距离
                 move_distance = (event.pos() - self.press_pos).manhattanLength()
+                print(f"[mouseReleaseEvent] Move distance: {move_distance}")
                 
                 # 如果移动距离很小（小于5像素），认为是点击而非拖动
                 if move_distance < 5:
                     # 取消多选状态，只选中当前点击的笔记
                     if self.main_window and self.press_row is not None:
+                        print(f"[mouseReleaseEvent] Canceling multi-select, selecting single note: {self.press_row}")
                         self.main_window.select_single_note(self.press_row)
             
             # 清除记录的点击信息
@@ -829,6 +846,163 @@ class NoteListWidget(QListWidget):
         
         # 调用父类方法
         super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        """处理右键菜单事件（融合单选和多选功能）"""
+        if not self.main_window:
+            return
+        
+        # 日志：记录右键菜单事件触发时的状态
+        print(f"[contextMenuEvent] Selected rows before processing: {self.main_window.selected_note_rows}")
+        
+        # 获取点击位置的笔记
+        item = self.itemAt(event.pos())
+        if not item:
+            # 点击在空白区域，只显示"新建笔记"
+            menu = QMenu(self)
+            new_note_action = QAction("新建笔记", self)
+            new_note_action.triggered.connect(lambda: self.main_window.create_note_in_current_folder())
+            if self.main_window.current_folder_id is None or self.main_window.is_viewing_deleted:
+                new_note_action.setEnabled(False)
+            menu.addAction(new_note_action)
+            menu.exec(event.globalPos())
+            return
+        
+        clicked_row = self.row(item)
+        note_id = item.data(Qt.ItemDataRole.UserRole)
+        
+        print(f"[contextMenuEvent] Clicked row: {clicked_row}, note_id: {note_id}")
+        
+        # 如果点击的笔记不在选中集合中，则只选中当前笔记
+        if clicked_row not in self.main_window.selected_note_rows:
+            print(f"[contextMenuEvent] Clicked row not in selected rows, selecting single note")
+            self.main_window.select_single_note(clicked_row)
+        else:
+            print(f"[contextMenuEvent] Clicked row is in selected rows, keeping multi-select")
+        
+        # 获取所有选中的笔记ID
+        selected_note_ids = []
+        for row in sorted(self.main_window.selected_note_rows):
+            item = self.item(row)
+            if item:
+                selected_note_ids.append(item.data(Qt.ItemDataRole.UserRole))
+        
+        print(f"[contextMenuEvent] Final selected note IDs: {selected_note_ids}, count: {len(selected_note_ids)}")
+        
+        if not selected_note_ids:
+            return
+        
+        is_single_note = len(selected_note_ids) == 1
+        
+        # 创建右键菜单
+        menu = QMenu(self)
+        
+        # 1. 新建笔记（在"所有笔记"和"最近删除"视图中禁用）
+        new_note_action = QAction("新建笔记", self)
+        new_note_action.triggered.connect(lambda: self.main_window.create_new_note())
+        if self.main_window.current_folder_id is None or self.main_window.is_viewing_deleted:
+            new_note_action.setEnabled(False)
+        menu.addAction(new_note_action)
+        
+        menu.addSeparator()
+        
+        # 2. 移到文件夹（使用树形结构）
+        move_menu = menu.addMenu("移到")
+        self._populate_move_to_menu(move_menu, selected_note_ids)
+        
+        menu.addSeparator()
+        
+        # 3. 置顶/取消置顶
+        all_pinned = all(self.main_window.note_manager.is_note_pinned(nid) for nid in selected_note_ids)
+        pin_text = "取消置顶" if all_pinned else "置顶"
+        pin_action = QAction(pin_text, self)
+        pin_action.triggered.connect(lambda: self.main_window.batch_toggle_pin_notes(selected_note_ids))
+        menu.addAction(pin_action)
+        
+        menu.addSeparator()
+        
+        # 4. 标签
+        tag_menu = menu.addMenu("标签")
+        all_tags = self.main_window.note_manager.get_all_tags()
+        if all_tags:
+            for tag in all_tags:
+                tag_id = tag['id']
+                tag_name = tag['name']
+                
+                action = QAction(tag_name, self)
+                action.triggered.connect(lambda checked, tid=tag_id, tname=tag_name: 
+                                       self.main_window.batch_add_tag_to_notes(selected_note_ids, tid, tname))
+                tag_menu.addAction(action)
+        else:
+            no_tags_action = QAction("(无标签)", self)
+            no_tags_action.setEnabled(False)
+            tag_menu.addAction(no_tags_action)
+        
+        menu.addSeparator()
+        
+        # 5. 删除笔记
+        delete_text = f"删除笔记 ({len(selected_note_ids)}个)" if len(selected_note_ids) > 1 else "删除笔记"
+        delete_action = QAction(delete_text, self)
+        delete_action.triggered.connect(lambda: self.main_window.batch_delete_notes(selected_note_ids))
+        menu.addAction(delete_action)
+        
+        # 显示菜单
+        menu.exec(event.globalPos())
+    
+    def _populate_move_to_menu(self, menu: QMenu, note_ids: list):
+        """填充"移到"子菜单：展示所有文件夹（含层级），支持批量移动"""
+        
+        # 构建文件夹树
+        try:
+            all_folders = self.main_window.note_manager.get_all_folders()
+        except Exception:
+            all_folders = []
+        
+        children_map = {}
+        for f in all_folders:
+            pid = f.get('parent_folder_id')
+            children_map.setdefault(pid, []).append(f)
+        
+        def _sort_key(folder: dict):
+            return (int(folder.get('order_index', 0) or 0), str(folder.get('name', '')))
+        
+        for pid in list(children_map.keys()):
+            try:
+                children_map[pid].sort(key=_sort_key)
+            except Exception:
+                pass
+        
+        def _add_folder_branch(parent_menu: QMenu, parent_id):
+            folders = children_map.get(parent_id, [])
+            for folder in folders:
+                fid = folder.get('id')
+                name = folder.get('name') or '未命名文件夹'
+                
+                has_children = bool(children_map.get(fid))
+                
+                if has_children:
+                    sub = parent_menu.addMenu(f"📁 {name}")
+                    _add_folder_branch(sub, fid)
+                    
+                    # 允许移动到这个父文件夹
+                    sub.addSeparator()
+                    act_here = QAction(f"移动到 \"{name}\"", self)
+                    act_here.triggered.connect(lambda checked=False, _fid=fid: 
+                                             self.main_window.batch_move_notes(note_ids, _fid))
+                    sub.addAction(act_here)
+                else:
+                    act = QAction(f"📁 {name}", self)
+                    act.triggered.connect(lambda checked=False, _fid=fid: 
+                                        self.main_window.batch_move_notes(note_ids, _fid))
+                    parent_menu.addAction(act)
+        
+        _add_folder_branch(menu, None)
+        
+        # 如果没有任何文件夹，给一个禁用提示
+        if not children_map.get(None):
+            empty = QAction("（暂无文件夹）", self)
+            empty.setEnabled(False)
+            menu.addAction(empty)
 
 
 class FolderTwisty(QLabel):
@@ -1186,9 +1360,7 @@ class MainWindow(QMainWindow):
         sb.sliderPressed.connect(self._on_note_scrollbar_pressed)
         sb.sliderReleased.connect(self._on_note_scrollbar_released)
 
-        # 为笔记列表添加右键菜单
-        self.note_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.note_list.customContextMenuRequested.connect(self.show_note_context_menu)
+        # 右键菜单由NoteListWidget的contextMenuEvent处理
         self.note_list.setMaximumWidth(500)
         self.note_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 去掉焦点边框
         self.note_list.setStyleSheet("""
@@ -2749,26 +2921,7 @@ class MainWindow(QMainWindow):
         menu.exec(self.note_list.mapToGlobal(position))
 
     def _populate_move_to_menu(self, menu: QMenu, note_id: str):
-        """填充“移到”子菜单：展示所有文件夹（含层级），并支持移出文件夹。"""
-        try:
-            note = self.note_manager.get_note(note_id)
-        except Exception:
-            note = None
-
-        current_folder_id = None
-        try:
-            current_folder_id = note.get('folder_id') if note else None
-        except Exception:
-            current_folder_id = None
-
-        # “无文件夹 / 所有笔记”语义：把 ZFOLDERID 置为 NULL
-        move_to_all = QAction("所有笔记", self)
-        move_to_all.setCheckable(True)
-        move_to_all.setChecked(current_folder_id in (None, ""))
-        move_to_all.triggered.connect(lambda: self._move_note_to_folder_and_refresh(note_id, None))
-        menu.addAction(move_to_all)
-
-        menu.addSeparator()
+        """填充"移到"子菜单：展示所有文件夹（含层级）"""
 
         # 构建文件夹树
         try:
@@ -2803,17 +2956,13 @@ class MainWindow(QMainWindow):
                     # 子菜单的标题不可直接触发移动（和备忘录一致：展开后选择具体目标）
                     _add_folder_branch(sub, fid)
 
-                    # 但为了可用性，允许“把笔记移到这个父文件夹”
+                    # 允许移动到这个父文件夹
                     sub.addSeparator()
-                    act_here = QAction(f"移动到“{name}”", self)
-                    act_here.setCheckable(True)
-                    act_here.setChecked(current_folder_id == fid)
+                    act_here = QAction(f"移动到 \"{name}\"", self)
                     act_here.triggered.connect(lambda checked=False, _fid=fid: self._move_note_to_folder_and_refresh(note_id, _fid))
                     sub.addAction(act_here)
                 else:
                     act = QAction(f"📁 {name}", self)
-                    act.setCheckable(True)
-                    act.setChecked(current_folder_id == fid)
                     act.triggered.connect(lambda checked=False, _fid=fid: self._move_note_to_folder_and_refresh(note_id, _fid))
                     parent_menu.addAction(act)
 
@@ -2945,30 +3094,6 @@ class MainWindow(QMainWindow):
         self._update_new_note_action_enabled()
 
     
-    def rename_note(self, note_id: str):
-        """重命名笔记"""
-        note = self.note_manager.get_note(note_id)
-        if not note:
-            return
-        
-        # 获取当前标题（从HTML内容中提取第一行）
-        current_title = note.get('title', '无标题')
-        
-        name, ok = QInputDialog.getText(
-            self, "重命名笔记",
-            "请输入新标题:",
-            text=current_title
-        )
-        
-        if ok and name.strip():
-            # 更新笔记标题
-            self.note_manager.update_note(note_id, title=name.strip())
-            self.load_notes()
-            
-            # 如果是当前笔记，重新加载编辑器内容
-            if note_id == self.current_note_id:
-                self.load_note_content(note_id)
-    
     def toggle_pin_note(self, note_id: str):
         """切换笔记的置顶状态"""
         is_pinned = self.note_manager.toggle_pin_note(note_id)
@@ -2979,6 +3104,101 @@ class MainWindow(QMainWindow):
         # 显示提示信息
         status_text = "已置顶" if is_pinned else "已取消置顶"
         self.statusBar().showMessage(status_text, 2000)
+    
+    def batch_delete_notes(self, note_ids: list):
+        """批量删除笔记"""
+        count = len(note_ids)
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定要删除这 {count} 条笔记吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            for note_id in note_ids:
+                self.note_manager.delete_note(note_id)
+            
+            # 清除多选状态
+            self.selected_note_rows.clear()
+            
+            # 重新加载笔记列表
+            self.load_notes()
+            
+            # 同步刷新左侧文件夹计数
+            selected_row = self.folder_list.currentRow()
+            self.load_folders()
+            try:
+                if selected_row is not None and 0 <= selected_row < self.folder_list.count():
+                    self.folder_list.setCurrentRow(selected_row)
+            except Exception:
+                pass
+            
+            # 如果删除的包含当前笔记，清空编辑器
+            if self.current_note_id in note_ids:
+                self.current_note_id = None
+                self.editor.clear()
+            
+            self.statusBar().showMessage(f"已删除 {count} 条笔记", 2000)
+    
+    def batch_move_notes(self, note_ids: list, target_folder_id: str):
+        """批量移动笔记到指定文件夹"""
+        for note_id in note_ids:
+            self.note_manager.move_note_to_folder(note_id, target_folder_id)
+        
+        # 清除多选状态
+        self.selected_note_rows.clear()
+        
+        # 重新加载笔记列表和文件夹列表
+        self.load_notes()
+        self.load_folders()
+        
+        count = len(note_ids)
+        folder_name = "所有笔记" if target_folder_id is None else self.note_manager.get_folder(target_folder_id)['name']
+        self.statusBar().showMessage(f"已将 {count} 条笔记移动到 {folder_name}", 2000)
+    
+    def batch_toggle_pin_notes(self, note_ids: list):
+        """批量切换笔记的置顶状态"""
+        # 检查是否都已置顶
+        all_pinned = all(self.note_manager.is_note_pinned(nid) for nid in note_ids)
+        
+        # 统一设置为相反状态
+        for note_id in note_ids:
+            current_pinned = self.note_manager.is_note_pinned(note_id)
+            if all_pinned and current_pinned:
+                # 都已置顶，则取消置顶
+                self.note_manager.toggle_pin_note(note_id)
+            elif not all_pinned and not current_pinned:
+                # 不是都置顶，则将未置顶的置顶
+                self.note_manager.toggle_pin_note(note_id)
+        
+        # 清除多选状态
+        self.selected_note_rows.clear()
+        
+        # 重新加载笔记列表
+        self.load_notes()
+        
+        count = len(note_ids)
+        status_text = f"已取消置顶 {count} 条笔记" if all_pinned else f"已置顶 {count} 条笔记"
+        self.statusBar().showMessage(status_text, 2000)
+    
+    def batch_add_tag_to_notes(self, note_ids: list, tag_id: str, tag_name: str):
+        """批量为笔记添加标签"""
+        for note_id in note_ids:
+            self.note_manager.add_tag_to_note(note_id, tag_id)
+        
+        # 清除多选状态
+        self.selected_note_rows.clear()
+        
+        # 重新加载笔记列表（如果在标签视图下）
+        self.load_notes()
+        
+        count = len(note_ids)
+        self.statusBar().showMessage(f"已为 {count} 条笔记添加标签 '{tag_name}'", 2000)
+    
+    def create_note_in_current_folder(self):
+        """在当前文件夹下创建笔记"""
+        if self.current_folder_id:
+            self.create_note_in_folder(self.current_folder_id)
     
     def delete_note_by_id(self, note_id: str):
         """根据ID删除笔记"""
