@@ -388,14 +388,31 @@ class FolderListWidget(QListWidget):
             if drag_source == note_list:
                 # 拖动源是笔记列表
                 is_note_drag = True
-                note_current_item = note_list.currentItem()
-                if not note_current_item:
-                    super().dropEvent(event)
-                    return
-                note_data = note_current_item.data(Qt.ItemDataRole.UserRole)
-                if note_data:
-                    src_note_id = note_data
+                
+                # 检查是否有多选笔记
+                src_note_ids = []
+                if hasattr(self.main_window, 'selected_note_rows') and self.main_window.selected_note_rows:
+                    # 有多选笔记，获取所有选中的笔记ID
+                    for row in self.main_window.selected_note_rows:
+                        item = note_list.item(row)
+                        if item:
+                            note_id = item.data(Qt.ItemDataRole.UserRole)
+                            if note_id:
+                                src_note_ids.append(note_id)
                 else:
+                    # 没有多选，使用当前选中的笔记
+                    note_current_item = note_list.currentItem()
+                    if not note_current_item:
+                        super().dropEvent(event)
+                        return
+                    note_data = note_current_item.data(Qt.ItemDataRole.UserRole)
+                    if note_data:
+                        src_note_ids = [note_data]
+                    else:
+                        super().dropEvent(event)
+                        return
+                
+                if not src_note_ids:
                     super().dropEvent(event)
                     return
             elif drag_source == folder_list:
@@ -440,11 +457,14 @@ class FolderListWidget(QListWidget):
             
             # 4. 根据拖拽类型执行不同的操作
             if is_note_drag:
-                # 处理笔记拖拽
+                # 处理笔记拖拽（支持多选）
                 print(f"[性能-笔记拖拽] 准备阶段耗时: {(t_before_db - t_start)*1000:.2f}ms")
+                print(f"[笔记拖拽] 移动 {len(src_note_ids)} 个笔记到文件夹: {target_folder_id}")
                 
-                # 更新笔记所属文件夹
-                self.main_window.note_manager.move_note_to_folder(src_note_id, target_folder_id)
+                # 批量更新笔记所属文件夹
+                for note_id in src_note_ids:
+                    self.main_window.note_manager.move_note_to_folder(note_id, target_folder_id)
+                
                 t_after_db = time.time()
                 print(f"[性能-笔记拖拽] 数据库更新耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
                 
@@ -681,6 +701,7 @@ class NoteListWidget(QListWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = None  # 将在MainWindow中设置
+        self.last_selected_row = None  # 记录上次选中的行，用于Shift多选
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -726,6 +747,54 @@ class NoteListWidget(QListWidget):
             painter.drawLine(x1, y, x2, y)
 
         painter.end()
+
+    def mousePressEvent(self, event):
+        """处理鼠标点击事件，支持Shift范围选择和Command跳选"""
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        
+        # 获取点击的item
+        item = self.itemAt(event.pos())
+        if not item:
+            super().mousePressEvent(event)
+            return
+        
+        # 检查是否是可选中的笔记项（排除分组标题等）
+        if not (item.flags() & Qt.ItemFlag.ItemIsSelectable):
+            super().mousePressEvent(event)
+            return
+        
+        clicked_row = self.row(item)
+        modifiers = event.modifiers()
+        
+        # Command键：跳选（添加/移除单个项）
+        if modifiers & Qt.KeyboardModifier.ControlModifier or modifiers & Qt.KeyboardModifier.MetaModifier:
+            if self.main_window:
+                self.main_window.toggle_note_selection(clicked_row)
+            self.last_selected_row = clicked_row
+            # 不要return，继续调用super()以支持拖动
+        
+        # Shift键：范围选择
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+            if self.main_window and self.last_selected_row is not None:
+                self.main_window.select_note_range(self.last_selected_row, clicked_row)
+            # 不要return，继续调用super()以支持拖动
+        
+        # 普通点击：单选或保持多选（用于拖动）
+        else:
+            if self.main_window:
+                # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动）
+                if clicked_row in self.main_window.selected_note_rows:
+                    # 不做任何改变，保持当前多选状态
+                    pass
+                else:
+                    # 点击的是未选中的笔记，执行单选
+                    self.main_window.select_single_note(clicked_row)
+            self.last_selected_row = clicked_row
+        
+        # 调用父类方法以支持拖动功能
+        super().mousePressEvent(event)
 
 
 class FolderTwisty(QLabel):
@@ -855,6 +924,9 @@ class MainWindow(QMainWindow):
         self.is_viewing_deleted = False  # 是否正在查看最近删除
         self.custom_folders = []  # 自定义文件夹列表
         self.tags = []  # 标签列表
+        
+        # 多选状态
+        self.selected_note_rows = set()  # 当前选中的笔记行号集合
 
         # 文件夹展开/折叠状态（folder_id -> bool），默认展开
         self._folder_expanded = {}
@@ -1442,6 +1514,11 @@ class MainWindow(QMainWindow):
         Args:
             select_note_id: 要选中的笔记ID，如果为None则选中第一个笔记
         """
+        # 清除多选状态
+        self.selected_note_rows.clear()
+        if hasattr(self, 'note_list') and self.note_list:
+            self.note_list.last_selected_row = None
+        
         # 手动删除所有自定义widget，避免重叠
         # 必须在clear()之前删除所有widget
         widgets_to_delete = []
@@ -3093,8 +3170,144 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # 选中变化后刷新“新建笔记”可用状态
+        # 选中变化后刷新"新建笔记"可用状态
         self._update_new_note_action_enabled()
+
+    def select_single_note(self, row):
+        """单选笔记"""
+        # 清除之前的多选状态
+        self._clear_all_selections()
+        
+        # 选中指定行
+        self.selected_note_rows = {row}
+        self._update_visual_selection()
+        
+        # 加载笔记到编辑器
+        item = self.note_list.item(row)
+        if item:
+            # 保存之前的笔记
+            if self.current_note_id:
+                self.save_current_note()
+            
+            # 阻止信号，避免触发on_note_selected
+            self.note_list.blockSignals(True)
+            self.note_list.setCurrentItem(item)
+            self.note_list.blockSignals(False)
+            
+            # 加载新笔记
+            note_id = item.data(Qt.ItemDataRole.UserRole)
+            self.current_note_id = note_id
+            self.editor.current_note_id = note_id
+            note = self.note_manager.get_note(note_id)
+            
+            if note:
+                self.editor.blockSignals(True)
+                self.editor.setHtml(note['content'])
+                self.editor.blockSignals(False)
+                
+                # 将光标移动到第一行（标题）的末尾
+                from PyQt6.QtGui import QTextCursor
+                cursor = self.editor.text_edit.textCursor()
+                cursor.movePosition(QTextCursor.MoveOperation.Start)
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                self.editor.text_edit.setTextCursor(cursor)
+                
+                # 设置焦点到编辑器
+                self.editor.text_edit.setFocus()
+            
+            # 刷新"新建笔记"可用状态
+            self._update_new_note_action_enabled()
+    
+    def toggle_note_selection(self, row):
+        """切换笔记的选中状态（Command键跳选）"""
+        if row in self.selected_note_rows:
+            # 如果已选中，则取消选中
+            self.selected_note_rows.discard(row)
+            if not self.selected_note_rows:
+                # 如果没有选中项了，清空编辑器
+                self.current_note_id = None
+                self.editor.current_note_id = None
+                self.editor.clear()
+        else:
+            # 如果未选中，则添加到选中集合
+            self.selected_note_rows.add(row)
+            # 将最后选中的项设为当前项
+            item = self.note_list.item(row)
+            if item:
+                self.note_list.blockSignals(True)
+                self.note_list.setCurrentItem(item)
+                self.note_list.blockSignals(False)
+                # 加载这个笔记到编辑器
+                note_id = item.data(Qt.ItemDataRole.UserRole)
+                self.current_note_id = note_id
+                self.editor.current_note_id = note_id
+                note = self.note_manager.get_note(note_id)
+                if note:
+                    self.editor.blockSignals(True)
+                    self.editor.setHtml(note['content'])
+                    self.editor.blockSignals(False)
+        
+        self._update_visual_selection()
+    
+    def select_note_range(self, start_row, end_row):
+        """范围选择笔记（Shift键）"""
+        # 清除之前的选择
+        self._clear_all_selections()
+        
+        # 确定范围
+        min_row = min(start_row, end_row)
+        max_row = max(start_row, end_row)
+        
+        # 选中范围内所有可选中的笔记项
+        for row in range(min_row, max_row + 1):
+            item = self.note_list.item(row)
+            if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
+                self.selected_note_rows.add(row)
+        
+        # 设置最后点击的项为当前项
+        if self.selected_note_rows:
+            item = self.note_list.item(end_row)
+            if item:
+                self.note_list.blockSignals(True)
+                self.note_list.setCurrentItem(item)
+                self.note_list.blockSignals(False)
+                # 加载这个笔记到编辑器
+                note_id = item.data(Qt.ItemDataRole.UserRole)
+                self.current_note_id = note_id
+                self.editor.current_note_id = note_id
+                note = self.note_manager.get_note(note_id)
+                if note:
+                    self.editor.blockSignals(True)
+                    self.editor.setHtml(note['content'])
+                    self.editor.blockSignals(False)
+        
+        self._update_visual_selection()
+    
+    def _clear_all_selections(self):
+        """清除所有选中状态的视觉效果"""
+        for row in self.selected_note_rows:
+            item = self.note_list.item(row)
+            if item:
+                widget = self.note_list.itemWidget(item)
+                if widget and widget.objectName() == "note_item_widget":
+                    widget.setProperty("selected", False)
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+                    widget.update()
+        self.selected_note_rows.clear()
+    
+    def _update_visual_selection(self):
+        """更新所有笔记项的视觉选中状态"""
+        for i in range(self.note_list.count()):
+            item = self.note_list.item(i)
+            if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
+                widget = self.note_list.itemWidget(item)
+                if widget and widget.objectName() == "note_item_widget":
+                    is_selected = i in self.selected_note_rows
+                    widget.setProperty("selected", is_selected)
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+                    widget.update()
 
     def on_text_changed(self):
         """文本变化事件"""
