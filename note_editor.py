@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QTextBrowser,
     QSplitter, QToolBar, QWidget, QFileDialog, QMessageBox,
     QInputDialog, QMenu, QTableWidget, QTableWidgetItem,
-    QSpinBox, QDialogButtonBox
+    QSpinBox, QDialogButtonBox, QColorDialog
 )
 from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import (
@@ -1474,6 +1474,18 @@ class NoteEditor(QWidget):
         
         format_menu.addSeparator()
         
+        # 字体颜色
+        text_color_action = QAction("字体颜色...", self)
+        text_color_action.triggered.connect(self.choose_text_color)
+        format_menu.addAction(text_color_action)
+        
+        # 背景色
+        bg_color_action = QAction("背景色...", self)
+        bg_color_action.triggered.connect(self.choose_background_color)
+        format_menu.addAction(bg_color_action)
+        
+        format_menu.addSeparator()
+        
         # 正文
         body_action = QAction("正文", self)
         body_action.triggered.connect(self.apply_body_text)
@@ -1700,6 +1712,52 @@ class NoteEditor(QWidget):
         fmt = cursor.charFormat()
         fmt.setFontStrikeOut(not fmt.fontStrikeOut())
         cursor.mergeCharFormat(fmt)
+    
+    def choose_text_color(self):
+        """选择字体颜色"""
+        cursor = self.text_edit.textCursor()
+        
+        # 获取当前字体颜色作为初始颜色
+        current_format = cursor.charFormat()
+        current_color = current_format.foreground().color()
+        
+        # 打开颜色选择对话框
+        color = QColorDialog.getColor(current_color, self, "选择字体颜色")
+        
+        if color.isValid():
+            # 应用选择的颜色
+            fmt = QTextCharFormat()
+            fmt.setForeground(color)
+            
+            # 如果有选中文本，应用到选中文本
+            if cursor.hasSelection():
+                cursor.mergeCharFormat(fmt)
+            else:
+                # 如果没有选中文本，设置当前格式（影响后续输入）
+                self.text_edit.setCurrentCharFormat(fmt)
+    
+    def choose_background_color(self):
+        """选择背景色"""
+        cursor = self.text_edit.textCursor()
+        
+        # 获取当前背景色作为初始颜色
+        current_format = cursor.charFormat()
+        current_color = current_format.background().color()
+        
+        # 打开颜色选择对话框
+        color = QColorDialog.getColor(current_color, self, "选择背景色")
+        
+        if color.isValid():
+            # 应用选择的颜色
+            fmt = QTextCharFormat()
+            fmt.setBackground(color)
+            
+            # 如果有选中文本，应用到选中文本
+            if cursor.hasSelection():
+                cursor.mergeCharFormat(fmt)
+            else:
+                # 如果没有选中文本，设置当前格式（影响后续输入）
+                self.text_edit.setCurrentCharFormat(fmt)
     
     def insert_bullet_list(self):
         """插入项目符号列表"""

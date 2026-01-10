@@ -925,13 +925,21 @@ class NoteListWidget(QListWidget):
         tag_menu = menu.addMenu("标签")
         all_tags = self.main_window.note_manager.get_all_tags()
         if all_tags:
+            # 获取第一个笔记的标签（用于显示对勾）
+            first_note_tags = self.main_window.note_manager.get_note_tags(selected_note_ids[0])
+            first_note_tag_ids = {t['id'] for t in first_note_tags}
+            
             for tag in all_tags:
                 tag_id = tag['id']
                 tag_name = tag['name']
                 
-                action = QAction(tag_name, self)
-                action.triggered.connect(lambda checked, tid=tag_id, tname=tag_name: 
-                                       self.main_window.batch_add_tag_to_notes(selected_note_ids, tid, tname))
+                # 检查是否已添加标签（显示对勾）
+                has_tag = tag_id in first_note_tag_ids
+                display_name = f"✓ {tag_name}" if has_tag else tag_name
+                
+                action = QAction(display_name, self)
+                action.triggered.connect(lambda checked, tid=tag_id, tname=tag_name, has=has_tag: 
+                                       self.main_window.toggle_tag_for_notes(selected_note_ids, tid, tname, has))
                 tag_menu.addAction(action)
         else:
             no_tags_action = QAction("(无标签)", self)
@@ -2070,8 +2078,16 @@ class MainWindow(QMainWindow):
         info_label.setToolTip(info_text)
         widget_layout.addWidget(info_label)
         
-        # 第三行：文件夹信息（仅在"所有笔记"视图中显示）
+        # 第三行：文件夹信息和标签信息
+        # 获取笔记的标签
+        note_tags = self.note_manager.get_note_tags(note['id'])
+        tags_text = ""
+        if note_tags:
+            tag_names = [tag['name'] for tag in note_tags]
+            tags_text = f"  🏷️ {', '.join(tag_names)}"
+        
         if self.current_folder_id is None and not self.is_viewing_deleted:
+            # 在"所有笔记"视图中显示：文件夹 + 标签
             folder_id = note.get('folder_id')
             folder_name = "所有笔记"  # 默认值
             
@@ -2081,8 +2097,8 @@ class MainWindow(QMainWindow):
                 if folder_info:
                     folder_name = folder_info.get('name', '未知文件夹')
             
-            # 显示文件夹图标和名称
-            folder_text = f"📁 {folder_name}"
+            # 显示文件夹图标和名称 + 标签
+            folder_text = f"📁 {folder_name}{tags_text}"
             folder_label = ElidedLabel(folder_text)
             folder_label.setFullText(folder_text)
             folder_label.setStyleSheet("""
@@ -2102,14 +2118,37 @@ class MainWindow(QMainWindow):
 
             folder_label.setToolTip(folder_text)
             widget_layout.addWidget(folder_label)
+        elif tags_text:
+            # 在其他文件夹视图中，如果有标签则单独显示一行
+            tags_label = ElidedLabel(tags_text.strip())
+            tags_label.setFullText(tags_text.strip())
+            tags_label.setStyleSheet("""
+                font-size: 11px; 
+                color: #999999;
+                border: none;
+                background: transparent;
+                padding: 0px;
+                margin: 0px;
+            """)
+            tags_label.setWordWrap(False)
+            tags_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            tags_label.setTextFormat(Qt.TextFormat.PlainText)
+            tags_label.setMinimumWidth(0)
+            tags_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            tags_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+            tags_label.setToolTip(tags_text.strip())
+            widget_layout.addWidget(tags_label)
         
         # 分隔线已改为 item 下边框绘制（最后一条会关闭）。
 
         
         # 设置widget固定高度
-        # 如果显示文件夹信息，高度增加约16px（文字12px + 间距4px）
+        # 如果显示文件夹信息或标签信息，高度增加约16px（文字12px + 间距4px）
         if self.current_folder_id is None and not self.is_viewing_deleted:
-            widget.setFixedHeight(77)  # 原61 + 16
+            widget.setFixedHeight(77)  # 原61 + 16（文件夹+标签行）
+        elif note_tags:
+            widget.setFixedHeight(77)  # 原61 + 16（标签行）
         else:
             widget.setFixedHeight(61)
         
@@ -2119,6 +2158,8 @@ class MainWindow(QMainWindow):
         
         # 设置 item 的 sizeHint，注意这里的宽度同时受group设置的宽度影响
         if self.current_folder_id is None and not self.is_viewing_deleted:
+            item.setSizeHint(QSize(200, 77))
+        elif note_tags:
             item.setSizeHint(QSize(200, 77))
         else:
             item.setSizeHint(QSize(200, 61))
@@ -2240,9 +2281,14 @@ class MainWindow(QMainWindow):
         self.tags = self.note_manager.get_all_tags()
         for tag in self.tags:
             count = self.note_manager.get_tag_count(tag['id'])
-            item_text = f"    # {tag['name']} ({count})"
+            item_text = f"    🏷️ {tag['name']} ({count})"
             tag_item = QListWidgetItem(item_text)
             tag_item.setData(Qt.ItemDataRole.UserRole, ("tag", tag['id']))  # 标记为标签项
+            
+            # 如果当前选中的是这个标签，设置高亮
+            if self.current_tag_id == tag['id']:
+                tag_item.setSelected(True)
+            
             self.folder_list.addItem(tag_item)
         
         # 恢复选中状态
@@ -3250,6 +3296,29 @@ class MainWindow(QMainWindow):
         
         count = len(note_ids)
         self.statusBar().showMessage(f"已为 {count} 条笔记添加标签 '{tag_name}'", 2000)
+    
+    def toggle_tag_for_notes(self, note_ids: list, tag_id: str, tag_name: str, has_tag: bool):
+        """切换笔记的标签（添加或移除）"""
+        if has_tag:
+            # 移除标签
+            for note_id in note_ids:
+                self.note_manager.remove_tag_from_note(note_id, tag_id)
+            action_text = "移除"
+        else:
+            # 添加标签
+            for note_id in note_ids:
+                self.note_manager.add_tag_to_note(note_id, tag_id)
+            action_text = "添加"
+        
+        # 清除多选状态
+        self.selected_note_rows.clear()
+        
+        # 重新加载笔记列表和文件夹列表（更新标签数字）
+        self.load_notes()
+        self.load_folders()
+        
+        count = len(note_ids)
+        self.statusBar().showMessage(f"已为 {count} 条笔记{action_text}标签 '{tag_name}'", 2000)
     
     def create_note_in_current_folder(self):
         """在当前文件夹下创建笔记"""
