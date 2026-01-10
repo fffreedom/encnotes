@@ -59,6 +59,7 @@ class PasteImageTextEdit(QTextEdit):
         self.selected_table = None  # 当前选中的表格
         self.selected_table_cursor = None  # 表格的光标位置
         self.table_select_handle_size = 20  # 表格全选图标的大小
+        self.table_debug_logged = False  # 表格调试日志是否已输出
         
         # 边界检测阈值
         self.handle_size = 8
@@ -91,49 +92,117 @@ class PasteImageTextEdit(QTextEdit):
         
         from PyQt6.QtCore import QRectF
         
-        # 获取表格的第一个和最后一个单元格
-        first_cell = table.cellAt(0, 0)
-        last_cell = table.cellAt(table.rows() - 1, table.columns() - 1)
+        # 获取表格的关键单元格
+        top_left_cell = table.cellAt(0, 0)  # 左上角
+        bottom_right_cell = table.cellAt(table.rows() - 1, table.columns() - 1)  # 右下角
         
-        if not first_cell.isValid() or not last_cell.isValid():
+        if not top_left_cell.isValid() or not bottom_right_cell.isValid():
             return None
         
-        # 获取第一个单元格的光标和矩形
-        first_cursor = first_cell.firstCursorPosition()
-        first_rect = self.cursorRect(first_cursor)
+        # 只在第一次或调试模式下输出日志
+        debug = not self.table_debug_logged
+        if debug:
+            print(f"\n=== 表格边界计算调试 ===")
+            print(f"表格尺寸: {table.rows()} 行 x {table.columns()} 列")
         
-        # 获取最后一个单元格的光标和矩形
-        last_cursor = last_cell.lastCursorPosition()
-        last_rect = self.cursorRect(last_cursor)
+        # 获取左上角单元格的第一个光标位置（用于确定左边界和上边界）
+        top_left_cursor = top_left_cell.firstCursorPosition()
+        top_left_rect = self.cursorRect(top_left_cursor)
+        if debug:
+            print(f"左上角单元格光标矩形: {top_left_rect}")
+        
+        # 获取右下角单元格的最后一个光标位置（用于确定下边界）
+        bottom_right_cursor = bottom_right_cell.lastCursorPosition()
+        bottom_right_rect = self.cursorRect(bottom_right_cursor)
+        if debug:
+            print(f"右下角单元格光标矩形: {bottom_right_rect}")
         
         # 计算表格的边界框
-        # 左边界：第一个单元格的左边界减去一些边距
-        left = first_rect.left() - 5
+        # 左边界：左上角单元格的左边界
+        left = top_left_rect.left() - 5
         
-        # 上边界：第一个单元格的上边界减去一些边距
-        top = first_rect.top() - 5
+        # 上边界：左上角单元格的上边界
+        top = top_left_rect.top() - 5
         
-        # 右边界：最后一个单元格的右边界加上一些边距
-        # 需要考虑单元格的实际宽度
-        right = last_rect.right() + 5
+        # 下边界：右下角单元格的下边界
+        bottom = bottom_right_rect.bottom() + 5
         
-        # 下边界：最后一个单元格的下边界加上一些边距
-        bottom = last_rect.bottom() + 5
+        # **关键修复**：计算右边界
+        # 方法：使用QTextTable的实际边界框
+        if debug:
+            print(f"\n计算表格实际宽度:")
+        
+        # 方法1：尝试使用表格格式获取实际宽度
+        table_format = table.format()
+        if debug:
+            print(f"表格格式信息:")
+            print(f"  表格宽度类型: {table_format.width()}")
+            print(f"  表格边距: left={table_format.leftMargin()}, right={table_format.rightMargin()}")
+            print(f"  表格边框: {table_format.border()}")
+        
+        # 方法2：遍历第一行所有单元格，收集每列的起始位置
+        if debug:
+            print(f"\n遍历第一行所有单元格:")
+        
+        col_positions = []
+        for col_idx in range(table.columns()):
+            cell = table.cellAt(0, col_idx)
+            if cell.isValid():
+                first_cursor = cell.firstCursorPosition()
+                first_rect = self.cursorRect(first_cursor)
+                col_positions.append(first_rect.left())
+                
+                if debug:
+                    print(f"  列{col_idx}: left={first_rect.left()}")
+        
+        # 计算最后一列的宽度（使用前面列的平均宽度）
+        if len(col_positions) >= 2:
+            # 计算前面列的宽度
+            col_widths = []
+            for i in range(len(col_positions) - 1):
+                width = col_positions[i + 1] - col_positions[i]
+                col_widths.append(width)
+            
+            # 使用平均列宽作为最后一列的宽度
+            avg_col_width = sum(col_widths) / len(col_widths)
+            last_col_left = col_positions[-1]
+            max_right = last_col_left + avg_col_width
+            
+            if debug:
+                print(f"\n列宽计算:")
+                for i, width in enumerate(col_widths):
+                    print(f"  列{i}宽度: {width}")
+                print(f"  平均列宽: {avg_col_width}")
+                print(f"  最后一列left: {last_col_left}")
+                print(f"  计算的最右边界: {max_right}")
+        else:
+            # 如果只有一列，使用一个默认宽度
+            max_right = col_positions[0] + 200 if col_positions else left + 200
+        
+        # 使用找到的最右边界
+        right = max_right + 5  # 加上右边距
+        
+        if debug:
+            print(f"\n最终右边界计算: {max_right} + 5 = {right}")
         
         # 创建矩形
         table_rect = QRectF(left, top, right - left, bottom - top)
+        if debug:
+            print(f"最终表格矩形: left={left}, top={top}, right={right}, width={right-left}, height={bottom-top}")
+            print(f"=== 调试结束 ===\n")
+            self.table_debug_logged = True  # 标记已输出过日志
         
         return table_rect
     
-    def is_click_on_table_select_handle(self, pos, table):
-        """检查点击位置是否在表格的全选图标上
+    def is_click_on_table_border(self, pos, table):
+        """检查点击位置是否在表格的边框线上
         
         Args:
             pos: 鼠标点击位置
             table: QTextTable对象
             
         Returns:
-            bool: 如果点击在全选图标上返回True，否则返回False
+            bool: 如果点击在边框线上返回True，否则返回False
         """
         if not table:
             return False
@@ -142,48 +211,25 @@ class PasteImageTextEdit(QTextEdit):
         if not table_rect:
             return False
         
-        from PyQt6.QtCore import QRect
+        # 定义边框线的检测容差（像素）
+        tolerance = 5
         
-        handle_size = self.table_select_handle_size
+        x = pos.x()
+        y = pos.y()
         
-        # 定义四个角的全选图标区域
-        handles = [
-            # 左上角
-            QRect(
-                int(table_rect.left() - handle_size // 2),
-                int(table_rect.top() - handle_size // 2),
-                handle_size,
-                handle_size
-            ),
-            # 右上角
-            QRect(
-                int(table_rect.right() - handle_size // 2),
-                int(table_rect.top() - handle_size // 2),
-                handle_size,
-                handle_size
-            ),
-            # 左下角
-            QRect(
-                int(table_rect.left() - handle_size // 2),
-                int(table_rect.bottom() - handle_size // 2),
-                handle_size,
-                handle_size
-            ),
-            # 右下角
-            QRect(
-                int(table_rect.right() - handle_size // 2),
-                int(table_rect.bottom() - handle_size // 2),
-                handle_size,
-                handle_size
-            ),
-        ]
+        # 检查是否在表格矩形范围内（包含容差）
+        if not (table_rect.left() - tolerance <= x <= table_rect.right() + tolerance and
+                table_rect.top() - tolerance <= y <= table_rect.bottom() + tolerance):
+            return False
         
-        # 检查点击位置是否在任何一个全选图标内
-        for handle_rect in handles:
-            if handle_rect.contains(pos):
-                return True
+        # 检查是否靠近四条边框线
+        near_left = abs(x - table_rect.left()) <= tolerance
+        near_right = abs(x - table_rect.right()) <= tolerance
+        near_top = abs(y - table_rect.top()) <= tolerance
+        near_bottom = abs(y - table_rect.bottom()) <= tolerance
         
-        return False
+        # 如果靠近任何一条边框线，返回True
+        return near_left or near_right or near_top or near_bottom
     
 
     
@@ -274,46 +320,11 @@ class PasteImageTextEdit(QTextEdit):
             table_rect = self.get_table_rect(self.selected_table)
             
             if table_rect:
+                # 只绘制边框，不绘制角标
                 # 绘制蓝色边界框
                 pen = QPen(QColor("#007AFF"), 3)
                 painter.setPen(pen)
                 painter.drawRect(table_rect)
-                
-                # 在四个角绘制全选图标（小方块）
-                handle_size = self.table_select_handle_size
-                painter.setBrush(QBrush(QColor("#007AFF")))
-                
-                # 左上角
-                painter.drawRect(QRect(
-                    int(table_rect.left() - handle_size // 2),
-                    int(table_rect.top() - handle_size // 2),
-                    handle_size,
-                    handle_size
-                ))
-                
-                # 右上角
-                painter.drawRect(QRect(
-                    int(table_rect.right() - handle_size // 2),
-                    int(table_rect.top() - handle_size // 2),
-                    handle_size,
-                    handle_size
-                ))
-                
-                # 左下角
-                painter.drawRect(QRect(
-                    int(table_rect.left() - handle_size // 2),
-                    int(table_rect.bottom() - handle_size // 2),
-                    handle_size,
-                    handle_size
-                ))
-                
-                # 右下角
-                painter.drawRect(QRect(
-                    int(table_rect.right() - handle_size // 2),
-                    int(table_rect.bottom() - handle_size // 2),
-                    handle_size,
-                    handle_size
-                ))
             
             painter.end()
         
@@ -547,9 +558,9 @@ class PasteImageTextEdit(QTextEdit):
             # 检查是否点击了表格
             table = cursor.currentTable()
             if table:
-                # 检查是否点击了全选图标
-                if self.is_click_on_table_select_handle(event.pos(), table):
-                    # 点击了全选图标，选中整个表格
+                # 检查是否点击了表格边框
+                if self.is_click_on_table_border(event.pos(), table):
+                    # 点击了边框，选中整个表格
                     self.selected_table = table
                     self.selected_table_cursor = cursor
                     
@@ -731,8 +742,8 @@ class PasteImageTextEdit(QTextEdit):
                 cursor = self.cursorForPosition(event.pos())
                 table = cursor.currentTable()
                 if table:
-                    # 检查是否悬停在全选图标上
-                    if self.is_click_on_table_select_handle(event.pos(), table):
+                    # 检查是否悬停在表格边框上
+                    if self.is_click_on_table_border(event.pos(), table):
                         self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
                     else:
                         self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
