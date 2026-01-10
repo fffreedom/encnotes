@@ -19,12 +19,12 @@ def _init_logging():
     from logging.handlers import RotatingFileHandler
 
     try:
+        # 日志文件放在与数据库相同的目录下
         base_dir = os.path.join(
             os.path.expanduser("~"),
             "Library",
-            "Application Support",
-            "encnotes",
-            "logs",
+            "Group Containers",
+            "group.com.encnotes",
         )
         os.makedirs(base_dir, exist_ok=True)
         log_path = os.path.join(base_dir, "encnotes.log")

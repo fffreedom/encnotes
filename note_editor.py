@@ -1437,40 +1437,50 @@ class NoteEditor(QWidget):
         # 格式菜单
         format_menu = QMenu("格式", self)
         
+        # 保存格式菜单的引用，用于更新状态
+        self.format_menu = format_menu
+        
         # 标题样式（平铺在格式菜单下）
-        title_action = QAction("标题", self)
-        title_action.triggered.connect(lambda: self.apply_heading(1))
-        format_menu.addAction(title_action)
+        self.title_action = QAction("标题", self)
+        self.title_action.setCheckable(True)
+        self.title_action.triggered.connect(lambda: self.apply_heading(1))
+        format_menu.addAction(self.title_action)
         
-        heading_action = QAction("小标题", self)
-        heading_action.triggered.connect(lambda: self.apply_heading(2))
-        format_menu.addAction(heading_action)
+        self.heading_action = QAction("小标题", self)
+        self.heading_action.setCheckable(True)
+        self.heading_action.triggered.connect(lambda: self.apply_heading(2))
+        format_menu.addAction(self.heading_action)
         
-        subheading_action = QAction("副标题", self)
-        subheading_action.triggered.connect(lambda: self.apply_heading(3))
-        format_menu.addAction(subheading_action)
+        self.subheading_action = QAction("副标题", self)
+        self.subheading_action.setCheckable(True)
+        self.subheading_action.triggered.connect(lambda: self.apply_heading(3))
+        format_menu.addAction(self.subheading_action)
         
         format_menu.addSeparator()
         
         # 文本样式
-        bold_action = QAction("粗体", self)
-        bold_action.setShortcut("Ctrl+B")
-        bold_action.triggered.connect(self.toggle_bold)
-        format_menu.addAction(bold_action)
+        self.bold_action = QAction("粗体", self)
+        self.bold_action.setCheckable(True)
+        self.bold_action.setShortcut("Ctrl+B")
+        self.bold_action.triggered.connect(self.toggle_bold)
+        format_menu.addAction(self.bold_action)
         
-        italic_action = QAction("斜体", self)
-        italic_action.setShortcut("Ctrl+I")
-        italic_action.triggered.connect(self.toggle_italic)
-        format_menu.addAction(italic_action)
+        self.italic_action = QAction("斜体", self)
+        self.italic_action.setCheckable(True)
+        self.italic_action.setShortcut("Ctrl+I")
+        self.italic_action.triggered.connect(self.toggle_italic)
+        format_menu.addAction(self.italic_action)
         
-        underline_action = QAction("下划线", self)
-        underline_action.setShortcut("Ctrl+U")
-        underline_action.triggered.connect(self.toggle_underline)
-        format_menu.addAction(underline_action)
+        self.underline_action = QAction("下划线", self)
+        self.underline_action.setCheckable(True)
+        self.underline_action.setShortcut("Ctrl+U")
+        self.underline_action.triggered.connect(self.toggle_underline)
+        format_menu.addAction(self.underline_action)
         
-        strikethrough_action = QAction("删除线", self)
-        strikethrough_action.triggered.connect(self.toggle_strikethrough)
-        format_menu.addAction(strikethrough_action)
+        self.strikethrough_action = QAction("删除线", self)
+        self.strikethrough_action.setCheckable(True)
+        self.strikethrough_action.triggered.connect(self.toggle_strikethrough)
+        format_menu.addAction(self.strikethrough_action)
         
         format_menu.addSeparator()
         
@@ -1496,13 +1506,18 @@ class NoteEditor(QWidget):
         # 列表子菜单（移到格式菜单下）
         list_menu = format_menu.addMenu("列表")
         
-        bullet_action = QAction("• 项目符号列表", self)
-        bullet_action.triggered.connect(self.insert_bullet_list)
-        list_menu.addAction(bullet_action)
+        self.bullet_action = QAction("• 项目符号列表", self)
+        self.bullet_action.setCheckable(True)
+        self.bullet_action.triggered.connect(self.toggle_bullet_list)
+        list_menu.addAction(self.bullet_action)
         
-        number_action = QAction("1. 编号列表", self)
-        number_action.triggered.connect(self.insert_numbered_list)
-        list_menu.addAction(number_action)
+        self.number_action = QAction("1. 编号列表", self)
+        self.number_action.setCheckable(True)
+        self.number_action.triggered.connect(self.toggle_numbered_list)
+        list_menu.addAction(self.number_action)
+        
+        # 连接格式菜单的aboutToShow信号，在显示前更新状态
+        format_menu.aboutToShow.connect(self.update_format_menu_state)
         
         # 格式按钮
         format_button = QPushButton("格式")
@@ -1648,26 +1663,46 @@ class NoteEditor(QWidget):
     
     # 格式化方法
     def apply_heading(self, level):
-        """应用标题格式"""
+        """应用标题格式，如果已经是该格式则取消"""
         cursor = self.text_edit.textCursor()
         
-        # 设置块格式
-        block_fmt = QTextBlockFormat()
+        # 获取当前字符格式
+        current_fmt = cursor.charFormat()
+        current_size = current_fmt.fontPointSize()
+        current_weight = current_fmt.fontWeight()
         
-        # 设置字符格式
-        char_fmt = QTextCharFormat()
-        char_fmt.setFontWeight(QFont.Weight.Bold)
-        
-        if level == 1:  # 标题（首行标题格式）
-            char_fmt.setFontPointSize(28)
-        elif level == 2:  # 小标题
-            char_fmt.setFontPointSize(22)
-        elif level == 3:  # 副标题
-            char_fmt.setFontPointSize(18)
+        # 判断当前是否已经是该标题格式
+        is_current_format = False
+        if level == 1 and current_size == 28 and current_weight == QFont.Weight.Bold:
+            is_current_format = True
+        elif level == 2 and current_size == 22 and current_weight == QFont.Weight.Bold:
+            is_current_format = True
+        elif level == 3 and current_size == 18 and current_weight == QFont.Weight.Bold:
+            is_current_format = True
         
         cursor.beginEditBlock()
-        cursor.mergeBlockFormat(block_fmt)
-        cursor.mergeCharFormat(char_fmt)
+        
+        if is_current_format:
+            # 如果已经是该格式，则恢复为正文格式
+            self.apply_body_text()
+        else:
+            # 设置块格式
+            block_fmt = QTextBlockFormat()
+            
+            # 设置字符格式
+            char_fmt = QTextCharFormat()
+            char_fmt.setFontWeight(QFont.Weight.Bold)
+            
+            if level == 1:  # 标题（首行标题格式）
+                char_fmt.setFontPointSize(28)
+            elif level == 2:  # 小标题
+                char_fmt.setFontPointSize(22)
+            elif level == 3:  # 副标题
+                char_fmt.setFontPointSize(18)
+            
+            cursor.mergeBlockFormat(block_fmt)
+            cursor.mergeCharFormat(char_fmt)
+        
         cursor.endEditBlock()
     
     def apply_body_text(self):
@@ -1768,6 +1803,64 @@ class NoteEditor(QWidget):
         """插入编号列表"""
         cursor = self.text_edit.textCursor()
         cursor.insertList(QTextListFormat.Style.ListDecimal)
+    
+    def toggle_bullet_list(self):
+        """切换项目符号列表"""
+        cursor = self.text_edit.textCursor()
+        current_list = cursor.currentList()
+        
+        if current_list and current_list.format().style() == QTextListFormat.Style.ListDisc:
+            # 如果已经是项目符号列表，则移除列表
+            block_fmt = cursor.blockFormat()
+            block_fmt.setIndent(0)
+            cursor.setBlockFormat(block_fmt)
+        else:
+            # 否则创建项目符号列表
+            cursor.insertList(QTextListFormat.Style.ListDisc)
+    
+    def toggle_numbered_list(self):
+        """切换编号列表"""
+        cursor = self.text_edit.textCursor()
+        current_list = cursor.currentList()
+        
+        if current_list and current_list.format().style() == QTextListFormat.Style.ListDecimal:
+            # 如果已经是编号列表，则移除列表
+            block_fmt = cursor.blockFormat()
+            block_fmt.setIndent(0)
+            cursor.setBlockFormat(block_fmt)
+        else:
+            # 否则创建编号列表
+            cursor.insertList(QTextListFormat.Style.ListDecimal)
+    
+    def update_format_menu_state(self):
+        """更新格式菜单的状态（显示当前格式）"""
+        cursor = self.text_edit.textCursor()
+        fmt = cursor.charFormat()
+        
+        # 获取当前字体大小和粗细
+        font_size = fmt.fontPointSize()
+        font_weight = fmt.fontWeight()
+        
+        # 更新标题状态
+        self.title_action.setChecked(font_size == 28 and font_weight == QFont.Weight.Bold)
+        self.heading_action.setChecked(font_size == 22 and font_weight == QFont.Weight.Bold)
+        self.subheading_action.setChecked(font_size == 18 and font_weight == QFont.Weight.Bold)
+        
+        # 更新文本样式状态
+        self.bold_action.setChecked(font_weight == QFont.Weight.Bold)
+        self.italic_action.setChecked(fmt.fontItalic())
+        self.underline_action.setChecked(fmt.fontUnderline())
+        self.strikethrough_action.setChecked(fmt.fontStrikeOut())
+        
+        # 更新列表状态
+        current_list = cursor.currentList()
+        if current_list:
+            list_style = current_list.format().style()
+            self.bullet_action.setChecked(list_style == QTextListFormat.Style.ListDisc)
+            self.number_action.setChecked(list_style == QTextListFormat.Style.ListDecimal)
+        else:
+            self.bullet_action.setChecked(False)
+            self.number_action.setChecked(False)
     
     def insert_table(self):
         """插入表格"""

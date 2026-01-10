@@ -770,14 +770,8 @@ class NoteListWidget(QListWidget):
         clicked_row = self.row(item)
         modifiers = event.modifiers()
         
-        # 日志：记录鼠标按钮类型和当前选中状态
-        button_name = "Left" if event.button() == Qt.MouseButton.LeftButton else "Right" if event.button() == Qt.MouseButton.RightButton else "Other"
-        selected_count = len(self.main_window.selected_note_rows) if self.main_window else 0
-        print(f"[mousePressEvent] Button: {button_name}, Clicked row: {clicked_row}, Selected count: {selected_count}, Selected rows: {self.main_window.selected_note_rows if self.main_window else set()}")
-        
         # 只处理左键点击的多选逻辑，右键用于显示菜单
         if event.button() != Qt.MouseButton.LeftButton:
-            print(f"[mousePressEvent] Non-left button, ignoring and returning (let contextMenuEvent handle it)")
             # 不调用super()，直接返回，让Qt的事件系统继续传递到contextMenuEvent
             return
         
@@ -852,9 +846,6 @@ class NoteListWidget(QListWidget):
         if not self.main_window:
             return
         
-        # 日志：记录右键菜单事件触发时的状态
-        print(f"[contextMenuEvent] Selected rows before processing: {self.main_window.selected_note_rows}")
-        
         # 获取点击位置的笔记
         item = self.itemAt(event.pos())
         if not item:
@@ -871,14 +862,11 @@ class NoteListWidget(QListWidget):
         clicked_row = self.row(item)
         note_id = item.data(Qt.ItemDataRole.UserRole)
         
-        print(f"[contextMenuEvent] Clicked row: {clicked_row}, note_id: {note_id}")
-        
         # 如果点击的笔记不在选中集合中，则只选中当前笔记
         if clicked_row not in self.main_window.selected_note_rows:
-            print(f"[contextMenuEvent] Clicked row not in selected rows, selecting single note")
             self.main_window.select_single_note(clicked_row)
         else:
-            print(f"[contextMenuEvent] Clicked row is in selected rows, keeping multi-select")
+            pass
         
         # 获取所有选中的笔记ID
         selected_note_ids = []
@@ -1799,7 +1787,7 @@ class MainWindow(QMainWindow):
             if 0 <= tag_index < len(self.tags):
                 tag_id = self.tags[tag_index]['id']
                 notes = self.note_manager.get_notes_by_tag(tag_id)
-                self.current_folder_id = None
+                # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
                 self.current_tag_id = tag_id
                 self.is_viewing_deleted = False
             else:
@@ -2268,28 +2256,61 @@ class MainWindow(QMainWindow):
         self._add_system_folder_item("deleted", "🗑️ 最近删除")
 
         
-        # 添加标签标题（与iCloud并列）
-        tag_header = QListWidgetItem("🏷️ 标签")
+        # 添加标签标题（不可选中）：与iCloud标题保持一致的样式
+        tag_header = QListWidgetItem()
         tag_header.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
         tag_header.setData(Qt.ItemDataRole.UserRole, ("tag_header", None))  # 标记为标签标题
-        font = tag_header.font()
-        font.setBold(True)
-        tag_header.setFont(font)
+
+        tag_header_widget = QWidget()
+        tag_header_layout = QHBoxLayout(tag_header_widget)
+        tag_header_layout.setContentsMargins(0, 0, 10, 0)
+        tag_header_layout.setSpacing(6)
+
+        tag_header_label = ElidedLabel("🏷️ 标签")
+        tag_header_label.setFullText("🏷️ 标签")
+        tag_header_label.setStyleSheet("""
+            font-size: 13px;
+            font-weight: bold;
+            color: #000000;
+            background: transparent;
+        """)
+        tag_header_layout.addWidget(tag_header_label, 1)
+
+        tag_header_widget.setFixedHeight(28)
+        tag_header.setSizeHint(QSize(200, 28))
+
         self.folder_list.addItem(tag_header)
+        self.folder_list.setItemWidget(tag_header, tag_header_widget)
         
         # 加载标签（缩进显示）
         self.tags = self.note_manager.get_all_tags()
         for tag in self.tags:
             count = self.note_manager.get_tag_count(tag['id'])
             item_text = f"    🏷️ {tag['name']} ({count})"
-            tag_item = QListWidgetItem(item_text)
+            tag_item = QListWidgetItem()
             tag_item.setData(Qt.ItemDataRole.UserRole, ("tag", tag['id']))  # 标记为标签项
+            
+            # 为标签项创建自定义widget以支持高亮显示
+            tag_widget = QWidget()
+            tag_widget.setObjectName("folder_row_widget")  # 使用相同的样式
+            tag_layout = QHBoxLayout(tag_widget)
+            tag_layout.setContentsMargins(0, 0, 0, 0)
+            tag_layout.setSpacing(0)
+            
+            tag_label = QLabel(item_text)
+            tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px;")
+            tag_layout.addWidget(tag_label)
             
             # 如果当前选中的是这个标签，设置高亮
             if self.current_tag_id == tag['id']:
+                tag_widget.setProperty("selected", True)
                 tag_item.setSelected(True)
+            else:
+                tag_widget.setProperty("selected", False)
             
             self.folder_list.addItem(tag_item)
+            self.folder_list.setItemWidget(tag_item, tag_widget)
+            tag_item.setSizeHint(QSize(200, 40))  # 增加高度到40px，确保显示完整
         
         # 恢复选中状态
         if current_row >= 0 and current_row < self.folder_list.count():
@@ -2818,9 +2839,9 @@ class MainWindow(QMainWindow):
         """创建新笔记（菜单/工具栏）。
 
         规则：
-        - 默认在当前选中的“自定义文件夹”下创建
-        - 标题默认为“新笔记”
-        - 同一文件夹下只允许存在一个“空的新笔记草稿”；若已存在，则该菜单应不可用（这里也做一次保护）
+        - 默认在当前选中的"自定义文件夹"下创建
+        - 标题默认为"新笔记"
+        - 同一文件夹下只允许存在一个"空的新笔记草稿"；若已存在，则该菜单应不可用（这里也做一次保护）
         """
         # 必须在自定义文件夹下创建；未选中文件夹时直接忽略
         folder_id = self.current_folder_id
@@ -2828,8 +2849,25 @@ class MainWindow(QMainWindow):
             self._update_new_note_action_enabled()
             return
 
-        # 防御：如果已存在空草稿，直接返回
+        # 防御：如果已存在空草稿，直接打开那个草稿
         if self._current_folder_has_empty_new_note():
+            try:
+                notes = self.note_manager.get_notes_by_folder(folder_id)
+                for note in notes:
+                    if self._is_empty_new_note(note):
+                        empty_note_id = note.get('id')
+                        # 在笔记列表中选中这个笔记
+                        for i in range(self.note_list.count()):
+                            item = self.note_list.item(i)
+                            if item.data(Qt.ItemDataRole.UserRole) == empty_note_id:
+                                self.note_list.setCurrentItem(item)
+                                break
+                        # 设置焦点到编辑器
+                        self.editor.text_edit.setFocus()
+                        self._update_new_note_action_enabled()
+                        return
+            except Exception as e:
+                pass
             self._update_new_note_action_enabled()
             return
 
@@ -2865,6 +2903,62 @@ class MainWindow(QMainWindow):
         # 刷新可用状态
         self._update_new_note_action_enabled()
 
+    def create_new_note_from_tag(self):
+        """从标签右键菜单创建新笔记。
+        
+        规则：
+        - 如果当前有选中的有效文件夹，使用该文件夹
+        - 如果没有选中文件夹或选中的是系统文件夹，使用第一个自定义文件夹
+        - 如果没有任何自定义文件夹，提示用户先创建文件夹
+        """
+        folder_id = self.current_folder_id
+        
+        # 如果当前文件夹无效（None或系统文件夹），尝试使用第一个自定义文件夹
+        if not folder_id or folder_id in (None, -1):
+            if self.custom_folders:
+                folder_id = self.custom_folders[0]['id']
+                # 更新current_folder_id以便后续操作
+                self.current_folder_id = folder_id
+            else:
+                # 没有任何自定义文件夹，提示用户
+                QMessageBox.information(self, "提示", "请先创建或选择一个文件夹")
+                return
+        
+        # 在文件夹列表中选中对应的文件夹
+        self._select_folder_in_list(self.current_folder_id)
+        
+        # 调用标准的创建笔记方法
+        self.create_new_note()
+
+    def _select_folder_in_list(self, folder_id):
+        """在文件夹列表中选中指定的文件夹
+        
+        Args:
+            folder_id: 要选中的文件夹ID
+        """
+        if not folder_id:
+            return
+        
+        # 遍历文件夹列表，找到对应的项
+        for i in range(self.folder_list.count()):
+            item = self.folder_list.item(i)
+            if not item:
+                continue
+                
+            payload = item.data(Qt.ItemDataRole.UserRole)
+            if not payload:
+                continue
+                
+            # 检查是否是文件夹项，且ID匹配
+            if isinstance(payload, tuple) and len(payload) == 2:
+                item_type, item_id = payload
+                if item_type == "folder" and item_id == folder_id:
+                    # 选中该项
+                    self.folder_list.setCurrentRow(i)
+                    # 确保该项可见（滚动到视图中）
+                    self.folder_list.scrollToItem(item)
+                    return
+
                 
     def show_folder_context_menu(self, position):
         """显示文件夹列表的右键菜单"""
@@ -2875,6 +2969,9 @@ class MainWindow(QMainWindow):
             # 点击在空白区域，显示统一的三项菜单
             new_note_action = QAction("新建笔记", self)
             new_note_action.triggered.connect(self.create_new_note)
+            # 如果当前选中的是系统文件夹（所有笔记或最近删除），禁用新建笔记
+            if self.current_folder_id is None or self.current_folder_id == -1:
+                new_note_action.setEnabled(False)
             menu.addAction(new_note_action)
             
             new_folder_action = QAction("新建文件夹", self)
@@ -2893,10 +2990,18 @@ class MainWindow(QMainWindow):
         
         # 判断是否是系统文件夹（所有笔记、最近删除）
         if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "system":
-            # 系统文件夹只显示"新建文件夹"
+            # 系统文件夹显示禁用的"新建笔记"和"新建文件夹"
+            new_note_action = QAction("新建笔记", self)
+            new_note_action.setEnabled(False)  # 禁用新建笔记
+            menu.addAction(new_note_action)
+            
             new_folder_action = QAction("新建文件夹", self)
             new_folder_action.triggered.connect(self.create_new_folder)
             menu.addAction(new_folder_action)
+            
+            new_tag_action = QAction("新建标签", self)
+            new_tag_action.triggered.connect(self.create_new_tag)
+            menu.addAction(new_tag_action)
             
             menu.exec(self.folder_list.mapToGlobal(position))
             return
@@ -2905,7 +3010,10 @@ class MainWindow(QMainWindow):
         if isinstance(payload, tuple) and len(payload) == 2 and payload[0] in ("tag_header", "tag"):
             # 点击在标签标题或标签上，显示统一的三项菜单
             new_note_action = QAction("新建笔记", self)
-            new_note_action.triggered.connect(self.create_new_note)
+            new_note_action.triggered.connect(self.create_new_note_from_tag)
+            # 如果当前选中的是系统文件夹（所有笔记或最近删除），禁用新建笔记
+            if self.current_folder_id is None or self.current_folder_id == -1:
+                new_note_action.setEnabled(False)
             menu.addAction(new_note_action)
             
             new_folder_action = QAction("新建文件夹", self)
@@ -3383,47 +3491,91 @@ class MainWindow(QMainWindow):
                     return self.folder_list.itemWidget(it)
             return None
 
+        def _find_tag_row_widget_by_id(tag_id: str):
+            if not tag_id:
+                return None
+            for i in range(self.folder_list.count()):
+                it = self.folder_list.item(i)
+                if not it:
+                    continue
+                payload = it.data(Qt.ItemDataRole.UserRole)
+                if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "tag" and payload[1] == tag_id:
+                    return self.folder_list.itemWidget(it)
+            return None
+
         try:
-            # 先取消“上一次选中的文件夹/系统项”的高亮。
-            # 不能只用 row index：拖拽后会 load_folders() 重建列表，row 会变化，导致旧高亮残留。
-            prev_folder_id = getattr(self, "_prev_selected_folder_id", None)
-            prev_system_key = getattr(self, "_prev_selected_system_key", None)
-
-            prev_w = None
-            if prev_folder_id:
-                prev_w = _find_folder_row_widget_by_id(prev_folder_id)
-            elif prev_system_key:
-                # system item: 通过 key 定位
-                for i in range(self.folder_list.count()):
-                    it = self.folder_list.item(i)
-                    if not it:
-                        continue
-                    payload = it.data(Qt.ItemDataRole.UserRole)
-                    if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "system" and payload[1] == prev_system_key:
-                        prev_w = self.folder_list.itemWidget(it)
-                        break
-
-            _set_row_widget_selected(prev_w, False)
-
-            # 再设置当前行选中
+            # 获取当前选中项的类型
+            cur_item_type = None
             cur_folder_id = None
             cur_system_key = None
+            cur_tag_id = None
+            
             if index is not None and 0 <= index < self.folder_list.count():
                 cur_item = self.folder_list.item(index)
                 payload = cur_item.data(Qt.ItemDataRole.UserRole) if cur_item else None
 
                 if isinstance(payload, tuple) and len(payload) == 2:
+                    cur_item_type = payload[0]
                     if payload[0] == "folder":
                         cur_folder_id = payload[1]
                     elif payload[0] == "system":
                         cur_system_key = payload[1]
+                    elif payload[0] == "tag":
+                        cur_tag_id = payload[1]
+            
+            # 如果选中的是标签，保持文件夹的选中状态
+            if cur_item_type == "tag":
+                # 取消之前选中标签的高亮
+                prev_tag_id = getattr(self, "_prev_selected_tag_id", None)
+                if prev_tag_id:
+                    prev_tag_w = _find_tag_row_widget_by_id(prev_tag_id)
+                    _set_row_widget_selected(prev_tag_w, False)
+                
+                # 设置当前标签高亮
+                cur_tag_w = self.folder_list.itemWidget(cur_item) if cur_item else None
+                _set_row_widget_selected(cur_tag_w, True)
+                
+                # 记录当前选中的标签
+                self.current_tag_id = cur_tag_id
+                self._prev_selected_tag_id = cur_tag_id
+                # 不取消文件夹的高亮，保持双选中状态
+            else:
+                # 选中的是文件夹或系统项，取消之前的标签高亮
+                prev_tag_id = getattr(self, "_prev_selected_tag_id", None)
+                if prev_tag_id:
+                    prev_tag_w = _find_tag_row_widget_by_id(prev_tag_id)
+                    _set_row_widget_selected(prev_tag_w, False)
+                    self._prev_selected_tag_id = None
+                
+                # 取消之前的文件夹/系统项高亮
+                prev_folder_id = getattr(self, "_prev_selected_folder_id", None)
+                prev_system_key = getattr(self, "_prev_selected_system_key", None)
 
+                prev_w = None
+                if prev_folder_id:
+                    prev_w = _find_folder_row_widget_by_id(prev_folder_id)
+                elif prev_system_key:
+                    # system item: 通过 key 定位
+                    for i in range(self.folder_list.count()):
+                        it = self.folder_list.item(i)
+                        if not it:
+                            continue
+                        payload = it.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "system" and payload[1] == prev_system_key:
+                            prev_w = self.folder_list.itemWidget(it)
+                            break
+
+                _set_row_widget_selected(prev_w, False)
+
+                # 设置当前行选中
                 cur_w = self.folder_list.itemWidget(cur_item) if cur_item else None
                 _set_row_widget_selected(cur_w, True)
 
-            # 记录“上一次选中”的语义ID（而不是 row）
-            self._prev_selected_folder_id = cur_folder_id
-            self._prev_selected_system_key = cur_system_key
+                # 记录"上一次选中"的语义ID（而不是 row）
+                self._prev_selected_folder_id = cur_folder_id
+                self._prev_selected_system_key = cur_system_key
+                # 清除标签选中状态
+                self.current_tag_id = None
         except Exception:
             pass
 
