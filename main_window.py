@@ -702,6 +702,9 @@ class NoteListWidget(QListWidget):
         super().__init__(parent)
         self.main_window = None  # 将在MainWindow中设置
         self.last_selected_row = None  # 记录上次选中的行，用于Shift多选
+        self.press_pos = None  # 记录鼠标按下的位置
+        self.press_row = None  # 记录鼠标按下时的行号
+        self.was_in_multi_select = False  # 记录按下时是否处于多选状态
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -786,8 +789,17 @@ class NoteListWidget(QListWidget):
             if self.main_window:
                 # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动）
                 if clicked_row in self.main_window.selected_note_rows:
-                    # 不做任何改变，保持当前多选状态
-                    pass
+                    # 记录点击信息，用于在mouseReleaseEvent中判断是否发生了拖动
+                    self.press_pos = event.pos()
+                    self.press_row = clicked_row
+                    self.was_in_multi_select = len(self.main_window.selected_note_rows) > 1
+                    
+                    # 保持多选状态，但需要设置currentItem以支持拖动
+                    self.blockSignals(True)
+                    self.setCurrentRow(clicked_row)
+                    self.blockSignals(False)
+                    # 强制刷新视觉选中状态，确保所有选中项都正确显示
+                    self.main_window._update_visual_selection()
                 else:
                     # 点击的是未选中的笔记，执行单选
                     self.main_window.select_single_note(clicked_row)
@@ -795,6 +807,28 @@ class NoteListWidget(QListWidget):
         
         # 调用父类方法以支持拖动功能
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """处理鼠标释放事件，如果是点击而非拖动，则取消多选状态"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            # 检查是否记录了按下位置（说明是在多选状态下点击的）
+            if self.press_pos is not None and self.was_in_multi_select:
+                # 计算鼠标移动距离
+                move_distance = (event.pos() - self.press_pos).manhattanLength()
+                
+                # 如果移动距离很小（小于5像素），认为是点击而非拖动
+                if move_distance < 5:
+                    # 取消多选状态，只选中当前点击的笔记
+                    if self.main_window and self.press_row is not None:
+                        self.main_window.select_single_note(self.press_row)
+            
+            # 清除记录的点击信息
+            self.press_pos = None
+            self.press_row = None
+            self.was_in_multi_select = False
+        
+        # 调用父类方法
+        super().mouseReleaseEvent(event)
 
 
 class FolderTwisty(QLabel):
@@ -1671,6 +1705,8 @@ class MainWindow(QMainWindow):
                     if item.flags() & Qt.ItemFlag.ItemIsSelectable:
                         if item.data(Qt.ItemDataRole.UserRole) == select_note_id:
                             self.note_list.setCurrentRow(i)
+                            self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
+                            self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
                             note_selected = True
                             break
             
@@ -1680,6 +1716,8 @@ class MainWindow(QMainWindow):
                     item = self.note_list.item(i)
                     if item.flags() & Qt.ItemFlag.ItemIsSelectable:
                         self.note_list.setCurrentRow(i)
+                        self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
+                        self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
                         break
         else:
             # 空列表：保持编辑器“不可编辑/无光标闪烁”的观感
