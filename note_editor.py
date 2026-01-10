@@ -513,6 +513,10 @@ class PasteImageTextEdit(QTextEdit):
     def mousePressEvent(self, event):
         """鼠标按下事件"""
         
+        # 恢复光标显示（如果之前被隐藏）
+        if self.cursorWidth() == 0:
+            self.setCursorWidth(1)
+        
         if event.button() == Qt.MouseButton.LeftButton:
             # 首先检查是否点击了链接（附件）
             cursor = self.cursorForPosition(event.pos())
@@ -826,18 +830,126 @@ class PasteImageTextEdit(QTextEdit):
         # 其他情况使用默认行为
         super().mouseDoubleClickEvent(event)
     
+    def contextMenuEvent(self, event):
+        """右键菜单事件 - 为表格单元格提供操作菜单"""
+        # 获取鼠标位置的光标
+        cursor = self.cursorForPosition(event.pos())
+        table = cursor.currentTable()
+        
+        if table:
+            # 在表格内，显示表格操作菜单
+            cell = table.cellAt(cursor)
+            if cell.isValid():
+                menu = QMenu(self)
+                
+                # 获取当前单元格的行列位置
+                row = cell.row()
+                col = cell.column()
+                
+                # 在上方插入一行
+                insert_row_above_action = QAction("在上方插入一行", self)
+                insert_row_above_action.triggered.connect(lambda: self.insert_table_row(table, row))
+                menu.addAction(insert_row_above_action)
+                
+                # 在下方插入一行
+                insert_row_below_action = QAction("在下方插入一行", self)
+                insert_row_below_action.triggered.connect(lambda: self.insert_table_row(table, row + 1))
+                menu.addAction(insert_row_below_action)
+                
+                menu.addSeparator()
+                
+                # 在左侧插入一列
+                insert_col_left_action = QAction("在左侧插入一列", self)
+                insert_col_left_action.triggered.connect(lambda: self.insert_table_column(table, col))
+                menu.addAction(insert_col_left_action)
+                
+                # 在右侧插入一列
+                insert_col_right_action = QAction("在右侧插入一列", self)
+                insert_col_right_action.triggered.connect(lambda: self.insert_table_column(table, col + 1))
+                menu.addAction(insert_col_right_action)
+                
+                menu.addSeparator()
+                
+                # 删除当前行
+                delete_row_action = QAction("删除当前行", self)
+                delete_row_action.triggered.connect(lambda: self.delete_table_row(table, row))
+                # 如果只有一行，禁用删除行功能
+                if table.rows() <= 1:
+                    delete_row_action.setEnabled(False)
+                menu.addAction(delete_row_action)
+                
+                # 删除当前列
+                delete_col_action = QAction("删除当前列", self)
+                delete_col_action.triggered.connect(lambda: self.delete_table_column(table, col))
+                # 如果只有一列，禁用删除列功能
+                if table.columns() <= 1:
+                    delete_col_action.setEnabled(False)
+                menu.addAction(delete_col_action)
+                
+                menu.addSeparator()
+                
+                # 删除整个表格
+                delete_table_action = QAction("删除整个表格", self)
+                delete_table_action.triggered.connect(lambda: self.delete_entire_table(table))
+                menu.addAction(delete_table_action)
+                
+                # 显示菜单
+                menu.exec(event.globalPos())
+                return
+        
+        # 不在表格内，使用默认右键菜单
+        super().contextMenuEvent(event)
+    
+    def insert_table_row(self, table, row):
+        """在指定位置插入一行"""
+        if table:
+            table.insertRows(row, 1)
+    
+    def insert_table_column(self, table, col):
+        """在指定位置插入一列"""
+        if table:
+            table.insertColumns(col, 1)
+    
+    def delete_table_row(self, table, row):
+        """删除指定行"""
+        if table and table.rows() > 1:
+            table.removeRows(row, 1)
+    
+    def delete_table_column(self, table, col):
+        """删除指定列"""
+        if table and table.columns() > 1:
+            table.removeColumns(col, 1)
+    
+    def delete_entire_table(self, table):
+        """删除整个表格"""
+        if table:
+            cursor = QTextCursor(self.document())
+            table_start = table.firstPosition()
+            table_end = table.lastPosition()
+            
+            cursor.setPosition(table_start)
+            cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+    
     def keyPressEvent(self, event):
         """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
+        # 如果按下的不是删除键，且光标被隐藏，则恢复光标显示并清除表格选中状态
+        if event.key() not in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if self.cursorWidth() == 0:
+                self.setCursorWidth(1)
+            if self.selected_table:
+                self.selected_table = None
+                self.selected_table_cursor = None
+                self.viewport().update()
+        
         # 检查是否按下了删除键（Delete 或 Backspace）
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            # 获取当前光标
+            current_cursor = self.textCursor()
+            current_table = current_cursor.currentTable()
+            
             # 如果有选中的表格，需要判断是否在编辑表格内容
             if self.selected_table and self.selected_table_cursor:
-                # 获取当前光标
-                current_cursor = self.textCursor()
-                
-                # 检查当前光标是否在表格内（正在编辑单元格）
-                current_table = current_cursor.currentTable()
-                
                 # 如果当前光标在表格内，说明用户正在编辑单元格内容
                 # 此时不应该删除整个表格，而是使用默认行为删除单元格内容
                 if current_table == self.selected_table:
@@ -846,8 +958,7 @@ class PasteImageTextEdit(QTextEdit):
                     return
                 
                 # 如果当前光标不在表格内，说明用户选中了整个表格
-                # 此时应该删除整个表格
-                # 创建光标并选中整个表格
+                # 此时应该删除整个表格（第二次按删除键）
                 cursor = QTextCursor(self.document())
                 
                 # 获取表格在文档中的位置
@@ -863,10 +974,59 @@ class PasteImageTextEdit(QTextEdit):
                 # 清除选中状态
                 self.selected_table = None
                 self.selected_table_cursor = None
+                
+                # 恢复光标显示
+                self.setCursorWidth(1)
+                
                 self.viewport().update()
                 
                 event.accept()
                 return
+            
+            # 检查光标是否在表格前面或后面（第一次按删除键）
+            cursor_pos = current_cursor.position()
+            
+            # 检查所有表格，看光标是否紧邻某个表格
+            frame = self.document().rootFrame()
+            for child_frame in frame.childFrames():
+                table = child_frame
+                if hasattr(table, 'firstPosition'):
+                    table_start = table.firstPosition()
+                    table_end = table.lastPosition()
+                    
+                    # Delete键：删除光标后面的内容，检查光标是否在表格前面（允许有少量间隔，比如换行符）
+                    # Backspace键：删除光标前面的内容，检查光标是否在表格后面（允许有少量间隔）
+                    # 使用范围判断：光标和表格之间的距离不超过2个字符
+                    is_before_table = (event.key() == Qt.Key.Key_Delete and 
+                                      cursor_pos <= table_start and cursor_pos >= table_start - 2)
+                    is_after_table = (event.key() == Qt.Key.Key_Backspace and 
+                                     cursor_pos >= table_end + 1 and cursor_pos <= table_end + 3)
+                    
+                    if is_before_table or is_after_table:
+                        # 第一次按删除键：选中表格
+                        self.selected_table = table
+                        self.selected_table_cursor = QTextCursor(self.document())
+                        self.selected_table_cursor.setPosition(table_start)
+                        
+                        # 将光标移动到表格外部，并清除选区使其不闪烁
+                        clear_cursor = QTextCursor(self.document())
+                        # 将光标移到表格外
+                        if is_before_table:
+                            clear_cursor.setPosition(table_start - 1 if table_start > 0 else 0)
+                        else:
+                            clear_cursor.setPosition(table_end + 1)
+                        # 清除选区
+                        clear_cursor.clearSelection()
+                        self.setTextCursor(clear_cursor)
+                        
+                        # 隐藏光标（通过设置光标宽度为0）
+                        self.setCursorWidth(0)
+                        
+                        # 触发重绘以显示选中效果
+                        self.viewport().update()
+                        
+                        event.accept()
+                        return
         
         # 直接使用默认行为，不做任何特殊处理
         # 这样选区中的图片和文本都会被正常删除
