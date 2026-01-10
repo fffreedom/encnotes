@@ -1288,20 +1288,18 @@ class NoteEditor(QWidget):
         # 格式菜单
         format_menu = QMenu("格式", self)
         
-        # 标题子菜单
-        heading_menu = format_menu.addMenu("标题")
-        
+        # 标题样式（平铺在格式菜单下）
         title_action = QAction("标题", self)
         title_action.triggered.connect(lambda: self.apply_heading(1))
-        heading_menu.addAction(title_action)
+        format_menu.addAction(title_action)
         
-        heading_action = QAction("大标题", self)
+        heading_action = QAction("小标题", self)
         heading_action.triggered.connect(lambda: self.apply_heading(2))
-        heading_menu.addAction(heading_action)
+        format_menu.addAction(heading_action)
         
-        subheading_action = QAction("小标题", self)
+        subheading_action = QAction("副标题", self)
         subheading_action.triggered.connect(lambda: self.apply_heading(3))
-        heading_menu.addAction(subheading_action)
+        format_menu.addAction(subheading_action)
         
         format_menu.addSeparator()
         
@@ -1425,7 +1423,7 @@ class NoteEditor(QWidget):
         self.text_edit.setTextCursor(cursor)
     
     def auto_format_first_line(self):
-        """自动将第一行格式化为大标题，其他行为正文格式"""
+        """自动将第一行格式化为标题格式（28号字体），其他行为正文格式"""
         # 获取文档
         document = self.text_edit.document()
         if document.isEmpty():
@@ -1455,14 +1453,14 @@ class NoteEditor(QWidget):
         char_fmt = first_cursor.charFormat()
         current_size = char_fmt.fontPointSize()
         
-        # 如果第一行不是大标题格式（22号字体），则应用格式
-        if current_size != 22:
+        # 如果第一行不是标题格式（28号字体），则应用格式
+        if current_size != 28:
             # 阻止信号，避免递归
             self.text_edit.blockSignals(True)
             
             # 设置字符格式
             new_char_fmt = QTextCharFormat()
-            new_char_fmt.setFontPointSize(22)
+            new_char_fmt.setFontPointSize(28)
             new_char_fmt.setFontWeight(QFont.Weight.Bold)
             
             # 应用格式到第一行
@@ -1499,11 +1497,11 @@ class NoteEditor(QWidget):
         char_fmt = QTextCharFormat()
         char_fmt.setFontWeight(QFont.Weight.Bold)
         
-        if level == 1:  # 标题
+        if level == 1:  # 标题（首行标题格式）
             char_fmt.setFontPointSize(28)
-        elif level == 2:  # 大标题
+        elif level == 2:  # 小标题
             char_fmt.setFontPointSize(22)
-        elif level == 3:  # 小标题
+        elif level == 3:  # 副标题
             char_fmt.setFontPointSize(18)
         
         cursor.beginEditBlock()
