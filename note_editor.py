@@ -541,6 +541,13 @@ class PasteImageTextEdit(QTextEdit):
                         self.selected_image_rect = None
                         self.selected_image_cursor = None
                     
+                    # 将光标移动到表格外部（表格之后的位置），退出单元格编辑状态
+                    # 这样在按删除键时，currentTable()会返回None，从而删除整个表格
+                    clear_cursor = QTextCursor(self.document())
+                    table_end = table.lastPosition()
+                    clear_cursor.setPosition(table_end + 1)
+                    self.setTextCursor(clear_cursor)
+                    
                     self.viewport().update()
                     event.accept()
                     return
