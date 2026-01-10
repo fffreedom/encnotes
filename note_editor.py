@@ -79,7 +79,7 @@ class PasteImageTextEdit(QTextEdit):
             self.viewport().update()
     
     def get_table_rect(self, table):
-        """获取表格的精确边界框
+        """获取表格的精确边界框（使用表格格式宽度信息）
         
         Args:
             table: QTextTable对象
@@ -92,107 +92,135 @@ class PasteImageTextEdit(QTextEdit):
         
         from PyQt6.QtCore import QRectF
         
-        # 获取表格的关键单元格
-        top_left_cell = table.cellAt(0, 0)  # 左上角
-        bottom_right_cell = table.cellAt(table.rows() - 1, table.columns() - 1)  # 右下角
-        
-        if not top_left_cell.isValid() or not bottom_right_cell.isValid():
-            return None
-        
         # 只在第一次或调试模式下输出日志
         debug = not self.table_debug_logged
         if debug:
-            print(f"\n=== 表格边界计算调试 ===")
+            print(f"\n=== 表格边界计算调试（使用表格格式宽度） ===")
             print(f"表格尺寸: {table.rows()} 行 x {table.columns()} 列")
         
-        # 获取左上角单元格的第一个光标位置（用于确定左边界和上边界）
-        top_left_cursor = top_left_cell.firstCursorPosition()
-        top_left_rect = self.cursorRect(top_left_cursor)
-        if debug:
-            print(f"左上角单元格光标矩形: {top_left_rect}")
-        
-        # 获取右下角单元格的最后一个光标位置（用于确定下边界）
-        bottom_right_cursor = bottom_right_cell.lastCursorPosition()
-        bottom_right_rect = self.cursorRect(bottom_right_cursor)
-        if debug:
-            print(f"右下角单元格光标矩形: {bottom_right_rect}")
-        
-        # 计算表格的边界框
-        # 左边界：左上角单元格的左边界
-        left = top_left_rect.left() - 5
-        
-        # 上边界：左上角单元格的上边界
-        top = top_left_rect.top() - 5
-        
-        # 下边界：右下角单元格的下边界
-        bottom = bottom_right_rect.bottom() + 5
-        
-        # **关键修复**：计算右边界
-        # 方法：使用QTextTable的实际边界框
-        if debug:
-            print(f"\n计算表格实际宽度:")
-        
-        # 方法1：尝试使用表格格式获取实际宽度
-        table_format = table.format()
-        if debug:
-            print(f"表格格式信息:")
-            print(f"  表格宽度类型: {table_format.width()}")
-            print(f"  表格边距: left={table_format.leftMargin()}, right={table_format.rightMargin()}")
-            print(f"  表格边框: {table_format.border()}")
-        
-        # 方法2：遍历第一行所有单元格，收集每列的起始位置
-        if debug:
-            print(f"\n遍历第一行所有单元格:")
-        
-        col_positions = []
-        for col_idx in range(table.columns()):
-            cell = table.cellAt(0, col_idx)
-            if cell.isValid():
-                first_cursor = cell.firstCursorPosition()
-                first_rect = self.cursorRect(first_cursor)
-                col_positions.append(first_rect.left())
-                
-                if debug:
-                    print(f"  列{col_idx}: left={first_rect.left()}")
-        
-        # 计算最后一列的宽度（使用前面列的平均宽度）
-        if len(col_positions) >= 2:
-            # 计算前面列的宽度
-            col_widths = []
-            for i in range(len(col_positions) - 1):
-                width = col_positions[i + 1] - col_positions[i]
-                col_widths.append(width)
+        try:
+            # 获取表格格式
+            table_format = table.format()
             
-            # 使用平均列宽作为最后一列的宽度
-            avg_col_width = sum(col_widths) / len(col_widths)
-            last_col_left = col_positions[-1]
-            max_right = last_col_left + avg_col_width
+            # 获取表格宽度设置
+            table_width_length = table_format.width()
             
             if debug:
-                print(f"\n列宽计算:")
-                for i, width in enumerate(col_widths):
-                    print(f"  列{i}宽度: {width}")
-                print(f"  平均列宽: {avg_col_width}")
-                print(f"  最后一列left: {last_col_left}")
-                print(f"  计算的最右边界: {max_right}")
-        else:
-            # 如果只有一列，使用一个默认宽度
-            max_right = col_positions[0] + 200 if col_positions else left + 200
-        
-        # 使用找到的最右边界
-        right = max_right + 5  # 加上右边距
-        
-        if debug:
-            print(f"\n最终右边界计算: {max_right} + 5 = {right}")
-        
-        # 创建矩形
-        table_rect = QRectF(left, top, right - left, bottom - top)
-        if debug:
-            print(f"最终表格矩形: left={left}, top={top}, right={right}, width={right-left}, height={bottom-top}")
-            print(f"=== 调试结束 ===\n")
-            self.table_debug_logged = True  # 标记已输出过日志
-        
-        return table_rect
+                print(f"表格宽度类型: {table_width_length.type()}")
+                print(f"表格宽度值: {table_width_length.rawValue()}")
+            
+            # 获取左上角单元格（第一行第一列）
+            top_left_cell = table.cellAt(0, 0)
+            if not top_left_cell.isValid():
+                if debug:
+                    print("错误：无法获取左上角单元格")
+                return None
+            
+            # 获取右下角单元格（最后一行最后一列）
+            bottom_right_cell = table.cellAt(table.rows() - 1, table.columns() - 1)
+            if not bottom_right_cell.isValid():
+                if debug:
+                    print("错误：无法获取右下角单元格")
+                return None
+            
+            # 获取左上角单元格的光标矩形（第一个字符位置）
+            top_left_cursor = top_left_cell.firstCursorPosition()
+            top_left_rect = self.cursorRect(top_left_cursor)
+            
+            # 获取右下角单元格的光标矩形（最后一个字符位置）
+            bottom_right_cursor = bottom_right_cell.lastCursorPosition()
+            bottom_right_rect = self.cursorRect(bottom_right_cursor)
+            
+            if debug:
+                print(f"左上角单元格光标矩形: {top_left_rect}")
+                print(f"右下角单元格光标矩形: {bottom_right_rect}")
+            
+            # 计算表格边界
+            # 左边界：左上角单元格的左边界 - 边框宽度
+            border_width = table_format.border()
+            cell_padding = table_format.cellPadding()
+            
+            left = top_left_rect.left() - border_width - cell_padding
+            
+            # 上边界：左上角单元格的上边界 - 边框宽度
+            top = top_left_rect.top() - border_width - cell_padding
+            
+            # 下边界：右下角单元格的下边界 + 边框宽度
+            bottom = bottom_right_rect.bottom() + border_width + cell_padding
+            
+            # **关键改进**：使用表格格式的宽度信息计算右边界
+            # 获取文档的实际渲染宽度
+            document = self.document()
+            doc_layout = document.documentLayout()
+            
+            # 获取文档的页面大小
+            doc_size = doc_layout.documentSize()
+            doc_width = doc_size.width()
+            
+            # 获取文档的根框架（包含所有内容）
+            root_frame = document.rootFrame()
+            root_frame_format = root_frame.frameFormat()
+            
+            # 获取文档的左右边距
+            doc_left_margin = root_frame_format.leftMargin()
+            doc_right_margin = root_frame_format.rightMargin()
+            
+            # 计算内容区域的实际宽度（这才是表格100%宽度的参考）
+            content_width = doc_width - doc_left_margin - doc_right_margin
+            
+            if debug:
+                print(f"文档总宽度: {doc_width}")
+                print(f"文档左边距: {doc_left_margin}, 右边距: {doc_right_margin}")
+                print(f"内容区域宽度: {content_width}")
+                print(f"表格左边界位置: {left}")
+            
+            # 根据表格宽度类型计算实际宽度
+            from PyQt6.QtGui import QTextLength
+            
+            if table_width_length.type() == QTextLength.Type.PercentageLength:
+                # 百分比宽度 - 相对于内容区域宽度
+                percentage = table_width_length.rawValue()
+                table_total_width = content_width * percentage / 100.0
+                if debug:
+                    print(f"表格宽度（百分比）: {percentage}%")
+                    print(f"表格总宽度: {table_total_width}")
+            elif table_width_length.type() == QTextLength.Type.FixedLength:
+                # 固定宽度
+                table_total_width = table_width_length.rawValue()
+                if debug:
+                    print(f"表格宽度（固定）: {table_total_width}")
+            else:
+                # 可变宽度，使用内容区域宽度
+                table_total_width = content_width
+                if debug:
+                    print(f"表格宽度（可变）: {table_total_width}")
+            
+            # 计算右边界：左边界 + 表格总宽度
+            # left已经是表格的实际左边界（包含了边框和内边距的调整）
+            right = left + table_total_width
+            
+            # 创建矩形
+            table_rect = QRectF(left, top, right - left, bottom - top)
+            
+            if debug:
+                print(f"计算的表格边界:")
+                print(f"  left={left}, top={top}")
+                print(f"  right={right}, bottom={bottom}")
+                print(f"  width={right - left}, height={bottom - top}")
+                print(f"  表格总宽度={table_total_width}")
+                print(f"  右边界计算: {left} + {table_total_width} = {right}")
+                print(f"最终表格矩形: {table_rect}")
+                print(f"=== 调试结束 ===\n")
+                self.table_debug_logged = True  # 标记已输出过日志
+            
+            return table_rect
+            
+        except Exception as e:
+            if debug:
+                print(f"获取表格边界时发生错误: {e}")
+                import traceback
+                traceback.print_exc()
+            return None
     
     def is_click_on_table_border(self, pos, table):
         """检查点击位置是否在表格的边框线上
@@ -320,6 +348,13 @@ class PasteImageTextEdit(QTextEdit):
             table_rect = self.get_table_rect(self.selected_table)
             
             if table_rect:
+                # 输出表格边框位置调试信息
+                print(f"\n=== 表格渲染调试 ===")
+                print(f"表格边界框: left={table_rect.left()}, top={table_rect.top()}")
+                print(f"           right={table_rect.right()}, bottom={table_rect.bottom()}")
+                print(f"           width={table_rect.width()}, height={table_rect.height()}")
+                print(f"=== 渲染调试结束 ===\n")
+                
                 # 只绘制边框，不绘制角标
                 # 绘制蓝色边界框
                 pen = QPen(QColor("#007AFF"), 3)
