@@ -1105,8 +1105,8 @@ class MainWindow(QMainWindow):
                 and event.button() == Qt.MouseButton.LeftButton
 
             ):
-                # 只有“选中了某个自定义文件夹 + 当前没有选中笔记”才自动创建
-                if self.current_folder_id and self.current_note_id is None:
+                # 只有“选中了某个自定义文件夹 + 当前没有选中笔记 + 当前不在标签视图”才自动创建
+                if self.current_folder_id and self.current_note_id is None and self.current_tag_id is None:
                     self.create_note_in_folder(self.current_folder_id, default_title="新笔记")
                     event.accept()
                     return True
@@ -1785,11 +1785,29 @@ class MainWindow(QMainWindow):
         elif current_row >= first_tag_row:  # 标签
             tag_index = current_row - first_tag_row
             if 0 <= tag_index < len(self.tags):
-                tag_id = self.tags[tag_index]['id']
-                notes = self.note_manager.get_notes_by_tag(tag_id)
-                # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
-                self.current_tag_id = tag_id
-                self.is_viewing_deleted = False
+                tag = self.tags[tag_index]
+                tag_id = tag['id']
+
+                # 空标签名：允许选中/重命名，但不让右侧编辑器进入可编辑态（不显示光标）
+                tag_name = str(tag.get('name', '') or '').strip()
+                if not tag_name:
+                    notes = []
+                    # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
+                    self.current_tag_id = tag_id
+                    self.is_viewing_deleted = False
+
+                    self.current_note_id = None
+                    self.editor.current_note_id = None
+                    self.editor.clear()
+                    try:
+                        self.editor.text_edit.clearFocus()
+                    except Exception:
+                        pass
+                else:
+                    notes = self.note_manager.get_notes_by_tag(tag_id)
+                    # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
+                    self.current_tag_id = tag_id
+                    self.is_viewing_deleted = False
             else:
                 notes = []
         else:
@@ -2285,29 +2303,38 @@ class MainWindow(QMainWindow):
         # 加载标签（缩进显示）
         self.tags = self.note_manager.get_all_tags()
         for tag in self.tags:
+            raw_name = str(tag.get('name', '') or '')
+            tag_name = raw_name.strip()
             count = self.note_manager.get_tag_count(tag['id'])
-            item_text = f"    🏷️ {tag['name']} ({count})"
+
+            is_empty_tag = (tag_name == "")
+            display_name = tag_name if not is_empty_tag else "（未命名标签）"
+            item_text = f"    🏷️ {display_name} ({count})"
+
             tag_item = QListWidgetItem()
             tag_item.setData(Qt.ItemDataRole.UserRole, ("tag", tag['id']))  # 标记为标签项
-            
+
             # 为标签项创建自定义widget以支持高亮显示
             tag_widget = QWidget()
             tag_widget.setObjectName("folder_row_widget")  # 使用相同的样式
             tag_layout = QHBoxLayout(tag_widget)
             tag_layout.setContentsMargins(0, 0, 0, 0)
             tag_layout.setSpacing(0)
-            
+
             tag_label = QLabel(item_text)
-            tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px;")
+            if is_empty_tag:
+                tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px; color: #8e8e93;")
+            else:
+                tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px;")
             tag_layout.addWidget(tag_label)
-            
+
             # 如果当前选中的是这个标签，设置高亮
             if self.current_tag_id == tag['id']:
                 tag_widget.setProperty("selected", True)
                 tag_item.setSelected(True)
             else:
                 tag_widget.setProperty("selected", False)
-            
+
             self.folder_list.addItem(tag_item)
             self.folder_list.setItemWidget(tag_item, tag_widget)
             tag_item.setSizeHint(QSize(200, 40))  # 增加高度到40px，确保显示完整
@@ -3814,6 +3841,7 @@ class MainWindow(QMainWindow):
             self._last_folder_click_folder_id = None
             self._last_folder_click_ms = 0
             return
+
 
         item_type = payload[0]  # "folder" 或 "tag"
         item_id = payload[1]
