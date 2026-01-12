@@ -80,15 +80,48 @@ fi
 
 echo -e "${GREEN}应用打包成功: ${DIST_DIR}/${APP_NAME}.app${NC}"
 
-# 4. 复制应用到 DMG 临时目录
-echo -e "\n${GREEN}[4/6] 准备 DMG 内容...${NC}"
+# 4. 代码签名（如果配置了签名身份）
+echo -e "\n${GREEN}[4/7] 代码签名...${NC}"
+if [ -n "$CODESIGN_IDENTITY" ]; then
+    echo -e "${YELLOW}使用签名身份: ${CODESIGN_IDENTITY}${NC}"
+    
+    # 签名所有框架和库
+    echo -e "${YELLOW}签名框架和库...${NC}"
+    find "${DIST_DIR}/${APP_NAME}.app/Contents/Frameworks" -type f -name "*.dylib" -o -name "*.so" 2>/dev/null | while read lib; do
+        codesign --force --sign "$CODESIGN_IDENTITY" \
+            --options runtime \
+            --timestamp \
+            "$lib" 2>/dev/null || true
+    done
+    
+    # 签名应用包
+    echo -e "${YELLOW}签名应用包...${NC}"
+    codesign --force --deep --sign "$CODESIGN_IDENTITY" \
+        --options runtime \
+        --entitlements "${SCRIPT_DIR}/entitlements.plist" \
+        --timestamp \
+        "${DIST_DIR}/${APP_NAME}.app"
+    
+    # 验证签名
+    echo -e "${YELLOW}验证签名...${NC}"
+    codesign --verify --deep --strict --verbose=2 "${DIST_DIR}/${APP_NAME}.app"
+    
+    echo -e "${GREEN}代码签名完成${NC}"
+else
+    echo -e "${YELLOW}未配置 CODESIGN_IDENTITY 环境变量，跳过代码签名${NC}"
+    echo -e "${YELLOW}提示: 设置环境变量以启用代码签名:${NC}"
+    echo -e "${YELLOW}  export CODESIGN_IDENTITY=\"Developer ID Application: Your Name (TEAM_ID)\"${NC}"
+fi
+
+# 5. 复制应用到 DMG 临时目录
+echo -e "\n${GREEN}[5/7] 准备 DMG 内容...${NC}"
 cp -R "${DIST_DIR}/${APP_NAME}.app" "${DMG_DIR}/"
 
 # 注意：不需要手动创建 Applications 符号链接
 # create-dmg 会通过 --app-drop-link 参数自动创建
 
-# 5. 创建 DMG
-echo -e "\n${GREEN}[5/6] 创建 DMG 镜像...${NC}"
+# 6. 创建 DMG
+echo -e "\n${GREEN}[6/7] 创建 DMG 镜像...${NC}"
 create-dmg \
   --volname "${APP_DISPLAY_NAME}" \
   --volicon "${BUILD_DIR}/build_scripts/icon.icns" \
@@ -102,8 +135,8 @@ create-dmg \
   "${DIST_DIR}/${DMG_NAME}.dmg" \
   "${DMG_DIR}/"
 
-# 6. 清理临时文件
-echo -e "\n${GREEN}[6/6] 清理临时文件...${NC}"
+# 7. 清理临时文件
+echo -e "\n${GREEN}[7/7] 清理临时文件...${NC}"
 
 # 先卸载任何挂载的 DMG
 echo -e "${YELLOW}卸载挂载的 DMG 镜像...${NC}"

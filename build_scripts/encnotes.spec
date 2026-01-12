@@ -114,8 +114,8 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    codesign_identity=os.environ.get('CODESIGN_IDENTITY'),  # 从环境变量读取签名身份
+    entitlements_file='entitlements.plist',  # 权限配置文件
 )
 
 coll = COLLECT(

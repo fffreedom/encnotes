@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 允许应用访问网络 -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    
+    <!-- 允许应用作为网络服务器 -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    
+    <!-- 允许应用读写用户选择的文件 -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    
+    <!-- 允许应用访问钥匙串 -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.encnotes.app</string>
+    </array>
+    
+    <!-- iCloud CloudKit 容器（用于私有数据同步） -->
+    <key>com.apple.developer.icloud-container-identifiers</key>
+    <array>
+        <string>iCloud.com.encnotes.app</string>
+    </array>
+    
+    <!-- iCloud 服务（使用 CloudKit） -->
+    <key>com.apple.developer.icloud-services</key>
+    <array>
+        <string>CloudKit</string>
+    </array>
+    
+    <!-- CloudKit 环境（生产环境） -->
+    <key>com.apple.developer.icloud-container-environment</key>
+    <string>Production</string>
+    
+    <!-- 禁用库验证（开发阶段使用，发布时建议移除） -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    
+    <!-- 允许加载不安全的可执行内存（某些 Python 库需要） -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    
+    <!-- 允许 JIT 编译（某些 Python 库需要） -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    
+    <!-- 允许 DYLD 环境变量（开发阶段使用） -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    
+    <!-- 硬化运行时 -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+</dict>
+</plist>
