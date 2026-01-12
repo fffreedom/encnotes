@@ -2793,17 +2793,54 @@ class MainWindow(QMainWindow):
     # ========== 标签管理方法 ==========
     
     def create_new_tag(self):
-        """创建新标签"""
-        name, ok = QInputDialog.getText(
-            self, "新建标签", "请输入标签名称:"
-        )
+        """创建新标签（不弹窗）"""
+        base_name = "新建标签"
         
-        if ok and name.strip():
-            self.note_manager.create_tag(name.strip())
-            self.load_folders()
+        # 获取所有现有标签名称
+        try:
+            all_tags = self.note_manager.get_all_tags()
+            existing = {
+                str(t.get("name", "")).strip().casefold()
+                for t in all_tags
+            }
+        except Exception:
+            existing = set()
+        
+        # 生成不重名的默认名：新建标签 / 新建标签1 / 新建标签2 ...
+        if base_name.casefold() not in existing:
+            name = base_name
+        else:
+            i = 1
+            while True:
+                candidate = f"{base_name}{i}"
+                if candidate.casefold() not in existing:
+                    name = candidate
+                    break
+                i += 1
+        
+        tag_id = self.note_manager.create_tag(name)
+        self.load_folders()
+        
+        # 选中新创建的标签并进入重命名状态
+        created_row = None
+        for i, tag in enumerate(self.tags):
+            if tag['id'] == tag_id:
+                # 标签在 folder_list 中的位置需要计算
+                # 位置 = 系统项(2) + 自定义文件夹数量 + 已删除(1) + 标签头(1) + 标签索引
+                created_row = 2 + len(self.custom_folders) + 1 + 1 + i
+                self.folder_list.setCurrentRow(created_row)
+                break
+        
+        # 进入就地重命名
+        if created_row is not None:
+            QTimer.singleShot(0, lambda: self.rename_tag_inline(tag_id))
             
     def rename_tag(self, tag_id: str):
-        """重命名标签"""
+        """重命名标签（兼容旧接口，调用就地编辑版本）"""
+        self.rename_tag_inline(tag_id)
+    
+    def rename_tag_dialog(self, tag_id: str):
+        """重命名标签（对话框版本，保留用于特殊场景）"""
         tag = self.note_manager.get_tag(tag_id)
         if not tag:
             return
@@ -2817,6 +2854,158 @@ class MainWindow(QMainWindow):
         if ok and name.strip():
             self.note_manager.update_tag(tag_id, name.strip())
             self.load_folders()
+    
+    def rename_tag_inline(self, tag_id: str):
+        """重命名标签（就地编辑，不弹窗）"""
+        tag = self.note_manager.get_tag(tag_id)
+        if not tag:
+            return
+        
+        # 找到对应的 QListWidgetItem
+        target_item = None
+        for i in range(self.folder_list.count()):
+            it = self.folder_list.item(i)
+            if not it:
+                continue
+            payload = it.data(Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "tag" and payload[1] == tag_id:
+                target_item = it
+                break
+        
+        if not target_item:
+            return
+        
+        row_widget = self.folder_list.itemWidget(target_item)
+        if not row_widget:
+            return
+        
+        layout = row_widget.layout()
+        if not layout:
+            return
+        
+        # 防止重复进入编辑态
+        if row_widget.property("renaming") is True:
+            return
+        row_widget.setProperty("renaming", True)
+        
+        from PyQt6.QtWidgets import QLineEdit
+        
+        # 找到标签名称的 QLabel
+        name_widget = None
+        name_index = -1
+        for idx in range(layout.count()):
+            w = layout.itemAt(idx).widget()
+            if isinstance(w, QLabel):
+                name_widget = w
+                name_index = idx
+                break
+        
+        if name_widget is None or name_index < 0:
+            row_widget.setProperty("renaming", False)
+            return
+        
+        # 提取纯名称（去掉前缀和计数）
+        old_name = tag.get("name", "")
+        
+        editor = QLineEdit()
+        editor.setText(old_name)
+        editor.setTextMargins(0, 0, 24, 0)
+        editor.setProperty("_rename_old_name", old_name)
+        editor.setProperty("_rename_cancelled", False)
+        editor.setFrame(False)
+        editor.setStyleSheet("""
+            QLineEdit {
+                font-size: 13px;
+                color: #000000;
+                background-color: #ffffff;
+                border: 1px solid #bdbdbd;
+                border-radius: 4px;
+                padding: 2px 24px 2px 6px;
+                margin: 0px 10px;
+            }
+        """)
+        
+        def _cleanup(cancelled: bool, new_name: str | None = None):
+            # 恢复 label
+            try:
+                layout.removeWidget(editor)
+                editor.deleteLater()
+            except Exception:
+                pass
+            
+            # 把 label 加回原位
+            layout.insertWidget(name_index, name_widget)
+            name_widget.show()
+            
+            row_widget.setProperty("renaming", False)
+            
+            # 如果取消，直接恢复原显示
+            if cancelled:
+                return
+            
+            # 提交更新
+            if new_name is None:
+                return
+            new_name = (new_name or "").strip()
+            
+            if not new_name or new_name == old_name:
+                return
+            
+            # 校验：不允许重名（忽略大小写和首尾空白）
+            try:
+                all_tags = self.note_manager.get_all_tags()
+                normalized = new_name.strip().casefold()
+                conflict = any(
+                    (t.get("id") != tag_id)
+                    and (str(t.get("name", "")).strip().casefold() == normalized)
+                    for t in all_tags
+                )
+            except Exception:
+                conflict = False
+            
+            if conflict:
+                QMessageBox.warning(self, "名称已存在", "已存在同名标签，请换一个名称。")
+                # 回到就地编辑状态，让用户继续编辑
+                QTimer.singleShot(0, lambda: self.rename_tag_inline(tag_id))
+                return
+            
+            self.note_manager.update_tag(tag_id, new_name)
+            # 全量刷新
+            self.load_folders()
+        
+        # 提交：回车
+        editor.returnPressed.connect(lambda: _cleanup(False, editor.text()))
+        
+        def _on_editing_finished():
+            # ESC 取消
+            if bool(editor.property("_rename_cancelled")):
+                _cleanup(True)
+                return
+            
+            if row_widget.property("renaming") is True:
+                _cleanup(False, editor.text())
+        
+        editor.editingFinished.connect(_on_editing_finished)
+        
+        # 取消：ESC
+        editor.installEventFilter(self)
+        
+        def _event_filter(obj, event):
+            if obj == editor and event.type() == event.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Escape:
+                    editor.setProperty("_rename_cancelled", True)
+                    editor.clearFocus()
+                    return True
+            return False
+        
+        self.eventFilter = _event_filter
+        
+        # 隐藏原 label，插入编辑框
+        name_widget.hide()
+        layout.insertWidget(name_index, editor)
+        
+        editor.setFocus()
+        editor.selectAll()
             
     def delete_tag_confirm(self, tag_id: str):
         """删除标签（确认）"""
@@ -3609,24 +3798,27 @@ class MainWindow(QMainWindow):
         self._toggle_folder_expanded(folder_id)
 
     def on_folder_item_clicked(self, item: QListWidgetItem):
-        """左侧文件夹列表：选中状态下再次单击进入重命名（仅自定义文件夹）。
+        """左侧文件夹列表：选中状态下再次单击进入重命名（仅自定义文件夹和标签）。
 
         说明：由于文件夹行使用了 `setItemWidget`，Qt 的原生 inline 编辑器无法正常工作，
-        这里采用 Finder 风格的“再次单击”触发弹窗重命名。
+        这里采用 Finder 风格的"再次单击"触发弹窗重命名。
         """
         if not item:
             return
 
         payload = item.data(Qt.ItemDataRole.UserRole)
-        if not (isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder"):
-            # 仅文件夹支持该交互（系统项/标题/标签不处理）
+        
+        # 支持文件夹和标签
+        if not (isinstance(payload, tuple) and len(payload) == 2 and payload[0] in ("folder", "tag")):
+            # 仅文件夹和标签支持该交互（系统项/标题不处理）
             self._last_folder_click_folder_id = None
             self._last_folder_click_ms = 0
             return
 
-        folder_id = payload[1]
+        item_type = payload[0]  # "folder" 或 "tag"
+        item_id = payload[1]
 
-        # 判断这次点击是否点在“当前已选中的同一行”
+        # 判断这次点击是否点在"当前已选中的同一行"
         current_item = self.folder_list.currentItem()
         is_clicking_selected_same_item = (current_item is item)
 
@@ -3634,22 +3826,30 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_folder_click_timer"):
             self._folder_click_timer = QElapsedTimer()
             self._folder_click_timer.start()
-            self._last_folder_click_folder_id = folder_id
+            self._last_folder_click_folder_id = item_id
+            self._last_folder_click_type = item_type
             return
 
         elapsed_ms = self._folder_click_timer.elapsed()
-        same_folder = (self._last_folder_click_folder_id == folder_id)
+        same_item = (self._last_folder_click_folder_id == item_id and 
+                     hasattr(self, '_last_folder_click_type') and 
+                     self._last_folder_click_type == item_type)
 
         # 第二次点击：时间间隔不要太短（避免与双击冲突），也不要太长
-        if is_clicking_selected_same_item and same_folder and 350 <= elapsed_ms <= 1200:
-            self.rename_folder(folder_id)
+        if is_clicking_selected_same_item and same_item and 350 <= elapsed_ms <= 1200:
+            if item_type == "folder":
+                self.rename_folder(item_id)
+            elif item_type == "tag":
+                self.rename_tag(item_id)
             self._folder_click_timer.restart()
-            self._last_folder_click_folder_id = folder_id
+            self._last_folder_click_folder_id = item_id
+            self._last_folder_click_type = item_type
             return
 
         # 第一次点击：记录
         self._folder_click_timer.restart()
-        self._last_folder_click_folder_id = folder_id
+        self._last_folder_click_folder_id = item_id
+        self._last_folder_click_type = item_type
 
         
     def on_note_selected(self, current, previous):
