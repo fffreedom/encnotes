@@ -52,7 +52,6 @@ htmlcov/
 # Build artifacts
 build/
 dist/
-*.spec
 dmg_build/
 *.dmg
 *.app
@@ -61,4 +60,3 @@ temp_icon.png
 
 # PyInstaller
 *.manifest
-*.spec
