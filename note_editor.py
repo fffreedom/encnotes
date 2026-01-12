@@ -510,6 +510,23 @@ class PasteImageTextEdit(QTextEdit):
         # 返回图片的矩形区域（在视口坐标系中）
         return result_rect
     
+    def focusInEvent(self, event):
+        """焦点获得事件"""
+        super().focusInEvent(event)
+        
+        # 如果光标在第一行且第一行为空，恢复标题格式
+        cursor = self.textCursor()
+        block_num = cursor.block().blockNumber()
+        block_text = cursor.block().text()
+        
+        if block_num == 0:
+            if block_text == "" or block_text == "\u200B":
+                # 设置标题格式
+                char_fmt = QTextCharFormat()
+                char_fmt.setFontPointSize(28)
+                char_fmt.setFontWeight(QFont.Weight.Bold)
+                self.setCurrentCharFormat(char_fmt)
+    
     def mousePressEvent(self, event):
         """鼠标按下事件"""
         
@@ -650,6 +667,17 @@ class PasteImageTextEdit(QTextEdit):
                     self.viewport().update()
             
         super().mousePressEvent(event)
+        
+        # 如果点击的是第一行且第一行为空，恢复标题格式
+        cursor = self.textCursor()
+        if cursor.block().blockNumber() == 0:
+            block_text = cursor.block().text()
+            if block_text == "" or block_text == "\u200B":
+                # 设置标题格式
+                char_fmt = QTextCharFormat()
+                char_fmt.setFontPointSize(28)
+                char_fmt.setFontWeight(QFont.Weight.Bold)
+                self.setCurrentCharFormat(char_fmt)
     
     def mouseMoveEvent(self, event):
         """鼠标移动事件"""
@@ -933,6 +961,56 @@ class PasteImageTextEdit(QTextEdit):
     
     def keyPressEvent(self, event):
         """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
+        # 在插入字符前，检查是否在第一行，如果是则先设置标题格式
+        # 这样输入的字符就会使用正确的格式，光标也会显示正确的大小
+        if event.text() and not event.text().isspace():  # 只处理可见字符，不处理空格、回车等
+            cursor = self.textCursor()
+            block = cursor.block()
+            block_number = block.blockNumber()
+            
+            # 如果在第一行
+            if block_number == 0:
+                # 检查第一行是否为空或只有零宽度空格
+                block_text = block.text()
+                
+                # 获取当前格式
+                current_fmt = self.currentCharFormat()
+                current_size = current_fmt.fontPointSize()
+                
+                # 检查是否需要设置标题格式
+                need_title_format = False
+                
+                if block_text == "" or block_text == "\u200B":
+                    if block_text == "\u200B":
+                        # 删除零宽度空格
+                        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                        cursor.removeSelectedText()
+                        self.setTextCursor(cursor)
+                    need_title_format = True
+                elif current_size == 0.0 or current_size < 1.0:
+                    # 格式丢失（字号为0或无效）
+                    need_title_format = True
+                
+                if need_title_format:
+                    # 不删除零宽度空格，直接设置标题格式
+                    # Qt 会自动用输入的字符替换零宽度空格
+                    # 获取当前格式并修改，保留其他属性
+                    title_fmt = QTextCharFormat()
+                    title_fmt.setFontPointSize(28)
+                    title_fmt.setFontWeight(QFont.Weight.Bold)
+                    self.setCurrentCharFormat(title_fmt)
+        
+        # 记录是否需要在插入后恢复格式
+        need_restore_format = False
+        saved_format = None
+        if event.text() and not event.text().isspace():
+            cursor = self.textCursor()
+            if cursor.block().blockNumber() == 0:
+                block_text = cursor.block().text()
+                if block_text == "" or block_text == "\u200B":
+                    need_restore_format = True
+                    saved_format = self.currentCharFormat()
+        
         # 如果按下的不是删除键，且光标被隐藏，则恢复光标显示并清除表格选中状态
         if event.key() not in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self.cursorWidth() == 0:
@@ -1031,6 +1109,42 @@ class PasteImageTextEdit(QTextEdit):
         # 直接使用默认行为，不做任何特殊处理
         # 这样选区中的图片和文本都会被正常删除
         super().keyPressEvent(event)
+        
+        # 如果需要恢复格式，在插入字符后再次设置
+        if need_restore_format and saved_format:
+            self.setCurrentCharFormat(saved_format)
+    
+    def inputMethodEvent(self, event):
+        """输入法事件 - 处理中文等输入法输入"""
+        # 获取输入的文本
+        commit_string = event.commitString()
+        
+        if commit_string:  # 有实际输入的文本
+            cursor = self.textCursor()
+            block = cursor.block()
+            block_number = block.blockNumber()
+            
+            # 如果在第一行
+            if block_number == 0:
+                # 检查第一行是否为空或只有零宽度空格
+                block_text = block.text()
+                
+                if block_text == "" or block_text == "\u200B":
+                    # 设置标题格式
+                    title_fmt = self.currentCharFormat()
+                    title_fmt.setFontPointSize(28)
+                    title_fmt.setFontWeight(QFont.Weight.Bold)
+                    self.setCurrentCharFormat(title_fmt)
+        
+        # 调用父类方法处理输入法事件
+        super().inputMethodEvent(event)
+        
+        # 输入完成后，触发格式检查
+        if commit_string:
+            # 调用父对象（NoteEditor）的 auto_format_first_line 方法
+            parent = self.parent()
+            if parent and hasattr(parent, 'auto_format_first_line'):
+                parent.auto_format_first_line()
     
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
@@ -1588,6 +1702,27 @@ class NoteEditor(QWidget):
     def clear(self):
         self.text_edit.clear()
         self.attachments.clear()
+        
+        # 获取光标
+        cursor = self.text_edit.textCursor()
+        
+        # 创建标题字符格式
+        title_char_fmt = QTextCharFormat()
+        title_char_fmt.setFontPointSize(28)
+        title_char_fmt.setFontWeight(QFont.Weight.Bold)
+        
+        # 关键：插入一个零宽度空格，这样块格式才能生效
+        # 零宽度空格 (U+200B) 不可见但能撑起光标高度
+        cursor.insertText('\u200B', title_char_fmt)
+        
+        # 将光标移回开头
+        cursor.movePosition(cursor.MoveOperation.Start)
+        
+        # 应用光标
+        self.text_edit.setTextCursor(cursor)
+        
+        # 设置当前输入格式
+        self.text_edit.setCurrentCharFormat(title_char_fmt)
     
     def blockSignals(self, block):
         return self.text_edit.blockSignals(block)
@@ -1600,15 +1735,31 @@ class NoteEditor(QWidget):
     
     def auto_format_first_line(self):
         """自动将第一行格式化为标题格式（28号字体），其他行为正文格式"""
+        
         # 获取文档
         document = self.text_edit.document()
         if document.isEmpty():
+            # 创建标题字符格式
+            title_char_fmt = QTextCharFormat()
+            title_char_fmt.setFontPointSize(28)
+            title_char_fmt.setFontWeight(QFont.Weight.Bold)
+            
+            # 获取光标并插入零宽度空格
+            cursor = self.text_edit.textCursor()
+            cursor.insertText('\u200B', title_char_fmt)
+            
+            # 将光标移回开头
+            cursor.movePosition(cursor.MoveOperation.Start)
+            self.text_edit.setTextCursor(cursor)
+            
+            # 设置当前输入格式
+            self.text_edit.setCurrentCharFormat(title_char_fmt)
             return
         
         # 获取当前光标
         current_cursor = self.text_edit.textCursor()
         
-        # **关键修复**：如果当前有选区（用户正在拖选），不要执行格式化
+        # 如果当前有选区（用户正在拖选），不要执行格式化
         # 因为格式化操作可能会影响选区内容，导致图片等特殊字符丢失
         if current_cursor.hasSelection():
             return
@@ -1631,35 +1782,51 @@ class NoteEditor(QWidget):
         
         # 如果第一行不是标题格式（28号字体），则应用格式
         if current_size != 28:
-            # 阻止信号，避免递归
-            self.text_edit.blockSignals(True)
+            # 获取第一行的文本内容
+            first_line_text = first_block.text()
             
             # 设置字符格式
             new_char_fmt = QTextCharFormat()
             new_char_fmt.setFontPointSize(28)
             new_char_fmt.setFontWeight(QFont.Weight.Bold)
             
-            # 应用格式到第一行
-            first_cursor.mergeCharFormat(new_char_fmt)
-            
-            # 恢复信号
-            self.text_edit.blockSignals(False)
+            # 如果第一行为空或只有零宽度空格，不要重新插入，直接设置当前输入格式即可
+            if first_line_text == "" or first_line_text == "\u200B":
+                # 不做任何操作，让后面的代码设置当前输入格式
+                pass
+            else:
+                # 应用格式到第一行已有文本
+                # 阻止信号，避免递归
+                self.text_edit.blockSignals(True)
+                first_cursor.mergeCharFormat(new_char_fmt)
+                # 恢复信号
+                self.text_edit.blockSignals(False)
         
-        # 如果当前光标在第二行或之后，确保使用正文格式
-        if current_block_number >= 1:
-            # 获取当前字符格式
-            current_char_fmt = current_cursor.charFormat()
-            current_font_size = current_char_fmt.fontPointSize()
+        # 根据光标所在行设置当前输入格式
+        if current_block_number == 0:
+            # 光标在第一行（标题），设置标题格式为当前输入格式
+            # 获取当前光标的字符格式，保留其他属性
+            current_fmt = self.text_edit.currentCharFormat()
+            current_fmt.setFontPointSize(28)
+            current_fmt.setFontWeight(QFont.Weight.Bold)
+            self.text_edit.setCurrentCharFormat(current_fmt)
+        else:
+            # 光标在第二行或之后（正文），设置正文格式为当前输入格式
+            body_fmt = QTextCharFormat()
+            body_fmt.setFontPointSize(14)
+            body_fmt.setFontWeight(QFont.Weight.Normal)
             
-            # 只有当字体不是14号时才修改
-            if current_font_size != 14:
-                # 设置正文格式
-                body_fmt = QTextCharFormat()
-                body_fmt.setFontPointSize(14)
-                body_fmt.setFontWeight(QFont.Weight.Normal)
-                
-                # 设置当前输入格式
-                self.text_edit.setCurrentCharFormat(body_fmt)
+            # 如果当前行为空，插入一个零宽度空格，让光标有正确的格式依附
+            if current_block.text() == "":
+                self.text_edit.blockSignals(True)
+                current_cursor.setCharFormat(body_fmt)
+                current_cursor.insertText("\u200B")  # 零宽度空格
+                # 将光标移回零宽度空格之后
+                current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                self.text_edit.setTextCursor(current_cursor)
+                self.text_edit.blockSignals(False)
+            
+            self.text_edit.setCurrentCharFormat(body_fmt)
     
     # 格式化方法
     def apply_heading(self, level):

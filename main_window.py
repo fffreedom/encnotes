@@ -2845,12 +2845,15 @@ class MainWindow(QMainWindow):
         """
         # 必须在自定义文件夹下创建；未选中文件夹时直接忽略
         folder_id = self.current_folder_id
+        
         if not folder_id:
             self._update_new_note_action_enabled()
             return
 
         # 防御：如果已存在空草稿，直接打开那个草稿
-        if self._current_folder_has_empty_new_note():
+        has_empty_note = self._current_folder_has_empty_new_note()
+        
+        if has_empty_note:
             try:
                 notes = self.note_manager.get_notes_by_folder(folder_id)
                 for note in notes:
@@ -2872,10 +2875,11 @@ class MainWindow(QMainWindow):
             return
 
         note_id = self.note_manager.create_note(title="新笔记", folder_id=folder_id)
+        
         try:
             # 确保标题落库（兼容未来 create_note 默认值变化）
             self.note_manager.update_note(note_id, title="新笔记")
-        except Exception:
+        except Exception as e:
             pass
 
         # 刷新笔记列表
@@ -2887,7 +2891,7 @@ class MainWindow(QMainWindow):
         try:
             if selected_row is not None and 0 <= selected_row < self.folder_list.count():
                 self.folder_list.setCurrentRow(selected_row)
-        except Exception:
+        except Exception as e:
             pass
 
         # 选中新创建的笔记
@@ -3649,8 +3653,8 @@ class MainWindow(QMainWindow):
 
         
     def on_note_selected(self, current, previous):
-
         """笔记选中事件"""
+        
         # 让选中背景由条目widget自身绘制（避免QListWidget默认选中背景出现上下错位）
         def _set_item_widget_selected(item, selected: bool):
             if not item:
@@ -3686,16 +3690,28 @@ class MainWindow(QMainWindow):
                 self.editor.setHtml(note['content'])
                 self.editor.blockSignals(False)
                 
-                # 将光标移动到第一行（标题）的末尾
-                from PyQt6.QtGui import QTextCursor
+                # 手动调用 auto_format_first_line 确保第一行格式正确
+                # 因为 blockSignals 阻止了 textChanged 信号，所以需要手动调用
+                self.editor.auto_format_first_line()
+                
+                # 将光标移动到第一行（标题）的末尾，并设置标题格式
+                from PyQt6.QtGui import QTextCursor, QFont, QTextCharFormat
                 cursor = self.editor.text_edit.textCursor()
                 cursor.movePosition(QTextCursor.MoveOperation.Start)  # 移动到文档开始
                 cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)  # 移动到第一行末尾
+                
+                # 在应用光标之前，先设置光标的字符格式
+                # 这样光标的视觉高度就会正确
+                title_fmt = QTextCharFormat()
+                title_fmt.setFontPointSize(28)
+                title_fmt.setFontWeight(QFont.Weight.Bold)
+                cursor.setCharFormat(title_fmt)
+                
+                # 应用光标
                 self.editor.text_edit.setTextCursor(cursor)
                 
                 # 设置焦点到编辑器，让光标闪烁
                 self.editor.text_edit.setFocus()
-
         else:
             self.current_note_id = None
             self.editor.current_note_id = None
@@ -3863,8 +3879,9 @@ class MainWindow(QMainWindow):
             
             # 从内容中提取标题（第一行）
             # 规则：
-            # - 整条笔记为空（没有任何可见字符）=> 标题使用“新笔记”（便于继续编辑，也用于“仅允许一个空草稿”判断）
-            # - 正文有内容但第一行为空 => 标题为“无标题”
+            # - 整条笔记为空（没有任何可见字符）=> 标题使用"新笔记"（便于继续编辑，也用于"仅允许一个空草稿"判断）
+            # - 第一行只有零宽度字符（U+200B）=> 标题使用"新笔记"
+            # - 正文有内容但第一行为空 => 标题为"无标题"
             normalized_plain = (plain_text or "").replace("\r\n", "\n").replace("\r", "\n")
             is_note_empty = normalized_plain.strip() == ""
 
@@ -3872,7 +3889,13 @@ class MainWindow(QMainWindow):
                 title = "新笔记"
             else:
                 first_line = normalized_plain.split("\n")[0][:50]
-                title = first_line.strip() or "无标题"
+                # 移除零宽度字符后检查
+                first_line_cleaned = first_line.replace('\u200B', '').strip()
+                if not first_line_cleaned:
+                    # 第一行只有零宽度字符或空白
+                    title = "新笔记"
+                else:
+                    title = first_line.strip() or "无标题"
 
             self.note_manager.update_note(
                 self.current_note_id,
