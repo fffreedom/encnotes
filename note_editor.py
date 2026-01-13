@@ -512,6 +512,12 @@ class PasteImageTextEdit(QTextEdit):
     
     def focusInEvent(self, event):
         """焦点获得事件"""
+        # 如果当前没有笔记，阻止获得焦点
+        if hasattr(self, 'parent_editor') and self.parent_editor:
+            if not getattr(self.parent_editor, 'current_note_id', None):
+                event.ignore()
+                return
+        
         super().focusInEvent(event)
         
         # 如果光标在第一行且第一行为空，恢复标题格式
@@ -529,6 +535,12 @@ class PasteImageTextEdit(QTextEdit):
     
     def mousePressEvent(self, event):
         """鼠标按下事件"""
+        
+        # 如果当前没有笔记，阻止处理鼠标点击事件
+        if hasattr(self, 'parent_editor') and self.parent_editor:
+            if not getattr(self.parent_editor, 'current_note_id', None):
+                event.ignore()
+                return
         
         # 恢复光标显示（如果之前被隐藏）
         if self.cursorWidth() == 0:

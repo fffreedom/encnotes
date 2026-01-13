@@ -1081,10 +1081,9 @@ class MainWindow(QMainWindow):
                 act.setEnabled(enabled)
 
     def eventFilter(self, obj, event):
-
         # 文件夹重命名：ESC 取消（就地编辑）
-        if event.type() == event.Type.KeyPress:
-            try:
+        try:
+            if event.type() == event.Type.KeyPress:
                 from PyQt6.QtCore import Qt
                 if event.key() == Qt.Key.Key_Escape:
                     # 标记取消，让 editingFinished 走取消分支
@@ -1093,8 +1092,8 @@ class MainWindow(QMainWindow):
                     obj.clearFocus()
                     event.accept()
                     return True
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         # 空文件夹：点击编辑器自动新建笔记
         try:
@@ -1107,11 +1106,37 @@ class MainWindow(QMainWindow):
                 and event.button() == Qt.MouseButton.LeftButton
 
             ):
-                # 只有“选中了某个自定义文件夹 + 当前没有选中笔记 + 当前不在标签视图”才自动创建
+                # 只有"选中了某个自定义文件夹 + 当前没有选中笔记 + 当前不在标签视图"才自动创建
                 if self.current_folder_id and self.current_note_id is None and self.current_tag_id is None:
                     self.create_note_in_folder(self.current_folder_id, default_title="新笔记")
                     event.accept()
                     return True
+        except Exception:
+            pass
+
+        # 空标签：点击编辑器时阻止进入可编辑状态
+        try:
+            from PyQt6.QtCore import QEvent
+            from PyQt6.QtCore import Qt
+            # 检查是否点击了编辑器（viewport或text_edit本身）
+            is_editor_click = (
+                obj is getattr(getattr(self.editor, "text_edit", None), "viewport", lambda: None)()
+                or obj is getattr(self.editor, "text_edit", None)
+            )
+            if (
+                is_editor_click
+                and event.type() == QEvent.Type.MouseButtonPress
+                and self.current_tag_id is not None
+                and self.current_note_id is None
+            ):
+                # 检查当前标签是否为空标签
+                tag = self.note_manager.get_tag(self.current_tag_id)
+                if tag:
+                    tag_name = str(tag.get('name', '') or '').strip()
+                    if not tag_name:
+                        # 空标签：阻止点击事件，不让编辑器获得焦点
+                        event.accept()
+                        return True
         except Exception:
             pass
 
