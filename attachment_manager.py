@@ -34,6 +34,10 @@ class AttachmentManager:
         self.attachments_dir = self.data_dir / "attachments"
         self.attachments_dir.mkdir(parents=True, exist_ok=True)
         
+        # 附件回收站（用于支持撤销：删除附件文本时先挪到这里，不立刻删除文件）
+        self.attachments_trash_dir = self.attachments_dir / "_trash"
+        self.attachments_trash_dir.mkdir(parents=True, exist_ok=True)
+        
         # 附件元数据文件
         self.metadata_file = self.attachments_dir / "metadata.json"
         self.metadata = self._load_metadata()
@@ -451,6 +455,184 @@ class AttachmentManager:
             
         except Exception as e:
             return False, f"导出附件失败: {str(e)}"
+    
+    def _get_note_trash_dir(self, note_id: str) -> Path:
+        """获取某个笔记的回收站目录"""
+        p = self.attachments_trash_dir / note_id
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def defer_delete_attachment(self, attachment_id: str, note_id: str) -> Tuple[bool, str]:
+        """延迟删除附件：从笔记引用移除，但不立即删除文件。
+
+        - 将加密文件挪到 `_trash/<note_id>/` 下，便于用户 Command+Z 撤销后恢复。
+        - 元数据保留，并记录 `trashed_by_note`，避免清理时误删。
+
+        注意：如果附件还被其他笔记引用，则只移除引用，不移动文件。
+        """
+        try:
+            if attachment_id not in self.metadata:
+                return False, "附件不存在"
+
+            metadata = self.metadata[attachment_id]
+            note_ids = metadata.get('note_ids', [])
+
+            # 先移除笔记引用
+            if note_id in note_ids:
+                note_ids.remove(note_id)
+                metadata['note_ids'] = note_ids
+
+            # 如果还有其他笔记引用，不做文件移动
+            if len(note_ids) > 0:
+                self._save_metadata()
+                return True, "已从笔记中移除附件引用"
+
+            encrypted_path = metadata.get('encrypted_path')
+            if not encrypted_path:
+                # 没有路径也无法移动，但仍保持元数据一致
+                metadata['trashed_by_note'] = note_id
+                self._save_metadata()
+                return True, "附件已标记为待清理"
+
+            src = Path(encrypted_path)
+            if not src.exists():
+                metadata['trashed_by_note'] = note_id
+                self._save_metadata()
+                return True, "附件文件不存在，已标记为待清理"
+
+            # 目标：_trash/<note_id>/<filename>
+            trash_dir = self._get_note_trash_dir(note_id)
+            dst = trash_dir / src.name
+
+            # 避免覆盖：如存在同名文件，加时间戳后缀
+            if dst.exists():
+                stem = dst.stem
+                suffix = ''.join(dst.suffixes)
+                dst = trash_dir / f"{stem}_{int(time.time())}{suffix}"
+
+            shutil.move(str(src), str(dst))
+
+            # 更新元数据路径，并记录是哪个笔记把它挪进回收站的
+            metadata['encrypted_path'] = str(dst)
+            metadata['trashed_by_note'] = note_id
+            metadata['trashed_at'] = time.time()
+            self._save_metadata()
+
+            return True, "附件已移入回收站（可撤销）"
+
+        except Exception as e:
+            return False, f"延迟删除附件失败: {str(e)}"
+
+    def restore_deferred_attachment(self, attachment_id: str, note_id: str) -> Tuple[bool, str]:
+        """撤销删除：把附件从回收站恢复回该笔记目录，并重新建立引用。"""
+        try:
+            if attachment_id not in self.metadata:
+                return False, "附件不存在"
+
+            metadata = self.metadata[attachment_id]
+
+            # 重新建立引用
+            self._add_note_reference(attachment_id, note_id)
+
+            # 如果不在回收站，不需要移动
+            encrypted_path = metadata.get('encrypted_path')
+            if not encrypted_path:
+                self._save_metadata()
+                return True, "附件引用已恢复"
+
+            p = Path(encrypted_path)
+            # 必须位于 _trash/<note_id>/ 下才认为需要恢复
+            try:
+                is_in_trash = (self.attachments_trash_dir in p.parents)
+            except Exception:
+                is_in_trash = False
+
+            if not is_in_trash or not p.exists():
+                # 清理 trash 标记
+                if metadata.get('trashed_by_note') == note_id:
+                    metadata.pop('trashed_by_note', None)
+                    metadata.pop('trashed_at', None)
+                    self._save_metadata()
+                return True, "附件引用已恢复"
+
+            # 恢复到 attachments/<note_id>/
+            note_dir = self.attachments_dir / note_id
+            note_dir.mkdir(parents=True, exist_ok=True)
+            dst = note_dir / p.name
+
+            if dst.exists():
+                stem = dst.stem
+                suffix = ''.join(dst.suffixes)
+                dst = note_dir / f"{stem}_{int(time.time())}{suffix}"
+
+            shutil.move(str(p), str(dst))
+            metadata['encrypted_path'] = str(dst)
+
+            # 清理 trash 标记
+            metadata.pop('trashed_by_note', None)
+            metadata.pop('trashed_at', None)
+            self._save_metadata()
+
+            return True, "附件已从回收站恢复"
+
+        except Exception as e:
+            return False, f"恢复附件失败: {str(e)}"
+
+    def cleanup_note_attachment_trash(self, note_id: str) -> Tuple[int, str]:
+        """清理某个笔记回收站中的附件。
+
+        触发时机：切换笔记、退出程序。
+
+        规则：仅删除 `trashed_by_note == note_id` 且 `note_ids` 为空的附件。
+        """
+        try:
+            cleaned = 0
+            to_delete = []
+
+            for attachment_id, metadata in list(self.metadata.items()):
+                if metadata.get('trashed_by_note') != note_id:
+                    continue
+                if len(metadata.get('note_ids', [])) != 0:
+                    # 已经被撤销恢复了
+                    continue
+                to_delete.append(attachment_id)
+
+            for attachment_id in to_delete:
+                metadata = self.metadata.get(attachment_id)
+                if not metadata:
+                    continue
+
+                encrypted_path = metadata.get('encrypted_path')
+                if encrypted_path and os.path.exists(encrypted_path):
+                    try:
+                        os.remove(encrypted_path)
+                    except Exception:
+                        pass
+
+                # 删除元数据
+                try:
+                    del self.metadata[attachment_id]
+                except Exception:
+                    pass
+                cleaned += 1
+
+            # 尝试删除空的回收站目录
+            try:
+                trash_dir = self.attachments_trash_dir / note_id
+                if trash_dir.exists():
+                    # 只删除空目录
+                    if not any(trash_dir.iterdir()):
+                        trash_dir.rmdir()
+            except Exception:
+                pass
+
+            if cleaned > 0:
+                self._save_metadata()
+
+            return cleaned, f"已清理 {cleaned} 个待删除附件"
+
+        except Exception as e:
+            return 0, f"清理失败: {str(e)}"
     
     def delete_attachment(self, attachment_id: str, note_id: str) -> Tuple[bool, str]:
         """

@@ -30,7 +30,7 @@ def _init_logging():
         log_path = os.path.join(base_dir, "encnotes.log")
 
         root = logging.getLogger()
-        root.setLevel(logging.INFO)
+        root.setLevel(logging.DEBUG)
 
         fmt = logging.Formatter(
             "%(asctime)s %(levelname)s [%(name)s:%(lineno)d] %(message)s"

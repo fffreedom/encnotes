@@ -932,13 +932,32 @@ class NoteManager:
     def _encrypt_content(self, content: str) -> str:
         """
         加密笔记内容
-        
+
+        说明：
+        - 某些输入法/富文本编辑器在极端情况下可能产生“孤立代理项”(surrogate)
+          （例如 \ud83d 这样的半个emoji）。Python 的 UTF-8 编码默认不允许
+          surrogate，直接加密会触发 `UnicodeEncodeError: surrogates not allowed`。
+        - 这里统一在入库前做一次清洗，避免笔记自动保存时崩溃。
+
         Args:
             content: 明文内容
-            
+
         Returns:
             加密后的内容（如果加密已启用）或原内容
         """
+        if content is None:
+            content = ""
+
+        # 清理非法 surrogate：尽量保留其它字符，遇到孤立 surrogate 用 U+FFFD 替换
+        try:
+            content = content.encode('utf-8', errors='surrogatepass').decode('utf-8', errors='replace')
+        except Exception:
+            # 兜底：即便 encode/decode 失败，也不要让保存流程崩溃
+            try:
+                content = (content or "").encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+            except Exception:
+                content = ""
+
         if self.encryption_manager.is_unlocked:
             try:
                 return self.encryption_manager.encrypt(content)
@@ -946,6 +965,7 @@ class NoteManager:
                 print(f"加密内容失败: {e}")
                 return content
         return content
+
         
     def _decrypt_content(self, encrypted_content: str) -> str:
         """

@@ -3931,7 +3931,15 @@ class MainWindow(QMainWindow):
         if previous:
             _set_item_widget_selected(previous, False)
             # 保存之前的笔记
+            prev_note_id = self.current_note_id
             self.save_current_note()
+
+            # 切换笔记时：清理“已删除但可撤销”的附件（此时用户已离开该笔记）
+            try:
+                if prev_note_id and getattr(self.note_manager, 'attachment_manager', None):
+                    self.note_manager.attachment_manager.cleanup_note_attachment_trash(prev_note_id)
+            except Exception:
+                pass
             
         if current:
             _set_item_widget_selected(current, True)
@@ -4683,6 +4691,13 @@ class MainWindow(QMainWindow):
             pass
 
         self.save_current_note()
+
+        # 退出程序时：清理当前笔记“已删除但可撤销”的附件
+        try:
+            if self.current_note_id and getattr(self.note_manager, 'attachment_manager', None):
+                self.note_manager.attachment_manager.cleanup_note_attachment_trash(self.current_note_id)
+        except Exception:
+            pass
         
         # 如果启用了同步，在关闭前同步一次
         if self.sync_manager.sync_enabled:
