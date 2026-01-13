@@ -1036,13 +1036,13 @@ class MainWindow(QMainWindow):
 
     def _is_empty_new_note(self, note: dict) -> bool:
 
-        """判断某条笔记是否为“空的新笔记草稿”。
+        """判断某条笔记是否为"空的新笔记草稿"。
 
         约束：一个文件夹下只允许存在一个这样的草稿，用于避免用户连续创建多个空白笔记。
 
-        判定规则（与“保存标题规则”保持一致）：
-        - 只要整条笔记（纯文本）为空（没有任何非空白字符），就认为是“空草稿”
-        - 不再强依赖数据库里当下的 title 值（因为 title 会随着输入变化而变为“无标题”等）
+        判定规则（与"保存标题规则"保持一致）：
+        - 只要整条笔记（纯文本）为空（没有任何非空白字符），就认为是"空草稿"
+        - 不再强依赖数据库里当下的 title 值（因为 title 会随着输入变化而变为"无标题"等）
         """
         try:
             if not note:
@@ -1052,7 +1052,9 @@ class MainWindow(QMainWindow):
             from bs4 import BeautifulSoup
             html = note.get('content') or ''
             plain = BeautifulSoup(html, 'html.parser').get_text(separator='\n')
-            return (plain or '').strip() == ""
+            # 移除零宽度空格（U+200B）后再判断是否为空
+            plain_without_zwsp = (plain or '').replace('\u200B', '')
+            return plain_without_zwsp.strip() == ""
         except Exception:
             return False
 
