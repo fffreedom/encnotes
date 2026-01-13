@@ -106,7 +106,7 @@ def _find_marked_span_around(
         max_pos = max(0, doc_len - 1)
 
         def _selected_char_format_at_strict(p: int) -> QTextCharFormat | None:
-            """严格取 p 位置的“字符格式”：必须能在 p 处向右选中 1 个字符。
+            """严格取 p 位置的"字符格式"：必须能在 p 处向右选中 1 个字符。
 
             注意：不做任何回退/兜底，否则会污染范围扫描的语义（例如 p 在末尾时误读 p-1）。
             """
@@ -117,6 +117,11 @@ def _find_marked_span_around(
             c0.setPosition(p)
             if not c0.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
                 return None
+            
+            # 输出选中的字符
+            selected_char = c0.selectedText()
+            print(f"[DEBUG] 位置 {p} 选中的字符: '{selected_char}' (Unicode: {ord(selected_char) if selected_char else 'N/A'})")
+            
             return c0.charFormat()
 
         def is_marked_strict(p: int) -> bool:
@@ -354,8 +359,8 @@ class PasteImageTextEdit(QTextEdit):
         span = None
         try:
             span = _find_marked_span_around(doc, pos, self.ATTACHMENT_TAG_PROP, tag_value)
-            if span is None and pos - 1 >= 0:
-                span = _find_marked_span_around(doc, pos - 1, self.ATTACHMENT_TAG_PROP, tag_value)
+            # if span is None and pos - 1 >= 0:
+            #     span = _find_marked_span_around(doc, pos - 1, self.ATTACHMENT_TAG_PROP, tag_value)
         except Exception:
             span = None
 
@@ -3053,49 +3058,30 @@ class NoteEditor(QWidget):
             end_pos = cursor.position()
             try:
                 logger.debug(
-                    "[attachment-insert][after-html] cursor_pos=%s start_pos=%s doc_len=%s",
+                    "[attachment-insert][after] cursor_pos=end_pos=%s start_pos=%s doc_len=%s",
                     end_pos,
                     start_pos,
                     int(self.text_edit.document().characterCount()),
                 )
             except Exception:
                 pass
-
-            # 关键：插入后把光标放到附件“后面”，并保持焦点在编辑器里。
-            # 这里不要用 insertBlock()，因为 Qt 富文本里它会引入 U+2029 等段落分隔符。
-            # 我们只插入一个普通空格作为分隔（可见/可删），并把它纳入附件块标记范围，
-            # 这样 Backspace 时能整体删除且光标回到附件起点，不会跳到后面的空行。
-            cursor.clearSelection()
-            cursor.setPosition(end_pos)
-            cursor.insertText(" ")
-            after_space_pos = cursor.position()
-            try:
-                logger.debug(
-                    "[attachment-insert][after-space] cursor_pos=%s end_pos=%s doc_len=%s",
-                    after_space_pos,
-                    end_pos,
-                    int(self.text_edit.document().characterCount()),
-                )
-            except Exception:
-                pass
-
             # 对刚插入的附件展示块整体打标记：后续删除时一次性删除
             try:
                 doc = self.text_edit.document()
 
 
-                if after_space_pos > start_pos:
+                if end_pos > start_pos:
                     mark_cursor = QTextCursor(doc)
                     mark_cursor.setPosition(start_pos)
-                    mark_cursor.setPosition(after_space_pos, QTextCursor.MoveMode.KeepAnchor)
+                    mark_cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
 
                     try:
                         logger.debug(
-                            "[attachment-insert][mark][before] start_pos=%s after_space_pos=%s doc_len=%s start_char=%s",
+                            "[attachment-insert][mark][before] start_pos=%s end_pos=%s doc_len=%s start_char=%s",
                             start_pos,
-                            after_space_pos,
+                            end_pos,
                             int(doc.characterCount()),
-                            _dump_doc_chars(doc, start_pos, min(after_space_pos - 1, start_pos)),
+                            _dump_doc_chars(doc, start_pos, min(end_pos - 1, start_pos)),
                         )
                     except Exception:
                         pass
@@ -3107,23 +3093,6 @@ class NoteEditor(QWidget):
                         self.text_edit._attachment_tag_name,
                     )
                     mark_cursor.mergeCharFormat(mark_format)
-                    try:
-                        # 额外：选中 start_pos 处 1 个字符，打印其 selectedText/format，避免 block 边界导致的误判
-                        _c1 = QTextCursor(doc)
-                        _c1.setPosition(start_pos)
-                        _c1.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-                        _t1 = _c1.selectedText()
-                        _cf1 = _c1.charFormat()
-                        logger.debug(
-                            "[attachment-insert][mark][after-1ch] pos=%s text=%s has_tag=%s tag=%s",
-                            start_pos,
-                            repr(_t1),
-                            _cf1.hasProperty(self.text_edit.ATTACHMENT_TAG_PROP),
-                            (_cf1.property(self.text_edit.ATTACHMENT_TAG_PROP) if _cf1.hasProperty(self.text_edit.ATTACHMENT_TAG_PROP) else None),
-                        )
-                    except Exception:
-                        pass
-
                     # 插入后：输出附件标记范围（验证打标是否覆盖预期）
                     _marked = _find_marked_span_around(
                         doc,
@@ -3134,26 +3103,20 @@ class NoteEditor(QWidget):
                     if _marked is not None:
                         _ms, _me = _marked
                         logger.debug(
-                            "[attachment-insert][marked] span=(%s,%s) len=%s chars=%s",
+                            "[attachment-insert][mark][after] span=(%s,%s) len=%s span chars=%s, all file chars=%s",
                             _ms,
                             _me,
                             (_me - _ms),
                             _dump_doc_chars(doc, _ms, _me - 1),
+                            _dump_doc_chars(doc, 0, int(doc.characterCount()) - 1),
                         )
-                    else:
-                        try:
-                            logger.debug(
-                                "[attachment-insert][marked] span=<none> start_pos=%s start_window=%s",
-                                start_pos,
-                                _dump_doc_chars(doc, max(0, start_pos - 3), min(int(doc.characterCount()) - 1, start_pos + 3)),
-                            )
-                        except Exception:
-                            logger.debug("[attachment-insert][marked] span=<none>")
 
             except Exception:
                 pass
 
             try:
+                # 清除格式，使用默认格式，这儿如果不清除，会导致后面输入的第一个字符也被标记成附件
+                cursor.setCharFormat(QTextCharFormat())
                 self.text_edit.setTextCursor(cursor)
                 self.text_edit.setFocus(Qt.FocusReason.OtherFocusReason)
             except Exception:
