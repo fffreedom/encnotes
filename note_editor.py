@@ -815,154 +815,205 @@ class PasteImageTextEdit(QTextEdit):
                 char_fmt.setFontPointSize(28)
                 char_fmt.setFontWeight(QFont.Weight.Bold)
                 self.setCurrentCharFormat(char_fmt)
-    
-    def mousePressEvent(self, event):
-        """鼠标按下事件"""
+
+    def _handle_anchor_click(self, event) -> bool:
+        """处理附件链接点击
+
+        Returns:
+            如果处理了链接点击返回True，否则返回False
+        """
+        # 使用 anchorAt 方法精确判断是否点击在链接上
+        anchor_href = self.anchorAt(event.pos())
+        if anchor_href:
+            self.open_attachment(anchor_href)
+            event.accept()
+            return True
+        return False
+
+    def _should_ignore_mouse_event(self) -> bool:
+        """检查是否应该忽略鼠标事件（当前没有笔记时）
         
-        # 如果当前没有笔记，阻止处理鼠标点击事件
+        Returns:
+            如果应该忽略返回True，否则返回False
+        """
         if hasattr(self, 'parent_editor') and self.parent_editor:
             if not getattr(self.parent_editor, 'current_note_id', None):
-                event.ignore()
-                return
-        
-        # 恢复光标显示（如果之前被隐藏）
+                return True
+        return False
+
+    def _restore_cursor_visibility(self):
+        """恢复光标显示（如果之前被隐藏）"""
         if self.cursorWidth() == 0:
             self.setCursorWidth(1)
+
+    def _handle_table_border_click(self, table, cursor, event) -> bool:
+        """处理表格边框点击（选中整个表格）
         
-        if event.button() == Qt.MouseButton.LeftButton:
-            # 首先检查是否点击了链接（附件）
-            cursor = self.cursorForPosition(event.pos())
-            char_format = cursor.charFormat()
-            
-            if char_format.isAnchor():
-                # 点击了链接，获取URL并打开
-                anchor_href = char_format.anchorHref()
-                if anchor_href:
-                    self.open_attachment(anchor_href)
-                    event.accept()
-                    return
-            
-            # 检查是否点击了表格
-            table = cursor.currentTable()
-            if table:
-                # 检查是否点击了表格边框
-                if self.is_click_on_table_border(event.pos(), table):
-                    # 点击了边框，选中整个表格
-                    self.selected_table = table
-                    self.selected_table_cursor = cursor
-                    
-                    # 取消图片选中
-                    if self.selected_image:
-                        self.selected_image = None
-                        self.selected_image_rect = None
-                        self.selected_image_cursor = None
-                    
-                    # 将光标移动到表格外部（表格之后的位置），退出单元格编辑状态
-                    # 这样在按删除键时，currentTable()会返回None，从而删除整个表格
-                    clear_cursor = QTextCursor(self.document())
-                    table_end = table.lastPosition()
-                    clear_cursor.setPosition(table_end + 1)
-                    self.setTextCursor(clear_cursor)
-                    
-                    self.viewport().update()
-                    event.accept()
-                    return
-                else:
-                    # 点击了表格内容区域，取消表格选中，进入编辑模式
-                    if self.selected_table:
-                        self.selected_table = None
-                        self.selected_table_cursor = None
-                        self.viewport().update()
-                    
-                    # 使用默认行为，进入单元格编辑模式
-                    super().mousePressEvent(event)
-                    return
-            else:
-                # 取消表格选中
-                if self.selected_table:
-                    self.selected_table = None
-                    self.selected_table_cursor = None
-                    self.viewport().update()
-            
-            # 检查是否点击了控制点
-            if self.selected_image:
-                handle = self.get_handle_at_pos(event.pos())
-                if handle:
-                    # 开始缩放
-                    self.resizing = True
-                    self.resize_handle = handle
-                    self.resize_start_pos = event.pos()
-                    self.resize_start_size = (self.selected_image.width(), self.selected_image.height())
-                    event.accept()
-                    return
-                
-                # 检查是否点击了图片中心区域（用于拖动移动）
-                if self.selected_image_rect and self.selected_image_rect.contains(event.pos()):
-                    # 开始拖动
-                    self.dragging = True
-                    self.drag_start_pos = event.pos()
-                    self.drag_start_cursor_pos = self.selected_image_cursor.position()
-                    event.accept()
-                    return
-            
-            # **关键修复**：使用像素位置而非光标位置来检测图片点击
-            # 通过遍历文档中的所有图片，计算它们的矩形区域，检查鼠标是否点击在图片上
-            image_format, image_cursor, image_rect = self.find_image_at_position(event.pos())
-            
-            if image_format and image_cursor:
-                # 选中图片
-                self.selected_image = image_format
-                self.selected_image_cursor = image_cursor
-                self.selected_image_rect = image_rect
-                
-                # **关键修复**：查找并选中真正的图片字符（U+FFFC）
-                # 在空行行首插入图片时，Qt会插入段落分隔符（U+2029）+ 图片字符（U+FFFC）
-                # 我们需要找到真正的图片字符并选中它
-                cursor = QTextCursor(image_cursor)
-                real_image_pos = None
-                
-                # 从当前位置开始，向右查找最多2个字符，找到真正的图片字符
-                for offset in range(2):
-                    check_pos = image_cursor.position() + offset
-                    cursor.setPosition(check_pos)
-                    
-                    # 向右移动一个字符并选中
-                    if _select_char_at(cursor, check_pos):
-                        selected_text = cursor.selectedText()
-                        char_format = cursor.charFormat()
-                        
-                        # 检查是否是真正的图片字符
-                        if char_format.isImageFormat() and selected_text == '\ufffc':
-                            real_image_pos = check_pos
-                            break
-                    
-                    # 清除选区，继续查找
-                    cursor.clearSelection()
-                
-                if real_image_pos is not None:
-                    # 选中真正的图片字符
-                    _select_char_at(cursor, real_image_pos)
-                    self.setTextCursor(cursor)
-                else:
-                    # 如果找不到真正的图片字符，使用原来的逻辑
-                    cursor = QTextCursor(image_cursor)
-                    _select_char_at(cursor, cursor.position())
-                    self.setTextCursor(cursor)
-                
-                self.viewport().update()
-                event.accept()
-                return
-            else:
-                # 取消选中
-                if self.selected_image:
-                    self.selected_image = None
-                    self.selected_image_rect = None
-                    self.selected_image_cursor = None
-                    self.viewport().update()
-            
-        super().mousePressEvent(event)
+        Returns:
+            如果处理了边框点击返回True，否则返回False
+        """
+        if not self.is_click_on_table_border(event.pos(), table):
+            return False
         
-        # 如果点击的是第一行且第一行为空，恢复标题格式
+        # 点击了边框，选中整个表格
+        self.selected_table = table
+        self.selected_table_cursor = cursor
+        
+        # 取消图片选中
+        if self.selected_image:
+            self.selected_image = None
+            self.selected_image_rect = None
+            self.selected_image_cursor = None
+        
+        # 将光标移动到表格外部（表格之后的位置），退出单元格编辑状态
+        # 这样在按删除键时，currentTable()会返回None，从而删除整个表格
+        clear_cursor = QTextCursor(self.document())
+        table_end = table.lastPosition()
+        clear_cursor.setPosition(table_end + 1)
+        self.setTextCursor(clear_cursor)
+        
+        self.viewport().update()
+        event.accept()
+        return True
+
+    def _handle_table_content_click(self, event):
+        """处理表格内容点击（清除表格选中状态）"""
+        if self.selected_table:
+            self.selected_table = None
+            self.selected_table_cursor = None
+            self.viewport().update()
+
+    def _clear_table_selection(self):
+        """清除表格选中状态"""
+        if self.selected_table:
+            self.selected_table = None
+            self.selected_table_cursor = None
+            self.viewport().update()
+
+    def _handle_image_resize_handle_click(self, event) -> bool:
+        """处理图片缩放控制点点击
+        
+        Returns:
+            如果处理了控制点点击返回True，否则返回False
+        """
+        if not self.selected_image:
+            return False
+        
+        handle = self.get_handle_at_pos(event.pos())
+        if handle:
+            # 开始缩放
+            self.resizing = True
+            self.resize_handle = handle
+            self.resize_start_pos = event.pos()
+            self.resize_start_size = (self.selected_image.width(), self.selected_image.height())
+            event.accept()
+            return True
+        return False
+
+    def _handle_image_drag_click(self, event) -> bool:
+        """处理图片拖动点击
+        
+        Returns:
+            如果处理了拖动点击返回True，否则返回False
+        """
+        if not self.selected_image:
+            return False
+        
+        # 检查是否点击了图片中心区域（用于拖动移动）
+        if self.selected_image_rect and self.selected_image_rect.contains(event.pos()):
+            # 开始拖动
+            self.dragging = True
+            self.drag_start_pos = event.pos()
+            self.drag_start_cursor_pos = self.selected_image_cursor.position()
+            event.accept()
+            return True
+        return False
+
+    def _find_real_image_char_position(self, image_cursor) -> int | None:
+        """查找真正的图片字符位置（跳过段落分隔符）
+        
+        Args:
+            image_cursor: 指向图片附近的光标
+            
+        Returns:
+            图片字符的位置，如果找不到返回None
+        """
+        cursor = QTextCursor(image_cursor)
+        
+        # 从当前位置开始，向右查找最多2个字符，找到真正的图片字符
+        for offset in range(2):
+            check_pos = image_cursor.position() + offset
+            cursor.setPosition(check_pos)
+            
+            # 向右移动一个字符并选中
+            if _select_char_at(cursor, check_pos):
+                selected_text = cursor.selectedText()
+                char_format = cursor.charFormat()
+                
+                # 检查是否是真正的图片字符
+                if char_format.isImageFormat() and selected_text == '\ufffc':
+                    return check_pos
+            
+            # 清除选区，继续查找
+            cursor.clearSelection()
+        
+        return None
+
+    def _select_image_char(self, image_cursor):
+        """选中图片字符（用于删除等操作）
+        
+        Args:
+            image_cursor: 指向图片附近的光标
+        """
+        cursor = QTextCursor(image_cursor)
+        real_image_pos = self._find_real_image_char_position(image_cursor)
+        
+        if real_image_pos is not None:
+            # 选中真正的图片字符
+            _select_char_at(cursor, real_image_pos)
+            self.setTextCursor(cursor)
+        else:
+            # 如果找不到真正的图片字符，使用原来的逻辑
+            cursor = QTextCursor(image_cursor)
+            _select_char_at(cursor, cursor.position())
+            self.setTextCursor(cursor)
+
+    def _handle_image_click(self, event) -> bool:
+        """处理图片点击（选中图片）
+        
+        Returns:
+            如果处理了图片点击返回True，否则返回False
+        """
+        # **关键修复**：使用像素位置而非光标位置来检测图片点击
+        # 通过遍历文档中的所有图片，计算它们的矩形区域，检查鼠标是否点击在图片上
+        image_format, image_cursor, image_rect = self.find_image_at_position(event.pos())
+        
+        if image_format and image_cursor:
+            # 选中图片
+            self.selected_image = image_format
+            self.selected_image_cursor = image_cursor
+            self.selected_image_rect = image_rect
+            
+            # **关键修复**：查找并选中真正的图片字符（U+FFFC）
+            # 在空行行首插入图片时，Qt会插入段落分隔符（U+2029）+ 图片字符（U+FFFC）
+            # 我们需要找到真正的图片字符并选中它
+            self._select_image_char(image_cursor)
+            
+            self.viewport().update()
+            event.accept()
+            return True
+        return False
+
+    def _clear_image_selection(self):
+        """清除图片选中状态"""
+        if self.selected_image:
+            self.selected_image = None
+            self.selected_image_rect = None
+            self.selected_image_cursor = None
+            self.viewport().update()
+
+    def _restore_title_format_if_needed(self):
+        """如果光标在第一行且为空，恢复标题格式"""
         cursor = self.textCursor()
         if cursor.block().blockNumber() == 0:
             block_text = cursor.block().text()
@@ -972,6 +1023,56 @@ class PasteImageTextEdit(QTextEdit):
                 char_fmt.setFontPointSize(28)
                 char_fmt.setFontWeight(QFont.Weight.Bold)
                 self.setCurrentCharFormat(char_fmt)
+
+    def mousePressEvent(self, event):
+        """鼠标按下事件"""
+        
+        # 检查是否应该忽略事件
+        if self._should_ignore_mouse_event():
+            event.ignore()
+            return
+        
+        # 恢复光标显示
+        self._restore_cursor_visibility()
+        
+        if event.button() == Qt.MouseButton.LeftButton:
+            # 首先检查是否点击了链接（附件）
+            if self._handle_anchor_click(event):
+                return
+            
+            # 检查是否点击了表格
+            cursor = self.cursorForPosition(event.pos())
+            table = cursor.currentTable()
+            if table:
+                # 检查是否点击了表格边框
+                if self._handle_table_border_click(table, cursor, event):
+                    return
+                # 点击了表格内容区域，取消表格选中，进入编辑模式
+                self._handle_table_content_click(event)
+                # 使用默认行为，进入单元格编辑模式
+                super().mousePressEvent(event)
+                return
+            # 取消表格选中
+            self._clear_table_selection()
+
+            # 检查是否点击了图片缩放控制点
+            if self._handle_image_resize_handle_click(event):
+                return
+            
+            # 检查是否点击了图片中心区域（用于拖动移动）
+            if self._handle_image_drag_click(event):
+                return
+            
+            # 检查是否点击了图片
+            if self._handle_image_click(event):
+                return
+            # 取消图片选中
+            self._clear_image_selection()
+        
+        super().mousePressEvent(event)
+        
+        # 如果点击的是第一行且第一行为空，恢复标题格式
+        self._restore_title_format_if_needed()
     
     def mouseMoveEvent(self, event):
         """鼠标移动事件"""
