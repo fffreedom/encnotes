@@ -258,6 +258,7 @@ class PasteImageTextEdit(QTextEdit):
         
         # 文本选择相关
         self.text_selecting = False
+        self.mouse_pressed = False  # 跟踪鼠标按钮是否被按下
         
         # 表格选中相关
         self.selected_table = None  # 当前选中的表格
@@ -1032,6 +1033,10 @@ class PasteImageTextEdit(QTextEdit):
             event.ignore()
             return
         
+        # 标记鼠标已按下
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.mouse_pressed = True
+        
         # 恢复光标显示
         self._restore_cursor_visibility()
         
@@ -1074,94 +1079,132 @@ class PasteImageTextEdit(QTextEdit):
         # 如果点击的是第一行且第一行为空，恢复标题格式
         self._restore_title_format_if_needed()
     
-    def mouseMoveEvent(self, event):
-        """鼠标移动事件"""
-        # 处理缩放
-        if self.resizing and self.resize_handle and self.resize_start_pos:
-            # 计算偏移量
-            delta = event.pos() - self.resize_start_pos
-            
-            # 根据控制点计算新的尺寸
-            new_width = self.resize_start_size[0]
-            new_height = self.resize_start_size[1]
-            aspect_ratio = self.resize_start_size[0] / self.resize_start_size[1]
-            
-            if self.resize_handle in ['tl', 'l', 'bl']:
-                # 左侧控制点：减小宽度
-                new_width = max(50, self.resize_start_size[0] - delta.x())
-            elif self.resize_handle in ['tr', 'r', 'br']:
-                # 右侧控制点：增加宽度
-                new_width = max(50, self.resize_start_size[0] + delta.x())
-            
-            if self.resize_handle in ['tl', 't', 'tr']:
-                # 顶部控制点：减小高度
-                new_height = max(50, self.resize_start_size[1] - delta.y())
-            elif self.resize_handle in ['bl', 'b', 'br']:
-                # 底部控制点：增加高度
-                new_height = max(50, self.resize_start_size[1] + delta.y())
-            
-            # 角落控制点：保持宽高比
-            if self.resize_handle in ['tl', 'tr', 'bl', 'br']:
-                # 以宽度为准，计算高度
-                new_height = int(new_width / aspect_ratio)
-            
-            # 更新图片
-            self.update_image_size(new_width, new_height)
-            
-            event.accept()
+    def _handle_image_resizing(self, event) -> bool:
+        """处理图片缩放
+        
+        Returns:
+            如果正在缩放返回True，否则返回False
+        """
+        if not (self.resizing and self.resize_handle and self.resize_start_pos):
+            return False
+        
+        # 计算偏移量
+        delta = event.pos() - self.resize_start_pos
+        
+        # 根据控制点计算新的尺寸
+        new_width = self.resize_start_size[0]
+        new_height = self.resize_start_size[1]
+        aspect_ratio = self.resize_start_size[0] / self.resize_start_size[1]
+        
+        if self.resize_handle in ['tl', 'l', 'bl']:
+            # 左侧控制点：减小宽度
+            new_width = max(50, self.resize_start_size[0] - delta.x())
+        elif self.resize_handle in ['tr', 'r', 'br']:
+            # 右侧控制点：增加宽度
+            new_width = max(50, self.resize_start_size[0] + delta.x())
+        
+        if self.resize_handle in ['tl', 't', 'tr']:
+            # 顶部控制点：减小高度
+            new_height = max(50, self.resize_start_size[1] - delta.y())
+        elif self.resize_handle in ['bl', 'b', 'br']:
+            # 底部控制点：增加高度
+            new_height = max(50, self.resize_start_size[1] + delta.y())
+        
+        # 角落控制点：保持宽高比
+        if self.resize_handle in ['tl', 'tr', 'bl', 'br']:
+            # 以宽度为准，计算高度
+            new_height = int(new_width / aspect_ratio)
+        
+        # 更新图片
+        self.update_image_size(new_width, new_height)
+        
+        event.accept()
+        return True
+
+    def _handle_image_dragging(self, event) -> bool:
+        """处理图片拖动移动
+        
+        Returns:
+            如果正在拖动返回True，否则返回False
+        """
+        if not (self.dragging and self.drag_start_pos):
+            return False
+        
+        # 更新预览光标位置
+        target_pos = event.pos()
+        self.drag_preview_cursor = self.cursorForPosition(target_pos)
+        
+        # 更新光标形状
+        self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+        
+        # 触发重绘以显示预览指示器
+        self.viewport().update()
+        
+        event.accept()
+        return True
+
+    def _update_cursor_for_selected_image(self, event):
+        """更新已选中图片的光标形状"""
+        handle = self.get_handle_at_pos(event.pos())
+        if handle:
+            self.viewport().setCursor(self.get_cursor_for_handle(handle))
+        else:
+            # 检查是否在图片区域内
+            if self.selected_image_rect and self.selected_image_rect.contains(event.pos()):
+                self.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
+            else:
+                self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+
+    def _update_cursor_for_hover(self, event):
+        """更新鼠标悬停时的光标形状（未选中图片时）"""
+        # 检查是否悬停在图片上（使用像素位置检测）
+        image_format, _, _ = self.find_image_at_position(event.pos())
+        if image_format:
+            self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            # 检查是否悬停在表格上
+            cursor = self.cursorForPosition(event.pos())
+            table = cursor.currentTable()
+            if table:
+                # 检查是否悬停在表格边框上
+                if self.is_click_on_table_border(event.pos(), table):
+                    self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                else:
+                    self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            else:
+                self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+
+    def _handle_text_selection_for_attachments(self):
+        """处理文本选择时的附件扩展"""
+        # 只在鼠标按下时处理附件扩展
+        if not self.mouse_pressed:
             return
         
-        # 处理拖动移动
-        if self.dragging and self.drag_start_pos:
-            # 更新预览光标位置
-            target_pos = event.pos()
-            self.drag_preview_cursor = self.cursorForPosition(target_pos)
-            
-            # 更新光标形状
-            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
-            
-            # 触发重绘以显示预览指示器
-            self.viewport().update()
-            
-            event.accept()
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            self._expand_selection_for_attachments(cursor)
+
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件"""
+        # 处理图片缩放
+        if self._handle_image_resizing(event):
+            return
+        
+        # 处理图片拖动移动
+        if self._handle_image_dragging(event):
             return
         
         # 更新光标形状
         if self.selected_image:
-            handle = self.get_handle_at_pos(event.pos())
-            if handle:
-                self.viewport().setCursor(self.get_cursor_for_handle(handle))
-            else:
-                # 检查是否在图片区域内
-                if self.selected_image_rect and self.selected_image_rect.contains(event.pos()):
-                    self.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
-                else:
-                    self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            self._update_cursor_for_selected_image(event)
         else:
-            # 检查是否悬停在图片上（使用像素位置检测）
-            image_format, _, _ = self.find_image_at_position(event.pos())
-            if image_format:
-                self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
-            else:
-                # 检查是否悬停在表格上
-                cursor = self.cursorForPosition(event.pos())
-                table = cursor.currentTable()
-                if table:
-                    # 检查是否悬停在表格边框上
-                    if self.is_click_on_table_border(event.pos(), table):
-                        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
-                    else:
-                        self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
-                else:
-                    self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            self._update_cursor_for_hover(event)
         
+        # 调用父类方法处理默认的文本选择行为
         super().mouseMoveEvent(event)
         
         # 处理附件选择：在拖动过程中实时扩展选择范围
-        # 当用户拖动选中附件的任何部分时，立即选中整个附件
-        cursor = self.textCursor()
-        if cursor.hasSelection():
-            self._expand_selection_for_attachments(cursor)
+        self._handle_text_selection_for_attachments()
 
     def _get_check_positions(self, sel_start: int, sel_end: int) -> list:
         """生成需要检查的位置列表
@@ -1264,6 +1307,10 @@ class PasteImageTextEdit(QTextEdit):
     
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
+        
+        # 标记鼠标已释放
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.mouse_pressed = False
         
         if self.resizing:
             self.resizing = False
