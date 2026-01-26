@@ -31,6 +31,94 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _select_range(cursor: QTextCursor, start: int, end: int) -> bool:
+    """统一的选中字符范围的函数，使用movePosition方式。
+    
+    Args:
+        cursor: QTextCursor对象
+        start: 起始位置
+        end: 结束位置（不包含）
+        
+    Returns:
+        是否成功选中范围
+    """
+    cursor.setPosition(start)
+    if end <= start:
+        return False
+    count = end - start
+    return cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, count)
+
+
+def _select_char_at(cursor: QTextCursor, position: int) -> bool:
+    """选中指定位置的单个字符（使用movePosition方式）。
+
+    Args:
+        cursor: QTextCursor对象（会被修改）
+        position: 字符位置
+
+    Returns:
+        是否成功选中字符
+    """
+    cursor.setPosition(position)
+    return cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+
+
+def _selected_char_format(
+    doc: QTextDocument,
+    p: int,
+) -> QTextCharFormat | None:
+    doc_len = doc.characterCount()
+    if doc_len <= 0 or p < 0 or p > doc_len - 1:
+        return None
+
+    c0 = QTextCursor(doc)
+    if not _select_char_at(c0, p):
+        return None
+
+    # 输出选中的字符（调试用）
+    selected_char = c0.selectedText()
+    print(f"[DEBUG] 位置 {p} 选中的字符: '{selected_char}' (Unicode: {ord(selected_char) if selected_char else 'N/A'})")
+
+    return c0.charFormat()
+
+
+def _get_char_at(doc: QTextDocument, position: int) -> str:
+    """获取文档中指定位置的字符（全局辅助函数）。
+    
+    Args:
+        doc: 文档对象
+        position: 字符位置
+        
+    Returns:
+        该位置的字符，如果无法获取则返回空字符串
+    """
+    c = QTextCursor(doc)
+    if not _select_char_at(c, position):
+        return ""
+    return c.selectedText() or ""
+
+
+def _is_marked_at(
+        doc: QTextDocument,
+        p: int,
+        tag_prop: int,
+        tag_value: str
+) -> bool:
+    """检查指定位置的字符是否具有指定的标记属性。
+
+    Args:
+        doc: 文档对象
+        p: 要检查的位置
+        tag_prop: 标记属性ID
+        tag_value: 标记属性值
+
+    Returns:
+        如果该位置字符具有指定标记则返回 True，否则返回 False
+    """
+    cf0 = _selected_char_format(doc, p)
+    return bool(cf0) and cf0.hasProperty(tag_prop) and cf0.property(tag_prop) == tag_value
+
+
 def _dump_doc_chars(doc: QTextDocument, start: int, end: int) -> str:
     """输出文档指定范围的每个字符及其 codepoint，便于定位不可见字符。"""
     try:
@@ -38,10 +126,7 @@ def _dump_doc_chars(doc: QTextDocument, start: int, end: int) -> str:
         end = min(max(0, int(doc.characterCount()) - 1), end)
         items = []
         for i in range(start, end + 1):
-            c = QTextCursor(doc)
-            c.setPosition(i)
-            c.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-            ch = c.selectedText()
+            ch = _get_char_at(doc, i)
             if ch == "":
                 ch = "∅"
             cp = " ".join([f"U+{ord(x):04X}" for x in ch])
@@ -63,10 +148,7 @@ def _dump_selection_chars(doc: QTextDocument, cur: QTextCursor) -> str:
             return "<empty>"
         items = []
         for i in range(s, e):
-            c = QTextCursor(doc)
-            c.setPosition(i)
-            c.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-            ch = c.selectedText()
+            ch = _get_char_at(doc, i)
             if ch == "":
                 ch = "∅"
             cp = " ".join([f"U+{ord(x):04X}" for x in ch])
@@ -78,8 +160,7 @@ def _dump_selection_chars(doc: QTextDocument, cur: QTextCursor) -> str:
     except Exception as e:
         return f"<sel_dump_failed:{e}>"
 
-
-def _find_marked_span_around(
+def _find_marked_span(
     doc: QTextDocument,
     pos: int,
     tag_prop: int,
@@ -87,12 +168,10 @@ def _find_marked_span_around(
 ) -> tuple[int, int] | None:
     """返回以 pos 为锚点的连续标记范围 (start, end_exclusive)。
 
-    约定：调用方传入的 pos 必须落在标记范围内；否则返回 None。
+    注意：Qt 的 `QTextCursor.charFormat()` 在"无选区"时返回的是插入点格式，
+    不一定等价于该位置字符本身的格式。这里统一采用"先选中 1 个字符再取格式"。
 
-    注意：Qt 的 `QTextCursor.charFormat()` 在“无选区”时返回的是插入点格式，
-    不一定等价于该位置字符本身的格式。这里统一采用“先选中 1 个字符再取格式”。
-
-    约定（更强）：这里的 pos 只可能是“标记范围起点 start_pos”或“标记范围末端 end_pos”。
+    约定：这里的 pos 只可能是"标记范围起点 start_pos"或"标记范围末端 end_pos"。
     因此优先把 pos 当作 start_pos 向右扩展；若失败再把 pos 当作 end_pos 向左扩展。
     """
     try:
@@ -103,45 +182,25 @@ def _find_marked_span_around(
         if doc_len <= 0:
             return None
 
-        max_pos = max(0, doc_len - 1)
-
-        def _selected_char_format_at_strict(p: int) -> QTextCharFormat | None:
-            """严格取 p 位置的"字符格式"：必须能在 p 处向右选中 1 个字符。
-
-            注意：不做任何回退/兜底，否则会污染范围扫描的语义（例如 p 在末尾时误读 p-1）。
-            """
-            if p < 0 or p > max_pos:
-                return None
-
-            c0 = QTextCursor(doc)
-            c0.setPosition(p)
-            if not c0.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
-                return None
-            
-            # 输出选中的字符
-            selected_char = c0.selectedText()
-            print(f"[DEBUG] 位置 {p} 选中的字符: '{selected_char}' (Unicode: {ord(selected_char) if selected_char else 'N/A'})")
-            
-            return c0.charFormat()
-
-        def is_marked_strict(p: int) -> bool:
-            cf0 = _selected_char_format_at_strict(p)
-            return bool(cf0) and cf0.hasProperty(tag_prop) and cf0.property(tag_prop) == tag_value
+        max_pos = doc_len - 1
 
         # 1) 尝试把 pos 当作 start_pos：要求 pos 本身是标记，且 pos-1 不是标记
-        if is_marked_strict(pos) and (pos <= 0 or not is_marked_strict(pos - 1)):
+        if _is_marked_at(doc, pos, tag_prop, tag_value) and \
+           (pos <= 0 or not _is_marked_at(doc, pos - 1, tag_prop, tag_value)):
             start = pos
             end_inclusive = pos
-            while end_inclusive < max_pos and is_marked_strict(end_inclusive + 1):
+            while end_inclusive < max_pos and _is_marked_at(doc, end_inclusive + 1, tag_prop, tag_value):
                 end_inclusive += 1
             return (start, end_inclusive + 1)
 
         # 2) 尝试把 pos 当作 end_pos（即 end_exclusive）：要求 pos-1 是标记，且 pos 本身不是标记
-        #    这样 pos 落在标记范围的“右开端点”上（例如插入后 cursor.position()）。
-        if pos > 0 and is_marked_strict(pos - 1) and not is_marked_strict(pos):
+        #    这样 pos 落在标记范围的"右开端点"上（例如插入后 cursor.position()）。
+        if pos > 0 and \
+           _is_marked_at(doc, pos - 1, tag_prop, tag_value) and \
+           not _is_marked_at(doc, pos, tag_prop, tag_value):
             end_inclusive = pos - 1
             start = end_inclusive
-            while start > 0 and is_marked_strict(start - 1):
+            while start > 0 and _is_marked_at(doc, start - 1, tag_prop, tag_value):
                 start -= 1
             return (start, end_inclusive + 1)
 
@@ -162,85 +221,11 @@ def _safe_set_cursor_position(doc: QTextDocument, cur: QTextCursor, p: int, wher
     except Exception as e:
         logger.debug("[cursor-setpos][py-exc] where=%s pos=%s doc_len=%s err=%s", where, p, _dl, e)
 
-
-def _debug_dump_text_around_cursor(doc: QTextDocument, pos: int, radius: int = 12) -> str:
-
-    """调试用：打印指定位置附近的文本（含不可见字符的repr）。
-
-    注意：如果这里的 setPosition 越界，Qt 会直接在 stderr 打印
-    `QTextCursor::setPosition: Position 'X' out of range`，不一定会抛 Python 异常。
-    因此这里显式记录 start/end/doc_len，便于定位。
-    """
-    try:
-        doc_len = -1
-        try:
-            doc_len = int(doc.characterCount())
-        except Exception:
-            pass
-
-        start = max(0, pos - radius)
-        end = min(max(0, doc_len - 1), pos + radius) if doc_len > 0 else max(0, pos + radius)
-
-        c = QTextCursor(doc)
-        try:
-            logger.debug("[cursor-setpos] where=debug-dump:start pos=%s doc_len=%s", start, doc_len)
-            c.setPosition(start)
-        except Exception as e:
-            logger.debug("[cursor-oob] _debug_dump_text_around_cursor setPosition(start) failed pos=%s start=%s end=%s doc_len=%s err=%s", pos, start, end, doc_len, e)
-            raise
-        try:
-            logger.debug("[cursor-setpos] where=debug-dump:end pos=%s doc_len=%s", end, doc_len)
-            c.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-        except Exception as e:
-            logger.debug("[cursor-oob] _debug_dump_text_around_cursor setPosition(end) failed pos=%s start=%s end=%s doc_len=%s err=%s", pos, start, end, doc_len, e)
-            raise
-
-        t = c.selectedText()
-        return f"range=({start},{end}) text={repr(t)}"
-    except Exception as e:
-        return f"<dump_failed: {e}>"
-
-
-def _cleanup_replacement_chars_around(doc: QTextDocument, pos: int, radius: int = 6) -> int:
-    """删除 pos 附近残留的替换字符/段落分隔符/多余空白。
-
-    返回删除的字符数量。
-    """
-    removed = 0
-    try:
-        doc_len = int(doc.characterCount())
-        max_pos = max(0, doc_len - 1)
-        start = max(0, pos - radius)
-        end = min(max_pos, pos + radius)
-        i = start
-        while i < end:
-            c = QTextCursor(doc)
-            logger.debug("[cursor-setpos] where=cleanup-repl pos=%s doc_len=%s max_pos=%s", i, doc_len, max_pos)
-            c.setPosition(i)
-            c.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-            ch = c.selectedText()
-
-            # 注意：Qt 的段落分隔符在 selectedText() 中通常是 \u2029
-            # 这里不要轻易删除 \u2029（会把换行/段落吞掉，导致上一行也被删）。
-            if ch in ('\ufffd', '\u200b'):
-                c.removeSelectedText()
-                removed += 1
-                # 删除后不推进 i，继续检查当前位置
-                end = min(doc.characterCount() - 1, pos + radius)
-                continue
-
-            i += 1
-    except Exception:
-        pass
-
-    return removed
-
-
 class PasteImageTextEdit(QTextEdit):
     """支持粘贴图片的文本编辑器"""
 
     # 附件整体的特殊标记：附件文本会被解析为若干字符
-    # 我们用该标记覆盖“附件展示块”对应的文本范围，确保删除时按整体删除
+    # 我们用该标记覆盖"附件展示块"对应的文本范围，确保删除时按整体删除
     ATTACHMENT_TAG_PREFIX = "__encnotes_attachment__"
     ATTACHMENT_TAG_PROP = QTextFormat.Property.UserProperty + 1000
     
@@ -314,51 +299,23 @@ class PasteImageTextEdit(QTextEdit):
             positions.append(cursor.selectionEnd())
 
         doc = self.document()
-        max_pos = max(0, int(doc.characterCount()) - 1)
-
-        def _is_marked_at(p: int) -> bool:
-            if p < 0 or p > max_pos:
-                return False
-
-            c = QTextCursor(doc)
-            c.setPosition(p)
-            if not c.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
-                # 回退：如果无法向右选中，尝试选中 p-1
-                if p - 1 < 0:
-                    return False
-                c.setPosition(p - 1)
-                if not c.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
-                    return False
-
-            cf = c.charFormat()
-            return (
-                cf.hasProperty(self.ATTACHMENT_TAG_PROP)
-                and cf.property(self.ATTACHMENT_TAG_PROP) == self._attachment_tag_name
-            )
-
         for pos in positions:
-            if _is_marked_at(pos):
+            if _is_marked_at(doc, pos, self.ATTACHMENT_TAG_PROP, self._attachment_tag_name):
                 return True
         return False
 
-    def _select_whole_attachment_block(self, cursor: QTextCursor) -> QTextCursor | None:
+    def _select_whole_attachment_span(self, cursor: QTextCursor) -> QTextCursor | None:
         """从光标附近扩展选区，选中整个附件块（通过连续的同一标记范围）。
 
-        这里的“找范围”逻辑统一复用 `_find_marked_span_around()`，确保与其他标记扫描一致。
+        这里的"找范围"逻辑统一复用 `_find_marked_span_around()`，确保与其他标记扫描一致。
         """
         if not cursor:
             return None
 
         doc = self.document()
         pos = cursor.position()
-
-        # Delete/Backspace 时，Qt 的 cursor.position() 往往落在附件块“右侧”（包含尾随空格）。
-        # 我们优先用 pos 当作 end_pos（右开端点）尝试；不行再用 pos-1 当作 start_pos。
-        tag_value = getattr(self, "_attachment_tag_name", "")
-
-        span = None
         try:
-            span = _find_marked_span_around(doc, pos, self.ATTACHMENT_TAG_PROP, tag_value)
+            span = _find_marked_span(doc, pos, self.ATTACHMENT_TAG_PROP, self._attachment_tag_name)
             # if span is None and pos - 1 >= 0:
             #     span = _find_marked_span_around(doc, pos - 1, self.ATTACHMENT_TAG_PROP, tag_value)
         except Exception:
@@ -382,8 +339,7 @@ class PasteImageTextEdit(QTextEdit):
             pass
 
         sel = QTextCursor(doc)
-        sel.setPosition(start)
-        sel.setPosition(end_exclusive, QTextCursor.MoveMode.KeepAnchor)
+        _select_range(sel, start, end_exclusive)
         return sel
 
     
@@ -553,7 +509,7 @@ class PasteImageTextEdit(QTextEdit):
 
                 attachment_manager = self.parent_editor.note_manager.attachment_manager
 
-                # 如果该附件此前被“延迟删除”挪进回收站，这里自动尝试恢复，确保打开不受影响
+                # 如果该附件此前被"延迟删除"挪进回收站，这里自动尝试恢复，确保打开不受影响
                 try:
                     note_id = getattr(self.parent_editor, 'current_note_id', None)
                     if note_id:
@@ -756,7 +712,7 @@ class PasteImageTextEdit(QTextEdit):
             
             # 检查当前位置的字符格式
             # 注意：需要先向右移动一个字符，再检查格式
-            cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor)
+            _select_char_at(cursor, cursor.position())
             char_format = cursor.charFormat()
             selected_text = cursor.selectedText()
             
@@ -793,7 +749,7 @@ class PasteImageTextEdit(QTextEdit):
         temp_cursor = QTextCursor(cursor)
         
         # 向右移动一个字符并选中，这样charFormat()才能返回图片字符的格式
-        temp_cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor)
+        _select_char_at(temp_cursor, temp_cursor.position())
         char_format = temp_cursor.charFormat()
         
         if not char_format.isImageFormat():
@@ -971,7 +927,7 @@ class PasteImageTextEdit(QTextEdit):
                     cursor.setPosition(check_pos)
                     
                     # 向右移动一个字符并选中
-                    if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
+                    if _select_char_at(cursor, check_pos):
                         selected_text = cursor.selectedText()
                         char_format = cursor.charFormat()
                         
@@ -985,13 +941,12 @@ class PasteImageTextEdit(QTextEdit):
                 
                 if real_image_pos is not None:
                     # 选中真正的图片字符
-                    cursor.setPosition(real_image_pos)
-                    cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                    _select_char_at(cursor, real_image_pos)
                     self.setTextCursor(cursor)
                 else:
                     # 如果找不到真正的图片字符，使用原来的逻辑
                     cursor = QTextCursor(image_cursor)
-                    cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                    _select_char_at(cursor, cursor.position())
                     self.setTextCursor(cursor)
                 
                 self.viewport().update()
@@ -1100,6 +1055,111 @@ class PasteImageTextEdit(QTextEdit):
                     self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         
         super().mouseMoveEvent(event)
+        
+        # 处理附件选择：在拖动过程中实时扩展选择范围
+        # 当用户拖动选中附件的任何部分时，立即选中整个附件
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            self._expand_selection_for_attachments(cursor)
+
+    def _get_check_positions(self, sel_start: int, sel_end: int) -> list:
+        """生成需要检查的位置列表
+        Args:
+            sel_start: 选择起始位置
+            sel_end: 选择结束位置
+            
+        Returns:
+            需要检查的位置列表
+        """
+        check_positions = [sel_start]
+        for i in range(sel_start, sel_end):
+            check_positions.append(i)
+
+        return check_positions
+    
+    def _find_attachment_bounds(self, doc: QTextDocument, check_positions: list, tag_value: str) -> tuple:
+        """查找所有附件的边界范围
+        Args:
+            doc: 文档对象
+            check_positions: 需要检查的位置列表
+            tag_value: 附件标签值
+            
+        Returns:
+            (最小起始位置, 最大结束位置) 元组，如果没有找到附件则返回None
+        """
+        min_start = None
+        max_end = None
+        
+        for pos in check_positions:
+            if pos < 0:
+                continue
+            try:
+                # 检查当前位置是否在附件范围内
+                span = _find_marked_span(doc, pos, self.ATTACHMENT_TAG_PROP, tag_value)
+                if span:
+                    start, end_exclusive = span
+                    # 更新边界
+                    if min_start is None or start < min_start:
+                        min_start = start
+                    if max_end is None or end_exclusive > max_end:
+                        max_end = end_exclusive
+            except Exception:
+                pass
+        
+        if min_start is not None and max_end is not None:
+            return (min_start, max_end)
+        return None
+    
+    def _apply_expanded_selection(self, doc: QTextDocument, start: int, end: int):
+        """应用扩展后的选择范围
+        
+        Args:
+            doc: 文档对象
+            start: 新的起始位置
+            end: 新的结束位置
+        """
+        new_cursor = QTextCursor(doc)
+        _select_range(new_cursor, start, end)
+        self.setTextCursor(new_cursor)
+    
+    def _expand_selection_for_attachments(self, cursor: QTextCursor):
+        """如果选择范围包含附件，扩展选择到整个附件范围
+        
+        Args:
+            cursor: 当前文本光标
+        """
+        if not cursor or not cursor.hasSelection():
+            return
+        
+        doc = self.document()
+        sel_start = cursor.selectionStart()
+        sel_end = cursor.selectionEnd()
+        tag_value = getattr(self, "_attachment_tag_name", "")
+        
+        if not tag_value:
+            return
+
+        # 获取需要检查的位置列表
+        check_positions = self._get_check_positions(sel_start, sel_end)
+        logger.debug(
+            "[expend-selection] selected_pos: start=%s end=%s cursor_pos=%s",
+            sel_start,
+            sel_end,
+            cursor.position()
+        )
+        # 查找所有附件的边界
+        bounds = self._find_attachment_bounds(doc, check_positions, tag_value)
+        # 如果找到附件且范围有扩展，更新选择
+        if bounds:
+            expanded_start, expanded_end = bounds
+            logger.debug(
+                "[expend-selection] find_bounds: expanded_start=%s expanded_end=%s cursor_pos=%s",
+                expanded_start,
+                expanded_end,
+                cursor.position()
+            )
+            if expanded_start < sel_start or expanded_end > sel_end:
+                self._apply_expanded_selection(doc, min(expanded_start, sel_start), max(expanded_end, sel_end))
     
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
@@ -1294,63 +1354,57 @@ class PasteImageTextEdit(QTextEdit):
             table_start = table.firstPosition()
             table_end = table.lastPosition()
             
-            cursor.setPosition(table_start)
-            cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
+            _select_range(cursor, table_start, table_end + 1)
             cursor.removeSelectedText()
     
-    def keyPressEvent(self, event):
-        """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
-        # 在插入字符前，检查是否在第一行，如果是则先设置标题格式
-        # 这样输入的字符就会使用正确的格式，光标也会显示正确的大小
-        if event.text() and not event.text().isspace():  # 只处理可见字符，不处理空格、回车等
-            cursor = self.textCursor()
-            block = cursor.block()
-            block_number = block.blockNumber()
-            
-            # 如果在第一行
-            if block_number == 0:
-                # 检查第一行是否为空或只有零宽度空格
-                block_text = block.text()
-                
-                # 获取当前格式
-                current_fmt = self.currentCharFormat()
-                current_size = current_fmt.fontPointSize()
-                
-                # 检查是否需要设置标题格式
-                need_title_format = False
-                
-                if block_text == "" or block_text == "\u200B":
-                    if block_text == "\u200B":
-                        # 删除零宽度空格
-                        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-                        cursor.removeSelectedText()
-                        self.setTextCursor(cursor)
-                    need_title_format = True
-                elif current_size == 0.0 or current_size < 1.0:
-                    # 格式丢失（字号为0或无效）
-                    need_title_format = True
-                
-                if need_title_format:
-                    # 不删除零宽度空格，直接设置标题格式
-                    # Qt 会自动用输入的字符替换零宽度空格
-                    # 获取当前格式并修改，保留其他属性
-                    title_fmt = QTextCharFormat()
-                    title_fmt.setFontPointSize(28)
-                    title_fmt.setFontWeight(QFont.Weight.Bold)
-                    self.setCurrentCharFormat(title_fmt)
+    def _handle_first_line_title_format(self, event):
+        """处理第一行标题格式设置
         
-        # 记录是否需要在插入后恢复格式
+        返回：(need_restore_format, saved_format) 元组
+        """
         need_restore_format = False
         saved_format = None
-        if event.text() and not event.text().isspace():
-            cursor = self.textCursor()
-            if cursor.block().blockNumber() == 0:
-                block_text = cursor.block().text()
-                if block_text == "" or block_text == "\u200B":
-                    need_restore_format = True
-                    saved_format = self.currentCharFormat()
         
-        # 如果按下的不是删除键，且光标被隐藏，则恢复光标显示并清除表格选中状态
+        if not event.text() or event.text().isspace():
+            return need_restore_format, saved_format
+        
+        cursor = self.textCursor()
+        block = cursor.block()
+        
+        if block.blockNumber() != 0:
+            return need_restore_format, saved_format
+        
+        block_text = block.text()
+        current_fmt = self.currentCharFormat()
+        current_size = current_fmt.fontPointSize()
+        
+        # 检查是否需要设置标题格式
+        need_title_format = False
+        
+        if block_text == "" or block_text == "\u200B":
+            if block_text == "\u200B":
+                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                cursor.removeSelectedText()
+                self.setTextCursor(cursor)
+            need_title_format = True
+        elif current_size == 0.0 or current_size < 1.0:
+            need_title_format = True
+        
+        if need_title_format:
+            title_fmt = QTextCharFormat()
+            title_fmt.setFontPointSize(28)
+            title_fmt.setFontWeight(QFont.Weight.Bold)
+            self.setCurrentCharFormat(title_fmt)
+        
+        # 记录是否需要在插入后恢复格式
+        if block_text == "" or block_text == "\u200B":
+            need_restore_format = True
+            saved_format = self.currentCharFormat()
+        
+        return need_restore_format, saved_format
+    
+    def _restore_cursor_and_clear_table_selection(self, event):
+        """恢复光标显示并清除表格选中状态"""
         if event.key() not in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self.cursorWidth() == 0:
                 self.setCursorWidth(1)
@@ -1358,267 +1412,281 @@ class PasteImageTextEdit(QTextEdit):
                 self.selected_table = None
                 self.selected_table_cursor = None
                 self.viewport().update()
-        
-        # 检查是否按下了删除键（Delete 或 Backspace）
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            # 先处理附件块：附件显示应作为一个整体删除
-            current_cursor = self.textCursor()
-            attachment_sel = self._select_whole_attachment_block(current_cursor)
-            if attachment_sel is not None:
-                doc = self.document()
-                del_key = "Delete" if event.key() == Qt.Key.Key_Delete else "Backspace"
-
-
-                # 删除前：记录选区、光标及附近字符
-                _doc_len = doc.characterCount() if doc is not None else -1
-                _cur_pos = current_cursor.position()
-                _sel_s = attachment_sel.selectionStart()
-                _sel_e = attachment_sel.selectionEnd()
-                _win_s = min(_cur_pos, _sel_s) - 40
-                _win_e = max(_cur_pos, _sel_e) + 40
-
-                # 额外：输出“被打标记”的范围（通过自定义属性扫描连续区间）
-
-                # marked_span 用于验证“实际打标记的范围”是否被完整删除。
-
-                # 用 cursor_pos 作为种子在 Backspace 场景下不可靠：cursor 往往停在附件块右侧空格之后，
-                # 或者落在附件块边界的前/后一个字符上，容易导致扫描漏掉左侧第 1 个字符。
-                # 因此这里改用 attachment_sel.selectionStart() 作为种子位置。
-                _marked_span = _find_marked_span_around(
-                    doc,
-                    _sel_s,
-                    self.ATTACHMENT_TAG_PROP,
-                    getattr(self, "_attachment_tag_name", ""),
-                )
-
-                logger.debug(
-                    "[attachment-delete] key=%s doc_len=%s cursor_pos=%s sel=(%s,%s) around=%s",
-                    del_key,
-                    _doc_len,
-                    _cur_pos,
-                    _sel_s,
-                    _sel_e,
-                    _debug_dump_text_around_cursor(doc, _cur_pos)
-                )
-
-                if _marked_span is not None:
-                    _ms, _me = _marked_span
-                    logger.debug(
-                        "[attachment-delete][before] marked_span=(%s,%s) len=%s chars=%s",
-                        _ms,
-                        _me,
-                        (_me - _ms),
-                        _dump_doc_chars(doc, _ms, _me - 1),
-                    )
-                else:
-                    logger.debug("[attachment-delete][before] marked_span=<none>")
-
-                logger.debug(
-                    "[attachment-delete][before] window=(%s,%s) chars=%s",
-                    max(0, _win_s),
-                    min(max(0, doc.characterCount() - 1), _win_e),
-                    _dump_doc_chars(doc, _win_s, _win_e)
-                )
-                logger.debug(
-                    "[attachment-delete][before] selection_chars=%s",
-                    _dump_selection_chars(doc, attachment_sel)
-                )
-
-                # 删除前，尝试同步清理对应的附件文件
-                try:
-                    selected_html = attachment_sel.selection().toHtml()
-                    attachment_ids = []
-
-                    # 优先从 data-attachment-id 提取（新格式）
-                    try:
-                        import re
-                        attachment_ids.extend(re.findall(r"data-attachment-id=\"([^\"]+)\"", selected_html))
-                    except Exception:
-                        pass
-
-                    # 兼容从 attachment://xxx 提取
-                    try:
-                        import re
-                        attachment_ids.extend(re.findall(r"attachment://([a-fA-F0-9\-]{16,})", selected_html))
-                    except Exception:
-                        pass
-
-                    # 去重
-                    attachment_ids = list(dict.fromkeys([x for x in attachment_ids if x]))
-
-                    logger.debug("[attachment-delete] extracted_attachment_ids=%s", attachment_ids)
-
-                    if attachment_ids and self.parent_editor and getattr(self.parent_editor, "note_manager", None):
-                        note_id = getattr(self.parent_editor, "current_note_id", None)
-                        am = getattr(self.parent_editor.note_manager, "attachment_manager", None)
-                        if note_id and am:
-                            for aid in attachment_ids:
-                                # 不要在这里真正删除文件：用户可能会 Command+Z 撤销。
-                                # 这里仅做“延迟删除”（挪到回收站/标记待清理）。
-                                ok, msg = am.defer_delete_attachment(aid, note_id)
-                                logger.debug("[attachment-delete] defer_delete_attachment id=%s ok=%s msg=%s", aid, ok, msg)
-                except Exception as e:
-                    logger.exception("[attachment-delete] delete_attachment pre-clean failed: %s", e)
-
-                # 真正删除文本块
-                # 光标恢复策略：删除后应落在“附件块起点”（也就是原 selectionStart），
-                # 而不是 selectionEnd；selectionEnd 往往紧邻一串 PSEP/ZWSP，容易造成光标跳到空行区域。
-                pre_start = attachment_sel.selectionStart()
-                attachment_sel.beginEditBlock()
-                attachment_sel.removeSelectedText()
-
-                # 删除后 doc 长度可能变化：这里不做 clamp，
-                # 如果 pre_start 越界需要靠日志定位根因，而不是悄悄修正。
-                safe_pos = pre_start
-
-                # 仅删除标记范围：不做任何二次清理，避免误删附件前后字符。
-                attachment_sel.endEditBlock()
-
-                try:
-                    _after_len = doc.characterCount()
-                except Exception:
-                    _after_len = -1
-
-                logger.debug(
-                    "[attachment-delete] after_delete safe_pos=%s doc_len=%s around=%s",
-                    safe_pos,
-                    _after_len,
-                    _debug_dump_text_around_cursor(doc, safe_pos)
-                )
-
-                # 删除后：再次输出 marked_span，看是否仍残留被标记范围
-                try:
-                    _marked_span_after = _find_marked_span_around(
-                        doc,
-                        safe_pos,
-                        self.ATTACHMENT_TAG_PROP,
-                        getattr(self, "_attachment_tag_name", ""),
-                    )
-
-                    if _marked_span_after is not None:
-                        _ms2, _me2 = _marked_span_after
-                        logger.debug(
-                            "[attachment-delete][after] marked_span=(%s,%s) len=%s chars=%s",
-                            _ms2,
-                            _me2,
-                            (_me2 - _ms2),
-                            _dump_doc_chars(doc, _ms2, _me2 - 1),
-                        )
-                    else:
-                        logger.debug("[attachment-delete][after] marked_span=<none>")
-                except Exception:
-                    pass
-
-                try:
-                    _after_win_s = safe_pos - 40
-                    _after_win_e = safe_pos + 80
-                    logger.debug(
-                        "[attachment-delete][after] window=(%s,%s) chars=%s",
-                        max(0, _after_win_s),
-                        min(max(0, doc.characterCount() - 1), _after_win_e),
-                        _dump_doc_chars(doc, _after_win_s, _after_win_e)
-                    )
-                except Exception:
-                    pass
-
-                try:
-                    attachment_sel.clearSelection()
-                    _safe_set_cursor_position(doc, attachment_sel, safe_pos, "attachment-delete:restore-cursor")
-                    self.setTextCursor(attachment_sel)
-
-                except Exception:
-                    self.setTextCursor(attachment_sel)
-
-                event.accept()
-                return
-
-            current_table = current_cursor.currentTable()
+    
+    def _log_attachment_delete_before(self, doc, del_key, current_cursor, attachment_sel, marked_span):
+        """记录附件删除前的调试信息"""
+        try:
+            _doc_len = doc.characterCount() if doc is not None else -1
+            _cur_pos = current_cursor.position()
+            _sel_s = attachment_sel.selectionStart()
+            _sel_e = attachment_sel.selectionEnd()
+            _win_s = min(_cur_pos, _sel_s) - 40
+            _win_e = max(_cur_pos, _sel_e) + 40
             
-            # 如果有选中的表格，需要判断是否在编辑表格内容
-            if self.selected_table and self.selected_table_cursor:
-                # 如果当前光标在表格内，说明用户正在编辑单元格内容
-                # 此时不应该删除整个表格，而是使用默认行为删除单元格内容
-                if current_table == self.selected_table:
-                    # 用户正在编辑表格内容，使用默认行为
-                    super().keyPressEvent(event)
-                    return
+            logger.debug(
+                "[attachment-delete] key=%s doc_len=%s cursor_pos=%s sel=(%s,%s)",
+                del_key,
+                _doc_len,
+                _cur_pos,
+                _sel_s,
+                _sel_e,
+            )
+            
+            if marked_span is not None:
+                _ms, _me = marked_span
+                logger.debug(
+                    "[attachment-delete][before] marked_span=(%s,%s) len=%s chars=%s",
+                    _ms,
+                    _me,
+                    (_me - _ms),
+                    _dump_doc_chars(doc, _ms, _me - 1),
+                )
+            else:
+                logger.debug("[attachment-delete][before] marked_span=<none>")
+            
+            logger.debug(
+                "[attachment-delete][before] window=(%s,%s) chars=%s",
+                max(0, _win_s),
+                min(max(0, doc.characterCount() - 1), _win_e),
+                _dump_doc_chars(doc, _win_s, _win_e)
+            )
+            logger.debug(
+                "[attachment-delete][before] selection_chars=%s",
+                _dump_selection_chars(doc, attachment_sel)
+            )
+        except Exception:
+            pass
+    
+    def _extract_and_defer_delete_attachments(self, attachment_sel):
+        """提取附件ID并延迟删除"""
+        try:
+            selected_html = attachment_sel.selection().toHtml()
+            attachment_ids = []
+            
+            # 从 attachment://xxx 提取附件ID
+            try:
+                import re
+                attachment_ids.extend(re.findall(r"attachment://([a-fA-F0-9\-]{16,})", selected_html))
+            except Exception:
+                pass
+            
+            # 去重
+            attachment_ids = list(dict.fromkeys([x for x in attachment_ids if x]))
+            
+            logger.debug("[attachment-delete] extracted_attachment_ids=%s", attachment_ids)
+            
+            if attachment_ids and self.parent_editor and getattr(self.parent_editor, "note_manager", None):
+                note_id = getattr(self.parent_editor, "current_note_id", None)
+                am = getattr(self.parent_editor.note_manager, "attachment_manager", None)
+                if note_id and am:
+                    for aid in attachment_ids:
+                        ok, msg = am.defer_delete_attachment(aid, note_id)
+                        logger.debug("[attachment-delete] defer_delete_attachment id=%s ok=%s msg=%s", aid, ok, msg)
+        except Exception as e:
+            logger.exception("[attachment-delete] delete_attachment pre-clean failed: %s", e)
+    
+    def _log_attachment_delete_after(self, doc, safe_pos):
+        """记录附件删除后的调试信息"""
+        try:
+            _after_len = doc.characterCount()
+        except Exception:
+            _after_len = -1
+        
+        logger.debug(
+            "[attachment-delete] after_delete safe_pos=%s doc_len=%s",
+            safe_pos,
+            _after_len,
+        )
+        
+        # 检查是否仍残留被标记范围
+        try:
+            _marked_span_after = _find_marked_span(
+                doc,
+                safe_pos,
+                self.ATTACHMENT_TAG_PROP,
+                getattr(self, "_attachment_tag_name", ""),
+            )
+            
+            if _marked_span_after is not None:
+                _ms2, _me2 = _marked_span_after
+                logger.debug(
+                    "[attachment-delete][after] marked_span=(%s,%s) len=%s chars=%s",
+                    _ms2,
+                    _me2,
+                    (_me2 - _ms2),
+                    _dump_doc_chars(doc, _ms2, _me2 - 1),
+                )
+            else:
+                logger.debug("[attachment-delete][after] marked_span=<none>")
+        except Exception:
+            pass
+        
+        try:
+            _after_win_s = safe_pos - 40
+            _after_win_e = safe_pos + 80
+            logger.debug(
+                "[attachment-delete][after] window=(%s,%s) chars=%s",
+                max(0, _after_win_s),
+                min(max(0, doc.characterCount() - 1), _after_win_e),
+                _dump_doc_chars(doc, _after_win_s, _after_win_e)
+            )
+        except Exception:
+            pass
+    
+    def _handle_attachment_deletion(self, event, current_cursor):
+        """处理附件删除
+        
+        返回：True 表示已处理，False 表示未处理
+        """
+        attachment_sel = self._select_whole_attachment_span(current_cursor)
+        if attachment_sel is None:
+            return False
+        
+        doc = self.document()
+        del_key = "Delete" if event.key() == Qt.Key.Key_Delete else "Backspace"
+        
+        # 获取标记范围
+        _sel_s = attachment_sel.selectionStart()
+        _marked_span = _find_marked_span(
+            doc,
+            _sel_s,
+            self.ATTACHMENT_TAG_PROP,
+            getattr(self, "_attachment_tag_name", ""),
+        )
+        
+        # 记录删除前信息
+        self._log_attachment_delete_before(doc, del_key, current_cursor, attachment_sel, _marked_span)
+        
+        # 延迟删除附件文件
+        self._extract_and_defer_delete_attachments(attachment_sel)
+        
+        # 删除文本块
+        pre_start = attachment_sel.selectionStart()
+        attachment_sel.beginEditBlock()
+        attachment_sel.removeSelectedText()
+        attachment_sel.endEditBlock()
+        
+        safe_pos = pre_start
+        
+        # 记录删除后信息
+        self._log_attachment_delete_after(doc, safe_pos)
+        
+        # 恢复光标位置
+        try:
+            attachment_sel.clearSelection()
+            _safe_set_cursor_position(doc, attachment_sel, safe_pos, "attachment-delete:restore-cursor")
+            self.setTextCursor(attachment_sel)
+        except Exception:
+            self.setTextCursor(attachment_sel)
+        
+        event.accept()
+        return True
+    
+    def _handle_selected_table_deletion(self, event, current_table):
+        """处理已选中表格的删除
+        
+        返回：True 表示已处理，False 表示未处理
+        """
+        if not self.selected_table or not self.selected_table_cursor:
+            return False
+        
+        # 如果当前光标在表格内，说明用户正在编辑单元格内容
+        if current_table == self.selected_table:
+            super().keyPressEvent(event)
+            return True
+        
+        # 删除整个表格（第二次按删除键）
+        cursor = QTextCursor(self.document())
+        table_start = self.selected_table.firstPosition()
+        table_end = self.selected_table.lastPosition()
+        
+        _select_range(cursor, table_start, table_end + 1)
+        cursor.removeSelectedText()
+        
+        # 清除选中状态
+        self.selected_table = None
+        self.selected_table_cursor = None
+        self.setCursorWidth(1)
+        self.viewport().update()
+        
+        event.accept()
+        return True
+    
+    def _handle_table_selection(self, event, cursor_pos):
+        """处理表格选中（第一次按删除键）
+        
+        返回：True 表示已处理，False 表示未处理
+        """
+        frame = self.document().rootFrame()
+        for child_frame in frame.childFrames():
+            table = child_frame
+            if not hasattr(table, 'firstPosition'):
+                continue
+            
+            table_start = table.firstPosition()
+            table_end = table.lastPosition()
+            
+            # 检查光标是否紧邻表格
+            is_before_table = (event.key() == Qt.Key.Key_Delete and 
+                              cursor_pos <= table_start and cursor_pos >= table_start - 2)
+            is_after_table = (event.key() == Qt.Key.Key_Backspace and 
+                             cursor_pos >= table_end + 1 and cursor_pos <= table_end + 3)
+            
+            if is_before_table or is_after_table:
+                # 选中表格
+                self.selected_table = table
+                self.selected_table_cursor = QTextCursor(self.document())
+                self.selected_table_cursor.setPosition(table_start)
                 
-                # 如果当前光标不在表格内，说明用户选中了整个表格
-                # 此时应该删除整个表格（第二次按删除键）
-                cursor = QTextCursor(self.document())
+                # 移动光标到表格外部
+                clear_cursor = QTextCursor(self.document())
+                if is_before_table:
+                    clear_cursor.setPosition(table_start - 1 if table_start > 0 else 0)
+                else:
+                    clear_cursor.setPosition(table_end + 1)
+                clear_cursor.clearSelection()
+                self.setTextCursor(clear_cursor)
                 
-                # 获取表格在文档中的位置
-                table_start = self.selected_table.firstPosition()
-                table_end = self.selected_table.lastPosition()
-                
-                cursor.setPosition(table_start)
-                cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
-                
-                # 删除选中的内容（包括表格）
-                cursor.removeSelectedText()
-                
-                # 清除选中状态
-                self.selected_table = None
-                self.selected_table_cursor = None
-                
-                # 恢复光标显示
-                self.setCursorWidth(1)
-                
+                # 隐藏光标
+                self.setCursorWidth(0)
                 self.viewport().update()
                 
                 event.accept()
+                return True
+        
+        return False
+    
+    def keyPressEvent(self, event):
+        """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
+        # 处理第一行标题格式
+        need_restore_format, saved_format = self._handle_first_line_title_format(event)
+        
+        # 恢复光标显示并清除表格选中状态
+        self._restore_cursor_and_clear_table_selection(event)
+        
+        # 处理删除键
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            current_cursor = self.textCursor()
+            
+            # 先处理附件删除
+            if self._handle_attachment_deletion(event, current_cursor):
                 return
             
-            # 检查光标是否在表格前面或后面（第一次按删除键）
-            cursor_pos = current_cursor.position()
+            current_table = current_cursor.currentTable()
             
-            # 检查所有表格，看光标是否紧邻某个表格
-            frame = self.document().rootFrame()
-            for child_frame in frame.childFrames():
-                table = child_frame
-                if hasattr(table, 'firstPosition'):
-                    table_start = table.firstPosition()
-                    table_end = table.lastPosition()
-                    
-                    # Delete键：删除光标后面的内容，检查光标是否在表格前面（允许有少量间隔，比如换行符）
-                    # Backspace键：删除光标前面的内容，检查光标是否在表格后面（允许有少量间隔）
-                    # 使用范围判断：光标和表格之间的距离不超过2个字符
-                    is_before_table = (event.key() == Qt.Key.Key_Delete and 
-                                      cursor_pos <= table_start and cursor_pos >= table_start - 2)
-                    is_after_table = (event.key() == Qt.Key.Key_Backspace and 
-                                     cursor_pos >= table_end + 1 and cursor_pos <= table_end + 3)
-                    
-                    if is_before_table or is_after_table:
-                        # 第一次按删除键：选中表格
-                        self.selected_table = table
-                        self.selected_table_cursor = QTextCursor(self.document())
-                        self.selected_table_cursor.setPosition(table_start)
-                        
-                        # 将光标移动到表格外部，并清除选区使其不闪烁
-                        clear_cursor = QTextCursor(self.document())
-                        # 将光标移到表格外
-                        if is_before_table:
-                            clear_cursor.setPosition(table_start - 1 if table_start > 0 else 0)
-                        else:
-                            clear_cursor.setPosition(table_end + 1)
-                        # 清除选区
-                        clear_cursor.clearSelection()
-                        self.setTextCursor(clear_cursor)
-                        
-                        # 隐藏光标（通过设置光标宽度为0）
-                        self.setCursorWidth(0)
-                        
-                        # 触发重绘以显示选中效果
-                        self.viewport().update()
-                        
-                        event.accept()
-                        return
+            # 处理已选中表格的删除
+            if self._handle_selected_table_deletion(event, current_table):
+                return
+            
+            # 处理表格选中（第一次按删除键）
+            cursor_pos = current_cursor.position()
+            if self._handle_table_selection(event, cursor_pos):
+                return
         
-        # 直接使用默认行为，不做任何特殊处理
-        # 这样选区中的图片和文本都会被正常删除
+        # 使用默认行为
         super().keyPressEvent(event)
         
-        # 如果需要恢复格式，在插入字符后再次设置
+        # 恢复格式
         if need_restore_format and saved_format:
             self.setCurrentCharFormat(saved_format)
     
@@ -1678,7 +1746,7 @@ class PasteImageTextEdit(QTextEdit):
             cursor.setPosition(check_pos)
             
             # 向右移动一个字符并选中
-            if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
+            if _select_char_at(cursor, check_pos):
                 selected_text = cursor.selectedText()
                 char_format = cursor.charFormat()
                 
@@ -1688,8 +1756,7 @@ class PasteImageTextEdit(QTextEdit):
                     
                     # 检查图片字符前面是否有段落分隔符
                     if real_image_pos > 0:
-                        cursor.setPosition(real_image_pos - 1)
-                        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                        _select_char_at(cursor, real_image_pos - 1)
                         prev_text = cursor.selectedText()
                         prev_format = cursor.charFormat()
                         
@@ -1726,7 +1793,7 @@ class PasteImageTextEdit(QTextEdit):
         cursor.setPosition(real_image_pos)
         
         # 向右选中图片字符（只删除1个字符）
-        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+        _select_char_at(cursor, cursor.position())
         
         # 删除选中的图片字符
         cursor.removeSelectedText()
@@ -1753,7 +1820,7 @@ class PasteImageTextEdit(QTextEdit):
         cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
         
         # 重新获取图片格式（因为可能已经改变）
-        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+        _select_char_at(cursor, cursor.position())
         new_char_format = cursor.charFormat()
         if new_char_format.isImageFormat():
             self.selected_image = new_char_format.toImageFormat()
@@ -1800,7 +1867,7 @@ class PasteImageTextEdit(QTextEdit):
             cursor.setPosition(check_pos)
             
             # 向右移动一个字符并选中
-            if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
+            if _select_char_at(cursor, check_pos):
                 selected_text = cursor.selectedText()
                 char_format = cursor.charFormat()
                 
@@ -1810,8 +1877,7 @@ class PasteImageTextEdit(QTextEdit):
                     
                     # 检查图片字符前面是否有段落分隔符
                     if real_image_pos > 0:
-                        cursor.setPosition(real_image_pos - 1)
-                        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                        _select_char_at(cursor, real_image_pos - 1)
                         prev_text = cursor.selectedText()
                         prev_format = cursor.charFormat()
                         
@@ -1831,11 +1897,8 @@ class PasteImageTextEdit(QTextEdit):
         delete_start_pos = real_image_pos - 1 if has_paragraph_separator else real_image_pos
         delete_count = 2 if has_paragraph_separator else 1
         
-        # 移动到删除起始位置
-        cursor.setPosition(delete_start_pos)
-        
-        # 向右选中需要删除的字符（段落分隔符 + 图片字符，或只有图片字符）
-        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, delete_count)
+        # 选中需要删除的字符范围（段落分隔符 + 图片字符，或只有图片字符）
+        _select_range(cursor, delete_start_pos, delete_start_pos + delete_count)
         
         # 删除选中的内容
         cursor.removeSelectedText()
@@ -1955,7 +2018,6 @@ class PasteImageTextEdit(QTextEdit):
 
 class NoteEditor(QWidget):
     """笔记编辑器类 - 包含工具栏和编辑区"""
-    
     def __init__(self, note_manager=None):
         super().__init__()
         self.math_renderer = MathRenderer()
@@ -2205,7 +2267,6 @@ class NoteEditor(QWidget):
         self.text_edit.setHtml(html_content)
 
         try:
-            doc = self.text_edit.document()
             logger.debug(
                 "[attachment-remark] setHtml called note_id=%s html_len=%s plain_len=%s has_attachment_url=%s tag=%s",
                 getattr(self, "current_note_id", None),
@@ -2232,180 +2293,209 @@ class NoteEditor(QWidget):
         """扫描文档，给附件展示块重新打标记（用于整体删除）。
 
         关键原则：
-        - **只标记真正的附件展示片段**（文件名链接 + size 文本 + 尾随分隔空格），不要把整个 block 都打上标记。
+        - **只标记真正的附件展示片段**（文件名链接 + 空格 + size 文本），不要把整个 block 都打上标记。
           否则会把 block 内的 ZWSP/PSEP 或用户后续输入内容一并标记，导致删除范围漂移、误删换行。
-
-        注意：重启后 setHtml() 加载出来的文档里，`block.text()` 往往拿不到 <a href="..."> 的 href。
-        因此不能只靠 block.text() 里是否包含 `attachment://` 来判断。
-
-        这里采用两级策略：
-        1) 优先扫描 block 的 fragment HTML 是否包含 `attachment://`
-        2) 再兜底扫描 block 内是否存在 anchorHref 以 `attachment://` 开头的字符
         """
         doc = self.text_edit.document()
-
+        
         total_blocks = 0
         matched_blocks = 0
         marked_chars = 0
-
-        def _is_attachment_anchor_at(p: int) -> bool:
-            try:
-                if p < 0 or p > max(0, doc.characterCount() - 1):
-                    return False
-                c = QTextCursor(doc)
-                c.setPosition(p)
-                cf = c.charFormat()
-                if not cf.isAnchor():
-                    return False
-                href = cf.anchorHref() or ""
-                return href.startswith("attachment://")
-            except Exception:
-                return False
-
-        def _char_at(p: int) -> str:
-            c = QTextCursor(doc)
-            c.setPosition(p)
-            c.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
-            return c.selectedText() or ""
-
-        # 只允许把“附件展示片段”右侧紧邻的少量空白纳入标记范围（用于 Backspace/Delete 整块删除）。
-        # 禁止把段落边界（\u2029 / \n / \r）纳入标记范围。
-        def _is_trailing_separator(p: int) -> bool:
-            try:
-                t = _char_at(p)
-                return t in (" ", "\t", "\u200b")
-            except Exception:
-                return False
-
+        
         block = doc.firstBlock()
         while block.isValid():
             total_blocks += 1
+            
+            if self._block_has_attachment(block, doc):
+                matched_blocks += 1
+                marked_chars += self._mark_attachment_segments_in_block(block, doc)
+            
+            block = block.next()
+        
+        # 验证标记结果
+        tagged_chars = self._verify_tagged_chars(doc)
+        
+        logger.debug(
+            "[attachment-remark] done blocks_total=%s blocks_matched=%s marked_chars=%s "
+            "tagged_chars=%s",
+            total_blocks,
+            matched_blocks,
+            marked_chars,
+            tagged_chars,
+        )
+    
+    def _is_attachment_anchor_at(self, doc, position: int) -> bool:
+        """检查指定位置是否是附件anchor。
+        
+        采用选中字符再检查格式的方式，避免丢失第一个字符。
+        """
+        try:
+            if position < 0 or position > max(0, doc.characterCount() - 1):
+                return False
 
-            # 先用 HTML 粗判断：该 block 是否可能包含附件
+            cf = _selected_char_format(doc, position)
+            if cf is None or not cf.isAnchor():
+                return False
+            
+            href = cf.anchorHref() or ""
+            is_attachment = href.startswith("attachment://")
+            
+            if is_attachment:
+                # 获取该位置的字符
+                char = self._char_at(doc, position)
+                logger.debug(
+                    "[attachment-anchor] found at pos=%s char=%r href=%s",
+                    position,
+                    char,
+                    href,
+                )
+            return is_attachment
+        except Exception:
+            return False
+    
+    def _char_at(self, doc, position: int) -> str:
+        """获取指定位置的字符。"""
+        return _get_char_at(doc, position)
+    
+    def _is_trailing_separator(self, doc, position: int) -> bool:
+        """检查指定位置是否是尾随分隔符（空格、制表符、零宽空格）。
+        
+        只允许把"附件展示片段"右侧紧邻的少量空白纳入标记范围（用于 Backspace/Delete 整块删除）。
+        禁止把段落边界（\\u2029 / \\n / \\r）纳入标记范围。
+        """
+        try:
+            t = self._char_at(doc, position)
+            return t in (" ", "\t", "\u200b")
+        except Exception:
+            return False
+    
+    def _block_has_attachment(self, block, doc) -> bool:
+        """检查block是否包含附件。
+        扫描 block 的 fragment HTML 是否包含 `attachment://`
+        """
+        block_cursor = QTextCursor(block)
+        block_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        try:
+            block_html = block_cursor.selection().toHtml() or ""
+        except Exception:
+            block_html = ""
+        
+        return "attachment://" in block_html
+    
+    def _mark_attachment_segments_in_block(self, block, doc) -> int:
+        """在block内找出所有附件anchor的连续片段，并对每个片段单独打标。
+        
+        返回：标记的字符数
+        """
+        marked_chars = 0
+        
+        try:
+            block_start = block.position()
+            block_inclusive = min(max(0, doc.characterCount() - 1), max(0, block_start + block.length() - 1))
+            
+            i = block_start
+            while i <= block_inclusive:
+                if not self._is_attachment_anchor_at(doc, i):
+                    i += 1
+                    continue
+                
+                # 直接使用_find_attachment_segment_bounds查找附件的完整范围
+                # 这个函数会找到：anchor文本 + size文本 + 尾随分隔空格
+                # 不依赖已有的标记，适用于重启后的重新标记场景
+                seg_start, seg_end = self._find_attachment_segment_bounds(doc, i, block_start, block_inclusive)
+                
+                # 日志：输出找到的附件范围
+                logger.debug(
+                    "[attachment-remark] found attachment segment: start=%s end=%s (length=%s)",
+                    seg_start,
+                    seg_end,
+                    seg_end - seg_start + 1,
+                )
+                
+                # 对完整范围打标记
+                self._apply_attachment_mark(doc, seg_start, seg_end)
+                
+                marked_chars += max(0, (seg_end + 1) - seg_start)
+                
+                # 跳过该片段，继续查找下一个附件
+                i = seg_end + 1
+            
+            # 获取block_html用于日志
             block_cursor = QTextCursor(block)
             block_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
             try:
                 block_html = block_cursor.selection().toHtml() or ""
             except Exception:
                 block_html = ""
+            
+            logger.debug(
+                "[attachment-remark] marked block=%s marked_start_pos=%s len=%s html_has_attachment=%s marked_chars=%s",
+                block.blockNumber(),
+                seg_start,
+                seg_end + 1,
+                ("attachment://" in block_html),
+                marked_chars,
+            )
+        
+        except Exception as e:
+            logger.debug("[attachment-remark] mark block failed: %s", e)
+        
+        return marked_chars
+    
+    def _find_attachment_segment_bounds(self, doc, start_pos: int, block_start: int, block_end: int) -> tuple:
+        """找到附件片段的起始和结束位置。
+        
+        包括：anchor文本 + size文本 + 尾随分隔空格
+        
+        返回：(seg_start, seg_end) inclusive
+        """
+        # anchor 起点（向左扩展同 href 的连续范围）
+        seg_start = start_pos
+        while seg_start > block_start and self._is_attachment_anchor_at(doc, seg_start - 1):
+            seg_start -= 1
+        
+        # anchor 终点（向右扩展同 href 的连续范围）
+        seg_end = start_pos
+        while seg_end < block_end and self._is_attachment_anchor_at(doc, seg_end + 1):
+            seg_end += 1
 
-            has_attachment = "attachment://" in block_html
-
-            # 兜底：扫描该 block 范围内的字符格式，看是否存在 attachment:// anchor
-            if not has_attachment:
-                try:
-                    start = block.position()
-                    end = start + max(0, block.length())
-                    for i in range(start, min(end, doc.characterCount() - 1)):
-                        if _is_attachment_anchor_at(i):
-                            has_attachment = True
-                            break
-                except Exception:
-                    pass
-
-            if not has_attachment:
-                block = block.next()
-                continue
-
-            matched_blocks += 1
-
-            # 在该 block 内找出所有附件 anchor 的连续片段，并对每个片段单独打标
-            try:
-                bs = block.position()
-                be_inclusive = min(max(0, doc.characterCount() - 1), bs + max(0, block.length()) - 1)
-
-                i = bs
-                while i <= be_inclusive:
-                    if not _is_attachment_anchor_at(i):
-                        i += 1
-                        continue
-
-                    # anchor 起点（向左扩展同 href 的连续范围）
-                    seg_start = i
-                    while seg_start > bs and _is_attachment_anchor_at(seg_start - 1):
-                        seg_start -= 1
-
-                    # anchor 终点（向右扩展同 href 的连续范围）
-                    seg_end = i
-                    while seg_end < be_inclusive and _is_attachment_anchor_at(seg_end + 1):
-                        seg_end += 1
-
-                    # 继续向右把 size 文本 + 尾随分隔空格纳入删除范围：
-                    # 我们不去解析 HTML，而是按插入逻辑：anchor 后紧跟 " (12.3 KB)"，再跟一个空格。
-                    # 这里允许跨过普通文本，但遇到段落边界就停止。
-                    j = seg_end + 1
-                    while j <= be_inclusive:
-                        t = _char_at(j)
-                        if t in ("\u2029", "\n", "\r"):
-                            break
-                        # 一直扩到遇到“我们插入的分隔空格”之后再停
-                        if _is_trailing_separator(j):
-                            # 只吃掉连续的空白（避免把后续用户输入也卷进来）
-                            k = j
-                            while k <= be_inclusive and _is_trailing_separator(k):
-                                k += 1
-                            seg_end = k - 1
-                            break
-                        j += 1
-                    else:
-                        seg_end = be_inclusive
-
-                    # 打标记：[seg_start, seg_end] inclusive
-                    mark_format = QTextCharFormat()
-                    mark_format.setProperty(
-                        self.text_edit.ATTACHMENT_TAG_PROP,
-                        self.text_edit._attachment_tag_name,
-                    )
-                    mark_cursor = QTextCursor(doc)
-                    mark_cursor.setPosition(seg_start)
-                    mark_cursor.setPosition(seg_end + 1, QTextCursor.MoveMode.KeepAnchor)
-                    mark_cursor.mergeCharFormat(mark_format)
-
-                    marked_chars += max(0, (seg_end + 1) - seg_start)
-
-                    # 跳过该片段
-                    i = seg_end + 1
-
-                logger.debug(
-                    "[attachment-remark] match block=%s pos=%s len=%s html_has_attachment=%s",
-                    block.blockNumber(),
-                    bs,
-                    block.length(),
-                    ("attachment://" in block_html),
-                )
-
-            except Exception as e:
-                logger.debug("[attachment-remark] mark block failed: %s", e)
-
-            block = block.next()
-
-        # 验证：扫描全文，看最终有多少字符真的带上了标记
+        return seg_start, seg_end
+    
+    def _apply_attachment_mark(self, doc, seg_start: int, seg_end: int):
+        """对指定范围应用附件标记。
+        
+        参数：
+            seg_start: 起始位置（inclusive）
+            seg_end: 结束位置（inclusive）
+        """
+        mark_format = QTextCharFormat()
+        mark_format.setProperty(
+            self.text_edit.ATTACHMENT_TAG_PROP,
+            self.text_edit._attachment_tag_name,
+        )
+        mark_cursor = QTextCursor(doc)
+        _select_range(mark_cursor, seg_start, seg_end + 1)
+        mark_cursor.mergeCharFormat(mark_format)
+    
+    def _verify_tagged_chars(self, doc) -> int:
+        """验证：扫描全文，看最终有多少字符真的带上了标记。
+        
+        返回：带标记的字符数
+        """
         tagged_chars = 0
         try:
-            c = QTextCursor(doc)
-            c.movePosition(QTextCursor.MoveOperation.Start)
             doc_len = doc.characterCount()
-            for i in range(max(0, doc_len - 1)):
-                c.setPosition(i)
-                cf = c.charFormat()
-                if (
-                    cf.hasProperty(self.text_edit.ATTACHMENT_TAG_PROP)
+            max_pos = max(0, doc_len - 1)
+            for i in range(max_pos + 1):
+                cf = _selected_char_format(doc, i)
+                if ( cf is not None and cf.hasProperty(self.text_edit.ATTACHMENT_TAG_PROP)
                     and cf.property(self.text_edit.ATTACHMENT_TAG_PROP) == self.text_edit._attachment_tag_name
                 ):
                     tagged_chars += 1
-
         except Exception as e:
             logger.debug("[attachment-remark] verify scan failed: %s", e)
-
-        logger.debug(
-            "[attachment-remark] done blocks_total=%s blocks_matched=%s marked_chars_est=%s tagged_chars=%s plain_has_attachment=%s",
-            total_blocks,
-            matched_blocks,
-            marked_chars,
-            tagged_chars,
-            ("attachment://" in (self.text_edit.toPlainText() or "")),
-        )
-
+        
+        return tagged_chars
     
     def clear(self):
         self.text_edit.clear()
@@ -2816,43 +2906,41 @@ class NoteEditor(QWidget):
             current_pos = cursor.position()
             
             # 向右移动一个字符并选中
-            if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor):
-                char_format = cursor.charFormat()
-                selected_text = cursor.selectedText()
+            _select_char_at(cursor, cursor.position())
+            char_format = cursor.charFormat()
+            selected_text = cursor.selectedText()
+            
+            # 检查是否是真正的图片字符
+            if char_format.isImageFormat() and selected_text == '\ufffc':
+                img_format = char_format.toImageFormat()
+                image_name = img_format.name()
                 
-                # 检查是否是真正的图片字符
-                if char_format.isImageFormat() and selected_text == '\ufffc':
-                    img_format = char_format.toImageFormat()
-                    image_name = img_format.name()
-                    
-                    # 检查是否是公式（包含 |||MATH: 分隔符）
-                    if '|||MATH:' in image_name:
-                        parts = image_name.split('|||', 1)
-                        if len(parts) == 2:
-                            metadata = parts[1]  # MATH:type:code
-                            
-                            # 解析元数据
-                            if metadata.startswith('MATH:'):
-                                metadata_parts = metadata[5:].split(':', 1)  # 去掉 'MATH:' 前缀
-                                if len(metadata_parts) == 2:
-                                    formula_type = metadata_parts[0]
-                                    escaped_code = metadata_parts[1]
-                                    # 反转义HTML实体
-                                    code = html.unescape(escaped_code)
-                                    
-                                    # 保存公式信息
-                                    formulas_to_rerender.append((
-                                        current_pos,
-                                        formula_type,
-                                        code,
-                                        img_format.width(),
-                                        img_format.height()
-                                    ))
-                
-                # 清除选区
-                cursor.clearSelection()
-            else:
-                break
+                # 检查是否是公式（包含 |||MATH: 分隔符）
+                if '|||MATH:' in image_name:
+                    parts = image_name.split('|||', 1)
+                    if len(parts) == 2:
+                        metadata = parts[1]  # MATH:type:code
+                        
+                        # 解析元数据
+                        if metadata.startswith('MATH:'):
+                            metadata_parts = metadata[5:].split(':', 1)  # 去掉 'MATH:' 前缀
+                            if len(metadata_parts) == 2:
+                                formula_type = metadata_parts[0]
+                                escaped_code = metadata_parts[1]
+                                # 反转义HTML实体
+                                code = html.unescape(escaped_code)
+                                
+                                # 保存公式信息
+                                formulas_to_rerender.append((
+                                    current_pos,
+                                    formula_type,
+                                    code,
+                                    img_format.width(),
+                                    img_format.height()
+                                ))
+            
+            # 清除选区
+            cursor.clearSelection()
         
         # 如果没有公式需要重新渲染，直接返回
         if not formulas_to_rerender:
@@ -2898,8 +2986,7 @@ class NoteEditor(QWidget):
                     new_image_name = f"data:image/png;base64,{image_base64}|||MATH:{formula_type}:{escaped_code}"
                     
                     # 删除旧图片
-                    edit_cursor.setPosition(pos)
-                    edit_cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                    _select_char_at(edit_cursor, pos)
                     edit_cursor.removeSelectedText()
                     
                     # 插入新图片（保持原尺寸）
@@ -2993,6 +3080,129 @@ class NoteEditor(QWidget):
             import traceback
             traceback.print_exc()
     
+    def _format_file_size(self, file_size):
+        """格式化文件大小为可读字符串"""
+        if file_size < 1024:
+            return f"{file_size} B"
+        elif file_size < 1024 * 1024:
+            return f"{file_size / 1024:.1f} KB"
+        else:
+            return f"{file_size / (1024 * 1024):.1f} MB"
+    
+    def _add_attachment_to_manager(self, file_path, file_name, file_size):
+        """将附件添加到附件管理器
+        
+        返回：(success, attachment_id) 或 (False, None)
+        """
+        success, message, attachment_id = self.note_manager.attachment_manager.add_attachment(
+            file_path, self.current_note_id
+        )
+        
+        if not success:
+            QMessageBox.warning(self, "添加附件失败", message)
+            return False, None
+        
+        return True, attachment_id
+    
+    def _create_attachment_html(self, attachment_id, file_name, size_str):
+        """创建附件的HTML代码"""
+        attachment_url = f"attachment://{attachment_id}"
+        return f'<a href="{attachment_url}" style="color: #0066cc;">{file_name} ({size_str})</a>'
+    
+    def _log_attachment_insert_before(self, start_pos, file_name, size_str, attachment_id):
+        """记录附件插入前的日志"""
+        try:
+            doc = self.text_edit.document()
+            doc_len = int(doc.characterCount())
+            doc_content = _dump_doc_chars(doc, 0, doc_len - 1)
+            logger.debug(
+                "[attachment-insert][before] start_pos=cursor_pos=%s doc_len=%s file=%s size=%s attachment_id=%s doc_content=%s",
+                start_pos,
+                doc_len,
+                file_name,
+                size_str,
+                attachment_id,
+                doc_content,
+            )
+        except Exception:
+            pass
+    
+    def _log_attachment_insert_after(self, end_pos, start_pos):
+        """记录附件插入后的日志"""
+        try:
+            doc = self.text_edit.document()
+            doc_len = int(doc.characterCount())
+            doc_content = _dump_doc_chars(doc, 0, doc_len - 1)
+            logger.debug(
+                "[attachment-insert][after] start_pos=%s cursor_pos=end_pos=%s doc_len=%s doc_content=%s",
+                start_pos,
+                end_pos,
+                doc_len,
+                doc_content,
+            )
+        except Exception:
+            pass
+    
+    def _mark_inserted_attachment(self, doc, start_pos, end_pos):
+        """对插入的附件打标记"""
+        if end_pos <= start_pos:
+            return
+        
+        mark_cursor = QTextCursor(doc)
+        _select_range(mark_cursor, start_pos, end_pos)
+        
+        try:
+            logger.debug(
+                "[attachment-insert][mark][before] start_pos=%s end_pos=%s doc_len=%s start_char=%s",
+                start_pos,
+                end_pos,
+                int(doc.characterCount()),
+                _dump_doc_chars(doc, start_pos, min(end_pos - 1, start_pos)),
+            )
+        except Exception:
+            pass
+        
+        mark_format = QTextCharFormat()
+        mark_format.setProperty(
+            self.text_edit.ATTACHMENT_TAG_PROP,
+            self.text_edit._attachment_tag_name,
+        )
+        mark_cursor.mergeCharFormat(mark_format)
+        
+        # 验证标记范围
+        self._verify_attachment_mark(doc, start_pos)
+    
+    def _verify_attachment_mark(self, doc, start_pos):
+        """验证附件标记范围"""
+        try:
+            marked = _find_marked_span(
+                doc,
+                start_pos,
+                self.text_edit.ATTACHMENT_TAG_PROP,
+                getattr(self.text_edit, "_attachment_tag_name", ""),
+            )
+            if marked is not None:
+                ms, me = marked
+                logger.debug(
+                    "[attachment-insert][mark][after] span=(%s,%s) len=%s span chars=%s, all file chars=%s",
+                    ms,
+                    me,
+                    (me - ms),
+                    _dump_doc_chars(doc, ms, me - 1),
+                    _dump_doc_chars(doc, 0, int(doc.characterCount()) - 1),
+                )
+        except Exception:
+            pass
+    
+    def _reset_cursor_format(self, cursor):
+        """重置光标格式，避免后续输入继承附件标记"""
+        try:
+            cursor.setCharFormat(QTextCharFormat())
+            self.text_edit.setTextCursor(cursor)
+            self.text_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        except Exception:
+            pass
+    
     def _insert_attachment_with_path(self, file_path):
         """插入附件链接 - 使用附件管理器加密存储"""
         try:
@@ -3003,129 +3213,41 @@ class NoteEditor(QWidget):
                 QMessageBox.warning(self, "错误", "无法添加附件：笔记未保存")
                 return
             
-            # 获取文件名和大小
+            # 获取文件信息
             file_name = os.path.basename(file_path)
             file_size = os.path.getsize(file_path)
+            size_str = self._format_file_size(file_size)
             
-            # 格式化文件大小
-            if file_size < 1024:
-                size_str = f"{file_size} B"
-            elif file_size < 1024 * 1024:
-                size_str = f"{file_size / 1024:.1f} KB"
-            else:
-                size_str = f"{file_size / (1024 * 1024):.1f} MB"
-            
-            # 使用附件管理器添加附件（复制并加密）
-            success, message, attachment_id = self.note_manager.attachment_manager.add_attachment(
-                file_path, self.current_note_id
-            )
-            
+            # 添加附件到管理器
+            success, attachment_id = self._add_attachment_to_manager(file_path, file_name, file_size)
             if not success:
-                QMessageBox.warning(self, "添加附件失败", message)
                 return
             
-            # 获取光标
+            # 创建附件HTML
+            attachment_html = self._create_attachment_html(attachment_id, file_name, size_str)
+            
+            # 插入附件HTML
             cursor = self.text_edit.textCursor()
-            
-            # 创建附件HTML（使用attachment_id作为链接）
-            # 使用自定义协议 attachment:// 来标识这是一个加密附件
-            attachment_url = f"attachment://{attachment_id}"
-            
-            # 创建附件HTML（仅蓝色链接文字；不要插入 emoji/图标，避免产生孤立 surrogate）
-            attachment_html = f'''
-            <a href="{attachment_url}" style="color: #0066cc; text-decoration: none;" data-attachment-id="{attachment_id}">{file_name}</a>
-            <span style="color: #666; font-size: 12px;"> ({size_str})</span>
-            '''
-            
-            # 记录插入前的位置，用于对插入内容打标记
             start_pos = cursor.position()
-            try:
-                logger.debug(
-                    "[attachment-insert][before] cursor_pos=%s doc_len=%s file=%s size=%s attachment_id=%s",
-                    start_pos,
-                    int(self.text_edit.document().characterCount()),
-                    file_name,
-                    size_str,
-                    attachment_id,
-                )
-            except Exception:
-                pass
-
+            
+            self._log_attachment_insert_before(start_pos, file_name, size_str, attachment_id)
             cursor.insertHtml(attachment_html)
-
-            # insertHtml 后，cursor 的 position() 是 Qt 认可的“插入结束位置”，
-            # 之后所有光标落点都应基于该值，而不是基于 document.characterCount() 兜底修正。
             end_pos = cursor.position()
-            try:
-                logger.debug(
-                    "[attachment-insert][after] cursor_pos=end_pos=%s start_pos=%s doc_len=%s",
-                    end_pos,
-                    start_pos,
-                    int(self.text_edit.document().characterCount()),
-                )
-            except Exception:
-                pass
-            # 对刚插入的附件展示块整体打标记：后续删除时一次性删除
+            self._log_attachment_insert_after(end_pos, start_pos)
+            
+            # 标记插入的附件
             try:
                 doc = self.text_edit.document()
-
-
-                if end_pos > start_pos:
-                    mark_cursor = QTextCursor(doc)
-                    mark_cursor.setPosition(start_pos)
-                    mark_cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
-
-                    try:
-                        logger.debug(
-                            "[attachment-insert][mark][before] start_pos=%s end_pos=%s doc_len=%s start_char=%s",
-                            start_pos,
-                            end_pos,
-                            int(doc.characterCount()),
-                            _dump_doc_chars(doc, start_pos, min(end_pos - 1, start_pos)),
-                        )
-                    except Exception:
-                        pass
-
-                    mark_format = QTextCharFormat()
-                    # 使用一个不影响显示的自定义属性来标记附件范围
-                    mark_format.setProperty(
-                        self.text_edit.ATTACHMENT_TAG_PROP,
-                        self.text_edit._attachment_tag_name,
-                    )
-                    mark_cursor.mergeCharFormat(mark_format)
-                    # 插入后：输出附件标记范围（验证打标是否覆盖预期）
-                    _marked = _find_marked_span_around(
-                        doc,
-                        start_pos,
-                        self.text_edit.ATTACHMENT_TAG_PROP,
-                        getattr(self.text_edit, "_attachment_tag_name", ""),
-                    )
-                    if _marked is not None:
-                        _ms, _me = _marked
-                        logger.debug(
-                            "[attachment-insert][mark][after] span=(%s,%s) len=%s span chars=%s, all file chars=%s",
-                            _ms,
-                            _me,
-                            (_me - _ms),
-                            _dump_doc_chars(doc, _ms, _me - 1),
-                            _dump_doc_chars(doc, 0, int(doc.characterCount()) - 1),
-                        )
-
+                self._mark_inserted_attachment(doc, start_pos, end_pos)
             except Exception:
                 pass
-
-            try:
-                # 清除格式，使用默认格式，这儿如果不清除，会导致后面输入的第一个字符也被标记成附件
-                cursor.setCharFormat(QTextCharFormat())
-                self.text_edit.setTextCursor(cursor)
-                self.text_edit.setFocus(Qt.FocusReason.OtherFocusReason)
-            except Exception:
-                pass
-
+            
+            # 重置光标格式
+            self._reset_cursor_format(cursor)
+            
             print(f"成功插入附件: {file_name} ({size_str}), ID: {attachment_id}")
             
         except Exception as e:
-
             print(f"插入附件时发生错误: {e}")
             import traceback
             traceback.print_exc()
@@ -3302,9 +3424,8 @@ class NoteEditor(QWidget):
                 
                 for offset in range(2):
                     check_pos = old_pos + offset
-                    cursor.setPosition(check_pos)
                     
-                    if cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1):
+                    if _select_char_at(cursor, check_pos):
                         selected_text = cursor.selectedText()
                         char_format = cursor.charFormat()
                         
@@ -3322,8 +3443,7 @@ class NoteEditor(QWidget):
                 cursor.beginEditBlock()
                 
                 # 删除旧图片
-                cursor.setPosition(real_image_pos)
-                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+                _select_char_at(cursor, real_image_pos)
                 cursor.removeSelectedText()
                 
                 # 插入新图片（保持原尺寸或使用新尺寸）
