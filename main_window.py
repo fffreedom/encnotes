@@ -3078,6 +3078,74 @@ class MainWindow(QMainWindow):
             self.load_folders()
             self.load_notes()
             
+    def _find_and_select_empty_note(self, folder_id):
+        """查找并选中空草稿笔记
+        
+        Args:
+            folder_id: 文件夹ID
+            
+        Returns:
+            bool: 是否找到并选中了空草稿笔记
+        """
+        try:
+            notes = self.note_manager.get_notes_by_folder(folder_id)
+            for note in notes:
+                if self._is_empty_new_note(note):
+                    empty_note_id = note.get('id')
+                    # 在笔记列表中选中这个笔记
+                    for i in range(self.note_list.count()):
+                        item = self.note_list.item(i)
+                        if item.data(Qt.ItemDataRole.UserRole) == empty_note_id:
+                            self.note_list.setCurrentItem(item)
+                            break
+                    # 设置焦点到编辑器
+                    self.editor.text_edit.setFocus()
+                    return True
+        except Exception as e:
+            pass
+        return False
+
+    def _select_note_in_list(self, note_id):
+        """在笔记列表中选中指定笔记
+        
+        Args:
+            note_id: 笔记ID
+        """
+        for i in range(self.note_list.count()):
+            item = self.note_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == note_id:
+                self.note_list.setCurrentItem(item)
+                break
+
+    def _refresh_folders_and_restore_selection(self):
+        """刷新文件夹列表并恢复选中状态"""
+        selected_row = self.folder_list.currentRow()
+        self.load_folders()
+        try:
+            if selected_row is not None and 0 <= selected_row < self.folder_list.count():
+                self.folder_list.setCurrentRow(selected_row)
+        except Exception as e:
+            pass
+
+    def _create_and_save_new_note(self, folder_id):
+        """创建并保存新笔记
+        
+        Args:
+            folder_id: 文件夹ID
+            
+        Returns:
+            int: 新创建的笔记ID
+        """
+        note_id = self.note_manager.create_note(title="新笔记", folder_id=folder_id)
+        
+        try:
+            # 确保标题落库（兼容未来 create_note 默认值变化）
+            self.note_manager.update_note(note_id, title="新笔记")
+        except Exception as e:
+            pass
+        
+        return note_id
+
     def create_new_note(self):
         """创建新笔记（菜单/工具栏）。
 
@@ -3094,55 +3162,24 @@ class MainWindow(QMainWindow):
             return
 
         # 防御：如果已存在空草稿，直接打开那个草稿
-        has_empty_note = self._current_folder_has_empty_new_note()
-        
-        if has_empty_note:
-            try:
-                notes = self.note_manager.get_notes_by_folder(folder_id)
-                for note in notes:
-                    if self._is_empty_new_note(note):
-                        empty_note_id = note.get('id')
-                        # 在笔记列表中选中这个笔记
-                        for i in range(self.note_list.count()):
-                            item = self.note_list.item(i)
-                            if item.data(Qt.ItemDataRole.UserRole) == empty_note_id:
-                                self.note_list.setCurrentItem(item)
-                                break
-                        # 设置焦点到编辑器
-                        self.editor.text_edit.setFocus()
-                        self._update_new_note_action_enabled()
-                        return
-            except Exception as e:
-                pass
+        if self._current_folder_has_empty_new_note():
+            if self._find_and_select_empty_note(folder_id):
+                self._update_new_note_action_enabled()
+                return
             self._update_new_note_action_enabled()
             return
 
-        note_id = self.note_manager.create_note(title="新笔记", folder_id=folder_id)
-        
-        try:
-            # 确保标题落库（兼容未来 create_note 默认值变化）
-            self.note_manager.update_note(note_id, title="新笔记")
-        except Exception as e:
-            pass
+        # 创建新笔记
+        note_id = self._create_and_save_new_note(folder_id)
 
         # 刷新笔记列表
         self.load_notes()
 
         # 同步刷新左侧文件夹计数（load_notes 不会重建 folder_list）
-        selected_row = self.folder_list.currentRow()
-        self.load_folders()
-        try:
-            if selected_row is not None and 0 <= selected_row < self.folder_list.count():
-                self.folder_list.setCurrentRow(selected_row)
-        except Exception as e:
-            pass
+        self._refresh_folders_and_restore_selection()
 
         # 选中新创建的笔记
-        for i in range(self.note_list.count()):
-            item = self.note_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == note_id:
-                self.note_list.setCurrentItem(item)
-                break
+        self._select_note_in_list(note_id)
 
         # 设置焦点到编辑器，让光标闪烁
         self.editor.text_edit.setFocus()

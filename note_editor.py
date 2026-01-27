@@ -1577,10 +1577,11 @@ class PasteImageTextEdit(QTextEdit):
         """
         need_restore_format = False
         saved_format = None
-        
+        # 如果按键没有文本输出（如 Ctrl、Shift 等功能键）或者是空白字符（空格、Tab等），则不处理
         if not event.text() or event.text().isspace():
             return need_restore_format, saved_format
-        
+
+        # 如果光标不在第一行（标题行），不处理
         cursor = self.textCursor()
         block = cursor.block()
         
@@ -1593,7 +1594,7 @@ class PasteImageTextEdit(QTextEdit):
         
         # 检查是否需要设置标题格式
         need_title_format = False
-        
+        # 第一行为空行或只有零宽空格或当前字体大小异常（大于0小于1），需要设置标题格式
         if block_text == "" or block_text == "\u200B":
             if block_text == "\u200B":
                 cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
@@ -1602,7 +1603,7 @@ class PasteImageTextEdit(QTextEdit):
             need_title_format = True
         elif current_size == 0.0 or current_size < 1.0:
             need_title_format = True
-        
+        # 设置标题格式
         if need_title_format:
             title_fmt = QTextCharFormat()
             title_fmt.setFontPointSize(28)
@@ -1872,7 +1873,7 @@ class PasteImageTextEdit(QTextEdit):
     def keyPressEvent(self, event):
         """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
         # 处理第一行标题格式
-        need_restore_format, saved_format = self._handle_first_line_title_format(event)
+        # need_restore_format, saved_format = self._handle_first_line_title_format(event)
         
         # 恢复光标显示并清除表格选中状态
         self._restore_cursor_and_clear_table_selection(event)
@@ -1900,8 +1901,8 @@ class PasteImageTextEdit(QTextEdit):
         super().keyPressEvent(event)
         
         # 恢复格式
-        if need_restore_format and saved_format:
-            self.setCurrentCharFormat(saved_format)
+        # if need_restore_format and saved_format:
+        #     self.setCurrentCharFormat(saved_format)
     
     def inputMethodEvent(self, event):
         """输入法事件 - 处理中文等输入法输入"""
