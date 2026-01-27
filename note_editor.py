@@ -1348,59 +1348,124 @@ class PasteImageTextEdit(QTextEdit):
         
         super().mouseReleaseEvent(event)
     
+    def _parse_math_formula_metadata(self, image_name):
+        """解析公式图片的元数据
+        
+        Args:
+            image_name: 图片名称，格式为 "xxx|||MATH:type:code"
+            
+        Returns:
+            tuple: (formula_type, code) 或 (None, None)
+        """
+        if '|||MATH:' not in image_name:
+            return None, None
+        
+        parts = image_name.split('|||', 1)
+        if len(parts) != 2:
+            return None, None
+        
+        metadata = parts[1]  # MATH:type:code
+        
+        # 解析元数据
+        if not metadata.startswith('MATH:'):
+            return None, None
+        
+        metadata_parts = metadata[5:].split(':', 1)  # 去掉 'MATH:' 前缀
+        if len(metadata_parts) != 2:
+            return None, None
+        
+        formula_type = metadata_parts[0]
+        escaped_code = metadata_parts[1]
+        # 反转义HTML实体
+        code = html.unescape(escaped_code)
+        
+        return formula_type, code
+    
+    def _handle_math_formula_double_click(self, image_format, image_cursor):
+        """处理双击公式图片
+        
+        Args:
+            image_format: 图片格式对象
+            image_cursor: 图片光标位置
+            
+        Returns:
+            bool: 是否成功处理
+        """
+        image_name = image_format.name()
+        formula_type, code = self._parse_math_formula_metadata(image_name)
+        
+        if formula_type and code and self.parent_editor:
+            self.parent_editor.edit_math_formula(
+                code, formula_type, image_cursor, image_format
+            )
+            return True
+        
+        return False
+    
+    def _handle_image_double_click(self, event):
+        """处理双击图片事件
+        
+        Args:
+            event: 鼠标事件
+            
+        Returns:
+            bool: 是否处理了图片双击
+        """
+        image_format, image_cursor, image_rect = self.find_image_at_position(event.pos())
+        
+        if not (image_format and image_cursor):
+            return False
+        
+        # 检查是否是公式图片
+        if self._handle_math_formula_double_click(image_format, image_cursor):
+            event.accept()
+            return True
+        
+        # 普通图片，只选中图片，不执行其他操作
+        self.selected_image = image_format
+        self.selected_image_cursor = image_cursor
+        self.selected_image_rect = image_rect
+        self.viewport().update()
+        # 阻止默认的双击行为（选中文字等）
+        event.accept()
+        return True
+    
+    def _handle_anchor_double_click(self, event):
+        """处理双击链接（附件）事件
+        
+        Args:
+            event: 鼠标事件
+            
+        Returns:
+            bool: 是否处理了链接双击
+        """
+        cursor = self.cursorForPosition(event.pos())
+        char_format = cursor.charFormat()
+        
+        if not char_format.isAnchor():
+            return False
+        
+        anchor_href = char_format.anchorHref()
+        if anchor_href:
+            self.open_attachment(anchor_href)
+            event.accept()
+            return True
+        
+        return False
+    
     def mouseDoubleClickEvent(self, event):
         """鼠标双击事件 - 防止双击图片时被删除"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            # **使用像素位置检测图片**
-            image_format, image_cursor, image_rect = self.find_image_at_position(event.pos())
-            
-            if image_format and image_cursor:
-                # 检查是否是公式图片
-                image_name = image_format.name()
-                
-                if '|||MATH:' in image_name:
-                    # 这是一个公式图片，弹出编辑对话框
-                    parts = image_name.split('|||', 1)
-                    if len(parts) == 2:
-                        metadata = parts[1]  # MATH:type:code
-                        
-                        # 解析元数据
-                        if metadata.startswith('MATH:'):
-                            metadata_parts = metadata[5:].split(':', 1)  # 去掉 'MATH:' 前缀
-                            if len(metadata_parts) == 2:
-                                formula_type = metadata_parts[0]
-                                escaped_code = metadata_parts[1]
-                                # 反转义HTML实体
-                                code = html.unescape(escaped_code)
-                                
-                                # 调用父编辑器的编辑公式方法
-                                if self.parent_editor:
-                                    self.parent_editor.edit_math_formula(
-                                        code, formula_type, image_cursor, image_format
-                                    )
-                                
-                                event.accept()
-                                return
-                
-                # 普通图片，只选中图片，不执行其他操作
-                self.selected_image = image_format
-                self.selected_image_cursor = image_cursor
-                self.selected_image_rect = image_rect
-                self.viewport().update()
-                # 阻止默认的双击行为（选中文字等）
-                event.accept()
-                return
-            
-            # 检查是否双击了链接（附件）
-            cursor = self.cursorForPosition(event.pos())
-            char_format = cursor.charFormat()
-            if char_format.isAnchor():
-                # 双击链接时打开附件
-                anchor_href = char_format.anchorHref()
-                if anchor_href:
-                    self.open_attachment(anchor_href)
-                    event.accept()
-                    return
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseDoubleClickEvent(event)
+            return
+        
+        # 处理双击图片
+        if self._handle_image_double_click(event):
+            return
+        
+        # 处理双击链接（附件）
+        if self._handle_anchor_double_click(event):
+            return
         
         # 其他情况使用默认行为
         super().mouseDoubleClickEvent(event)
