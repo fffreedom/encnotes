@@ -275,7 +275,7 @@ class NoteManager:
         self.conn.commit()
         
     def delete_note(self, note_id: str):
-        """删除笔记（移到回收站）"""
+        """删除笔记（移到最近删除）"""
         cursor = self.conn.cursor()
         cocoa_time = self._timestamp_to_cocoa(datetime.now())
         

@@ -3564,15 +3564,30 @@ class MainWindow(QMainWindow):
     def batch_delete_notes(self, note_ids: list):
         """批量删除笔记"""
         count = len(note_ids)
+        
+        # 根据当前视图决定删除方式和提示信息
+        if self.is_viewing_deleted:
+            # 在"最近删除"视图中，执行永久删除
+            title = "确认永久删除"
+            message = f"确定要永久删除这 {count} 条笔记吗？此操作不可恢复！"
+        else:
+            # 在其他视图中，移到回收站
+            title = "确认删除"
+            message = f"确定要删除这 {count} 条笔记吗？笔记将会被移到“最近删除”中"
+        
         reply = QMessageBox.question(
-            self, "确认删除",
-            f"确定要删除这 {count} 条笔记吗？",
+            self, title, message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
         if reply == QMessageBox.StandardButton.Yes:
             for note_id in note_ids:
-                self.note_manager.delete_note(note_id)
+                if self.is_viewing_deleted:
+                    # 永久删除
+                    self.note_manager.permanently_delete_note(note_id)
+                else:
+                    # 移到回收站
+                    self.note_manager.delete_note(note_id)
             
             # 清除多选状态
             self.selected_note_rows.clear()
@@ -3594,7 +3609,8 @@ class MainWindow(QMainWindow):
                 self.current_note_id = None
                 self.editor.clear()
             
-            self.statusBar().showMessage(f"已删除 {count} 条笔记", 2000)
+            status_message = f"已永久删除 {count} 条笔记" if self.is_viewing_deleted else f"已删除 {count} 条笔记"
+            self.statusBar().showMessage(status_message, 2000)
     
     def batch_move_notes(self, note_ids: list, target_folder_id: str):
         """批量移动笔记到指定文件夹"""
@@ -3682,14 +3698,29 @@ class MainWindow(QMainWindow):
     
     def delete_note_by_id(self, note_id: str):
         """根据ID删除笔记"""
+        # 根据当前视图决定删除方式和提示信息
+        if self.is_viewing_deleted:
+            # 在"最近删除"视图中，执行永久删除
+            title = "确认永久删除"
+            message = "确定要永久删除这条笔记吗？此操作不可恢复！"
+        else:
+            # 在其他视图中，移到回收站
+            title = "确认删除"
+            message = "确定要删除这条笔记吗？"
+        
         reply = QMessageBox.question(
-            self, "确认删除",
-            "确定要删除这条笔记吗？",
+            self, title, message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            self.note_manager.delete_note(note_id)
+            if self.is_viewing_deleted:
+                # 永久删除
+                self.note_manager.permanently_delete_note(note_id)
+            else:
+                # 移到回收站
+                self.note_manager.delete_note(note_id)
+            
             self.load_notes()
 
             # 同步刷新左侧文件夹计数
