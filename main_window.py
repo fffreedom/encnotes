@@ -22,6 +22,7 @@ from export_manager import ExportManager
 from icloud_sync import CloudKitSyncManager
 from password_dialog import UnlockDialog, SetupPasswordDialog, ChangePasswordDialog
 import datetime
+import logging
 
 
 class ElidedLabel(QLabel):
@@ -1072,8 +1073,18 @@ class MainWindow(QMainWindow):
         return False
 
     def _update_new_note_action_enabled(self):
-        """根据当前上下文启用/禁用“新建笔记”动作。"""
-        enabled = bool(self.current_folder_id) and (not self._current_folder_has_empty_new_note())
+        """根据当前上下文启用/禁用"新建笔记"动作。
+        
+        规则：
+        - "最近删除"和"所有笔记"视图：不允许新建笔记
+        - 自定义文件夹：允许新建笔记（即使存在空笔记也允许，会自动跳转）
+        """
+        # 必须选中了自定义文件夹（current_folder_id 有值）
+        if not self.current_folder_id:
+            enabled = False
+        else:
+            # 自定义文件夹：始终允许新建（即使有空笔记）
+            enabled = True
 
         for attr in ("new_note_action_toolbar", "new_note_action_menu"):
             act = getattr(self, attr, None)
@@ -3158,15 +3169,15 @@ class MainWindow(QMainWindow):
         folder_id = self.current_folder_id
         
         if not folder_id:
-            self._update_new_note_action_enabled()
+            logging.warning("create_new_note: folder_id为空，不应该进入到create_new_note的函数逻辑中")
             return
 
         # 防御：如果已存在空草稿，直接打开那个草稿
         if self._current_folder_has_empty_new_note():
             if self._find_and_select_empty_note(folder_id):
-                self._update_new_note_action_enabled()
                 return
-            self._update_new_note_action_enabled()
+            # 发现有空笔记但选中失败
+            logging.warning(f"create_new_note: 文件夹 {folder_id} 下存在空笔记，但选中笔记失败")
             return
 
         # 创建新笔记
@@ -3183,9 +3194,6 @@ class MainWindow(QMainWindow):
 
         # 设置焦点到编辑器，让光标闪烁
         self.editor.text_edit.setFocus()
-
-        # 刷新可用状态
-        self._update_new_note_action_enabled()
 
     def create_new_note_from_tag(self):
         """从标签右键菜单创建新笔记。
