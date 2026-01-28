@@ -1091,8 +1091,16 @@ class MainWindow(QMainWindow):
             if act is not None:
                 act.setEnabled(enabled)
 
-    def eventFilter(self, obj, event):
-        # 文件夹重命名：ESC 取消（就地编辑）
+    def _handle_folder_rename_escape(self, obj, event):
+        """处理文件夹重命名时的 ESC 取消操作。
+        
+        Args:
+            obj: 事件对象
+            event: 事件
+            
+        Returns:
+            bool: 如果处理了事件返回 True，否则返回 False
+        """
         try:
             if event.type() == event.Type.KeyPress:
                 from PyQt6.QtCore import Qt
@@ -1105,52 +1113,114 @@ class MainWindow(QMainWindow):
                     return True
         except Exception:
             pass
+        return False
 
-        # 空文件夹：点击编辑器自动新建笔记
+    def _handle_empty_folder_editor_click(self, obj, event):
+        """处理空文件夹时点击编辑器自动新建笔记。
+        
+        Args:
+            obj: 事件对象
+            event: 事件
+            
+        Returns:
+            bool: 如果处理了事件返回 True，否则返回 False
+        """
         try:
-            from PyQt6.QtCore import QEvent
-            from PyQt6.QtCore import Qt
-            if (
+            from PyQt6.QtCore import QEvent, Qt
+            
+            # 检查是否启用了点击创建功能，且是编辑器的左键点击
+            if not (
                 getattr(self, "_editor_click_to_create_note_enabled", False)
                 and obj is getattr(getattr(self.editor, "text_edit", None), "viewport", lambda: None)()
                 and event.type() == QEvent.Type.MouseButtonPress
                 and event.button() == Qt.MouseButton.LeftButton
-
             ):
-                # 只有"选中了某个自定义文件夹 + 当前没有选中笔记 + 当前不在标签视图"才自动创建
-                if self.current_folder_id and self.current_note_id is None and self.current_tag_id is None:
-                    self.create_note_in_folder(self.current_folder_id, default_title="新笔记")
-                    event.accept()
-                    return True
+                return False
+            
+            # 只有"选中了某个自定义文件夹 + 当前没有选中笔记 + 当前不在标签视图"才自动创建
+            if self.current_folder_id and self.current_note_id is None and self.current_tag_id is None:
+                self.create_note_in_folder(self.current_folder_id, default_title="新笔记")
+                event.accept()
+                return True
         except Exception:
             pass
+        return False
 
-        # 空标签：点击编辑器时阻止进入可编辑状态
+    def _is_editor_click(self, obj):
+        """检查是否点击了编辑器（viewport 或 text_edit 本身）。
+        
+        Args:
+            obj: 事件对象
+            
+        Returns:
+            bool: 如果是编辑器点击返回 True，否则返回 False
+        """
+        return (
+            obj is getattr(getattr(self.editor, "text_edit", None), "viewport", lambda: None)()
+            or obj is getattr(self.editor, "text_edit", None)
+        )
+
+    def _handle_empty_tag_editor_click(self, obj, event):
+        """处理空标签时点击编辑器，阻止进入可编辑状态。
+        
+        Args:
+            obj: 事件对象
+            event: 事件
+            
+        Returns:
+            bool: 如果处理了事件返回 True，否则返回 False
+        """
         try:
             from PyQt6.QtCore import QEvent
-            from PyQt6.QtCore import Qt
-            # 检查是否点击了编辑器（viewport或text_edit本身）
-            is_editor_click = (
-                obj is getattr(getattr(self.editor, "text_edit", None), "viewport", lambda: None)()
-                or obj is getattr(self.editor, "text_edit", None)
-            )
-            if (
-                is_editor_click
+            
+            # 检查是否是编辑器的鼠标点击，且当前在空标签视图
+            if not (
+                self._is_editor_click(obj)
                 and event.type() == QEvent.Type.MouseButtonPress
                 and self.current_tag_id is not None
                 and self.current_note_id is None
             ):
-                # 检查当前标签是否为空标签
-                tag = self.note_manager.get_tag(self.current_tag_id)
-                if tag:
-                    tag_name = str(tag.get('name', '') or '').strip()
-                    if not tag_name:
-                        # 空标签：阻止点击事件，不让编辑器获得焦点
-                        event.accept()
-                        return True
+                return False
+            
+            # 检查当前标签是否为空标签
+            tag = self.note_manager.get_tag(self.current_tag_id)
+            if tag:
+                tag_name = str(tag.get('name', '') or '').strip()
+                if not tag_name:
+                    # 空标签：阻止点击事件，不让编辑器获得焦点
+                    event.accept()
+                    return True
         except Exception:
             pass
+        return False
 
+    def eventFilter(self, obj, event):
+        """事件过滤器，处理各种特殊的用户交互事件。
+        
+        处理以下场景：
+        1. 文件夹重命名时的 ESC 取消
+        2. 空文件夹时点击编辑器自动新建笔记
+        3. 空标签时阻止编辑器进入可编辑状态
+        
+        Args:
+            obj: 事件对象
+            event: 事件
+            
+        Returns:
+            bool: 如果处理了事件返回 True，否则调用父类方法
+        """
+        # 处理文件夹重命名的 ESC 取消
+        if self._handle_folder_rename_escape(obj, event):
+            return True
+        
+        # 处理空文件夹时点击编辑器自动新建笔记
+        if self._handle_empty_folder_editor_click(obj, event):
+            return True
+        
+        # 处理空标签时阻止编辑器进入可编辑状态
+        if self._handle_empty_tag_editor_click(obj, event):
+            return True
+        
         return super().eventFilter(obj, event)
 
     
@@ -3592,8 +3662,7 @@ class MainWindow(QMainWindow):
         # 设置焦点到编辑器，让光标闪烁
         self.editor.text_edit.setFocus()
 
-        self._update_new_note_action_enabled()
-
+        # self._update_new_note_action_enabled()
     
     def toggle_pin_note(self, note_id: str):
         """切换笔记的置顶状态"""
