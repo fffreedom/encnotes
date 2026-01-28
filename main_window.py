@@ -1223,7 +1223,7 @@ class MainWindow(QMainWindow):
         
         return super().eventFilter(obj, event)
 
-    
+
     def __init__(self):
         super().__init__()
         self.note_manager = NoteManager()
@@ -1236,44 +1236,44 @@ class MainWindow(QMainWindow):
         self.is_viewing_deleted = False  # 是否正在查看最近删除
         self.custom_folders = []  # 自定义文件夹列表
         self.tags = []  # 标签列表
-        
+
         # 多选状态
         self.selected_note_rows = set()  # 当前选中的笔记行号集合
 
         # 文件夹展开/折叠状态（folder_id -> bool），默认展开
         self._folder_expanded = {}
-        
+
         # 加密管理器
         self.encryption_manager = self.note_manager.encryption_manager
 
-        
+
         # 检查是否需要设置密码或解锁
         if not self._handle_encryption_setup():
             # 用户取消了密码设置或解锁，退出应用
             import sys
             sys.exit(0)
-        
+
         self.init_ui()
         self.load_folders()  # 加载文件夹
         self.load_notes()
 
 
-        
+
         # 恢复上次打开的笔记和光标位置
         self._restore_last_note()
 
-        
+
         # 设置自动同步定时器（每5分钟）
         self.sync_timer = QTimer()
         self.sync_timer.timeout.connect(self.auto_sync)
         self.sync_timer.start(300000)  # 5分钟
-        
-    def init_ui(self):
-        """初始化用户界面"""
-        self.setWindowTitle("加密笔记")
 
-        # 窗口大小/位置持久化：若用户曾调整过窗口大小，则下次启动按上次值恢复。
-        # 若没有历史记录（首次启动），默认最大化。
+    def _restore_window_geometry(self):
+        """恢复窗口大小和位置。
+        
+        若用户曾调整过窗口大小，则按上次值恢复。
+        若没有历史记录（首次启动），默认最大化。
+        """
         self._settings = QSettings("encnotes", "encnotes")
         restored = False
         try:
@@ -1298,16 +1298,12 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _create_main_splitter(self):
+        """创建主分割器。
         
-        # 创建中心部件
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        # 主布局
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # 创建分割器
+        Returns:
+            QSplitter: 配置好的水平分割器
+        """
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(1)
         splitter.setStyleSheet("""
@@ -1315,29 +1311,32 @@ class MainWindow(QMainWindow):
                 background-color: #e6e6e6;
             }
         """)
-        
-        # 左侧：文件夹列表
+        return splitter
 
+    def _setup_folder_list_basic(self):
+        """设置文件夹列表的基本属性。"""
         self.folder_list = FolderListWidget()
-        self.folder_list.main_window = self  # 设置主窗口引用
-        # 左侧文件夹栏：设置一个更合理的默认/最小宽度；真正的初始宽度由 QSplitter 的 sizes 决定
+        self.folder_list.main_window = self
         self.folder_list.setMaximumWidth(500)
         self.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.folder_list.setTextElideMode(Qt.TextElideMode.ElideRight)
 
-        # 文件夹拖拽：允许把一个文件夹拖到另一个文件夹上，作为其子文件夹
+    def _setup_folder_list_drag_drop(self):
+        """配置文件夹列表的拖拽功能。"""
         self.folder_list.setDragEnabled(True)
         self.folder_list.setAcceptDrops(True)
         self.folder_list.setDropIndicatorShown(True)
         try:
             from PyQt6.QtWidgets import QAbstractItemView
-            # 注意：不要用 InternalMove。InternalMove 会执行“列表内重排”，看起来只改变位置不改变层级。
+            # 注意：不要用 InternalMove。InternalMove 会执行"列表内重排"，看起来只改变位置不改变层级。
             # 我们把 Drop 交给 eventFilter 处理：写入 ZPARENTFOLDERID 后再 load_folders() 重新渲染层级树。
             self.folder_list.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         except Exception:
             pass
         self.folder_list.setDefaultDropAction(Qt.DropAction.MoveAction)
 
+    def _setup_folder_list_style(self):
+        """设置文件夹列表的样式。"""
         self.folder_list.setStyleSheet("""
             QListWidget {
                 border: none;
@@ -1407,6 +1406,8 @@ class MainWindow(QMainWindow):
             }
         """)
 
+    def _setup_folder_list_signals(self):
+        """连接文件夹列表的信号。"""
         self.folder_list.setCurrentRow(0)
         self.folder_list.currentRowChanged.connect(self.on_folder_changed)
         self.folder_list.itemDoubleClicked.connect(self.on_folder_item_double_clicked)
@@ -1418,17 +1419,18 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # 允许“选中后再次单击”进入重命名（仿Finder）
+        # 允许"选中后再次单击"进入重命名（仿Finder）
         self.folder_list.setEditTriggers(QListWidget.EditTrigger.NoEditTriggers)
         self._last_folder_click_folder_id = None
         self._last_folder_click_ms = 0
 
-        
-        # 为文件夹列表添加右键菜单
+    def _setup_folder_list_context_menu(self):
+        """设置文件夹列表的右键菜单。"""
         self.folder_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_list.customContextMenuRequested.connect(self.show_folder_context_menu)
 
-        # 文件夹列表滚动条：默认不显示；用户滚动/拖动时临时浮动显示；停止交互一段时间后自动隐藏
+    def _setup_folder_list_scrollbar(self):
+        """配置文件夹列表的滚动条（默认隐藏，交互时显示）。"""
         self.folder_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._folder_scrollbar_hide_timer = QTimer(self)
         self._folder_scrollbar_hide_timer.setSingleShot(True)
@@ -1439,34 +1441,37 @@ class MainWindow(QMainWindow):
         folder_sb.valueChanged.connect(self._show_folder_scrollbar_temporarily)
         folder_sb.sliderPressed.connect(self._on_folder_scrollbar_pressed)
         folder_sb.sliderReleased.connect(self._on_folder_scrollbar_released)
-        
-        # 中间：笔记列表
+
+    def _init_folder_list(self):
+        """初始化文件夹列表（包含所有配置）。"""
+        self._setup_folder_list_basic()
+        self._setup_folder_list_drag_drop()
+        self._setup_folder_list_style()
+        self._setup_folder_list_signals()
+        self._setup_folder_list_context_menu()
+        self._setup_folder_list_scrollbar()
+
+    def _setup_note_list_basic(self):
+        """设置笔记列表的基本属性。"""
         self.note_list = NoteListWidget()
-        self.note_list.main_window = self  # 设置主窗口引用
-
-        # 启用笔记拖拽功能：只允许拖出到文件夹列表，不接受拖入
-        self.note_list.setDragEnabled(True)
-        self.note_list.setAcceptDrops(False)  # 笔记列表不接受拖入
-        self.note_list.setDropIndicatorShown(False)
-        self.note_list.setDragDropMode(QListWidget.DragDropMode.DragOnly)  # 只允许拖出
-        
-        self.note_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        # 笔记列表滚动条：默认不显示；用户滚动/拖动时临时浮动显示；停止交互一段时间后自动隐藏
-        self.note_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._note_scrollbar_hide_timer = QTimer(self)
-        self._note_scrollbar_hide_timer.setSingleShot(True)
-        self._note_scrollbar_hide_timer.timeout.connect(self._hide_note_scrollbar)
-
-        self._note_scrollbar_dragging = False
-        sb = self.note_list.verticalScrollBar()
-        sb.valueChanged.connect(self._show_note_scrollbar_temporarily)
-        sb.sliderPressed.connect(self._on_note_scrollbar_pressed)
-        sb.sliderReleased.connect(self._on_note_scrollbar_released)
-
-        # 右键菜单由NoteListWidget的contextMenuEvent处理
+        self.note_list.main_window = self
         self.note_list.setMaximumWidth(500)
-        self.note_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 去掉焦点边框
+        self.note_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # 配置笔记列表的滚动条（默认隐藏，交互时显示）。
+        self.note_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.note_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def _setup_note_list_drag_drop(self):
+        """配置笔记列表的拖拽功能（只允许拖出）。"""
+        self.note_list.setDragEnabled(True)
+        # 笔记列表不接受拖入
+        self.note_list.setAcceptDrops(False)
+        self.note_list.setDropIndicatorShown(False)
+        # 只允许拖出
+        self.note_list.setDragDropMode(QListWidget.DragDropMode.DragOnly)
+
+    def _setup_note_list_style(self):
+        """设置笔记列表的样式。"""
         self.note_list.setStyleSheet("""
             QListWidget {
                 border: none;
@@ -1529,9 +1534,31 @@ class MainWindow(QMainWindow):
             }
         """)
 
+    def _setup_note_list_scrollbar(self):
+        self._note_scrollbar_hide_timer = QTimer(self)
+        self._note_scrollbar_hide_timer.setSingleShot(True)
+        self._note_scrollbar_hide_timer.timeout.connect(self._hide_note_scrollbar)
+
+        self._note_scrollbar_dragging = False
+        sb = self.note_list.verticalScrollBar()
+        sb.valueChanged.connect(self._show_note_scrollbar_temporarily)
+        sb.sliderPressed.connect(self._on_note_scrollbar_pressed)
+        sb.sliderReleased.connect(self._on_note_scrollbar_released)
+
+    def _setup_note_list_signals(self):
+        """连接笔记列表的信号。"""
         self.note_list.currentItemChanged.connect(self.on_note_selected)
-        
-        # 右侧：编辑器
+
+    def _init_note_list(self):
+        """初始化笔记列表（包含所有配置）。"""
+        self._setup_note_list_basic()
+        self._setup_note_list_drag_drop()
+        self._setup_note_list_style()
+        self._setup_note_list_scrollbar()
+        self._setup_note_list_signals()
+
+    def _init_editor(self):
+        """初始化编辑器。"""
         self.editor = NoteEditor(self.note_manager)
         self.editor.textChanged.connect(self.on_text_changed)
 
@@ -1547,8 +1574,12 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def _setup_splitter_widgets(self, splitter):
+        """将所有部件添加到分割器并设置比例。
         
-        # 添加到分割器
+        Args:
+            splitter: QSplitter 对象
+        """
         splitter.addWidget(self.folder_list)
         splitter.addWidget(self.note_list)
         splitter.addWidget(self.editor)
@@ -1559,17 +1590,53 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(2, 5)
 
         # 设置分割器启动时初始宽度，文件夹列表和笔记列表最大宽度由各自的setMaximumWidth设置，最小宽度不设置
-        # 这里把左侧文件夹栏稍微加宽，避免“新建文件夹”等默认名称显示不全
+        # 这里把左侧文件夹栏稍微加宽，避免"新建文件夹"等默认名称显示不全
         splitter.setSizes([200, 200, 900])
+
+    def init_ui(self):
+        """初始化用户界面。
         
+        主要步骤：
+        1. 恢复窗口大小和位置
+        2. 创建中心部件和主布局
+        3. 创建分割器
+        4. 初始化文件夹列表
+        5. 初始化笔记列表
+        6. 初始化编辑器
+        7. 设置分割器比例
+        8. 创建工具栏和菜单栏
+        """
+        self.setWindowTitle("加密笔记")
+
+        # 恢复窗口大小和位置
+        self._restore_window_geometry()
+
+        # 创建中心部件
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # 主布局
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 创建分割器
+        splitter = self._create_main_splitter()
+        
+        # 初始化三个主要部件
+        self._init_folder_list()
+        self._init_note_list()
+        self._init_editor()
+        
+        # 将部件添加到分割器
+        self._setup_splitter_widgets(splitter)
+        
+        # 添加到主布局
         main_layout.addWidget(splitter)
         
-        # 创建工具栏
+        # 创建工具栏和菜单栏
         self.create_toolbar()
-        
-        # 创建菜单栏
         self.create_menubar()
-        
+
     def create_toolbar(self):
         """创建工具栏"""
         toolbar = QToolBar()
