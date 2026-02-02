@@ -362,321 +362,333 @@ class FolderListWidget(QListWidget):
                 x2 = self._drop_indicator_rect.right()
                 painter.drawLine(x1, y, x2, y)
     
+    def _get_drag_source_data(self, event):
+        """获取拖拽源数据
+        
+        Returns:
+            tuple: (is_note_drag, src_note_ids, src_folder_id)
+                - is_note_drag: 是否是笔记拖拽
+                - src_note_ids: 源笔记ID列表（笔记拖拽时）
+                - src_folder_id: 源文件夹ID（文件夹拖拽时）
+            None: 无效的拖拽源
+        """
+        note_list = self.main_window.note_list
+        folder_list = self
+        drag_source = event.source()
+        
+        # 笔记拖拽
+        if drag_source == note_list:
+            src_note_ids = []
+            
+            # 检查多选笔记
+            if hasattr(self.main_window, 'selected_note_rows') and self.main_window.selected_note_rows:
+                for row in self.main_window.selected_note_rows:
+                    item = note_list.item(row)
+                    if item:
+                        note_id = item.data(Qt.ItemDataRole.UserRole)
+                        if note_id:
+                            src_note_ids.append(note_id)
+            else:
+                # 单选笔记
+                note_current_item = note_list.currentItem()
+                if note_current_item:
+                    note_data = note_current_item.data(Qt.ItemDataRole.UserRole)
+                    if note_data:
+                        src_note_ids = [note_data]
+            
+            return (True, src_note_ids, None) if src_note_ids else None
+        
+        # 文件夹拖拽
+        elif drag_source == folder_list:
+            folder_current_item = folder_list.currentItem()
+            if folder_current_item:
+                src_data = folder_current_item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(src_data, tuple) and len(src_data) == 2 and src_data[0] == "folder":
+                    return (False, None, src_data[1])
+        
+        return None
+    
+    def _get_drop_target_folder(self, event):
+        """获取拖放目标文件夹ID
+        
+        Returns:
+            int or None: 目标文件夹ID，None表示拖到空白处或顶级
+            False: 拖到了非文件夹项（无效目标）
+        """
+        drop_pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
+        target_item = self.itemAt(drop_pos)
+        
+        if target_item:
+            target_data = target_item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(target_data, tuple) and len(target_data) == 2 and target_data[0] == "folder":
+                return target_data[1]
+            else:
+                return False  # 拖到了非文件夹项
+        
+        return None  # 拖到空白处
+    
+    def _expand_folder_ancestors(self, folder_id):
+        """展开指定文件夹及其所有祖先文件夹"""
+        import time
+        t_start = time.time()
+        
+        self.main_window._folder_expanded[folder_id] = True
+        
+        current_folder_id = folder_id
+        ancestor_count = 0
+        while current_folder_id:
+            folder_info = self.main_window.note_manager.get_folder(current_folder_id)
+            if folder_info and folder_info.get('parent_folder_id'):
+                parent_id = folder_info['parent_folder_id']
+                self.main_window._folder_expanded[parent_id] = True
+                current_folder_id = parent_id
+                ancestor_count += 1
+            else:
+                break
+        
+        t_end = time.time()
+        print(f"[性能] 展开{ancestor_count}个祖先文件夹耗时: {(t_end - t_start)*1000:.2f}ms")
+    
+    def _delayed_refresh_note_ui(self, note_list, folder_list):
+        """延迟刷新笔记拖拽后的UI"""
+        import time
+        from PyQt6.QtWidgets import QApplication
+        
+        t_refresh_start = time.time()
+        
+        try:
+            self.main_window.note_manager.conn.commit()
+            t_after_commit = time.time()
+            print(f"[性能-笔记拖拽] 数据库commit耗时: {(t_after_commit - t_refresh_start)*1000:.2f}ms")
+        except Exception:
+            pass
+        
+        t_before_load_folders = time.time()
+        self.main_window.load_folders()
+        t_after_load_folders = time.time()
+        print(f"[性能-笔记拖拽] load_folders()耗时: {(t_after_load_folders - t_before_load_folders)*1000:.2f}ms")
+        
+        t_before_load_notes = time.time()
+        self.main_window.load_notes()
+        t_after_load_notes = time.time()
+        print(f"[性能-笔记拖拽] load_notes()耗时: {(t_after_load_notes - t_before_load_notes)*1000:.2f}ms")
+        
+        t_before_ui_refresh = time.time()
+        note_list.viewport().update()
+        folder_list.viewport().update()
+        note_list.repaint()
+        folder_list.repaint()
+        QApplication.processEvents()
+        t_after_ui_refresh = time.time()
+        print(f"[性能-笔记拖拽] UI刷新耗时: {(t_after_ui_refresh - t_before_ui_refresh)*1000:.2f}ms")
+        
+        t_refresh_end = time.time()
+        print(f"[性能-笔记拖拽] delayed_refresh总耗时: {(t_refresh_end - t_refresh_start)*1000:.2f}ms")
+    
+    def _delayed_refresh_folder_ui(self, src_folder_id):
+        """延迟刷新文件夹拖拽后的UI"""
+        import time
+        from PyQt6.QtWidgets import QApplication
+        
+        t_refresh_start = time.time()
+        
+        try:
+            self.main_window.note_manager.conn.commit()
+            t_after_commit = time.time()
+            print(f"[性能] 数据库commit耗时: {(t_after_commit - t_refresh_start)*1000:.2f}ms")
+        except Exception:
+            pass
+        
+        t_before_load = time.time()
+        self.main_window.load_folders()
+        t_after_load = time.time()
+        print(f"[性能] load_folders()耗时: {(t_after_load - t_before_load)*1000:.2f}ms")
+        
+        t_before_ui_refresh = time.time()
+        self.viewport().update()
+        self.repaint()
+        QApplication.processEvents()
+        t_after_ui_refresh = time.time()
+        print(f"[性能] UI刷新耗时: {(t_after_ui_refresh - t_before_ui_refresh)*1000:.2f}ms")
+        
+        # 重新选中被拖动的文件夹
+        self._reselect_folder(src_folder_id)
+        
+        t_refresh_end = time.time()
+        print(f"[性能] delayed_refresh总耗时: {(t_refresh_end - t_refresh_start)*1000:.2f}ms")
+    
+    def _handle_note_drop(self, src_note_ids, target_folder_id, t_start):
+        """处理笔记拖拽"""
+        import time
+        
+        t_before_db = time.time()
+        print(f"[性能-笔记拖拽] 准备阶段耗时: {(t_before_db - t_start)*1000:.2f}ms")
+        print(f"[笔记拖拽] 移动 {len(src_note_ids)} 个笔记到文件夹: {target_folder_id}")
+        
+        # 批量更新笔记所属文件夹
+        for note_id in src_note_ids:
+            self.main_window.note_manager.move_note_to_folder(note_id, target_folder_id)
+        
+        t_after_db = time.time()
+        print(f"[性能-笔记拖拽] 数据库更新耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
+        
+        # 展开目标文件夹及其祖先
+        if target_folder_id:
+            self._expand_folder_ancestors(target_folder_id)
+        
+        # 延迟刷新UI
+        note_list = self.main_window.note_list
+        folder_list = self
+        QTimer.singleShot(50, lambda: self._delayed_refresh_note_ui(note_list, folder_list))
+        
+        t_end = time.time()
+        print(f"[性能-笔记拖拽] dropEvent总耗时(不含延迟): {(t_end - t_start)*1000:.2f}ms")
+    
+    def _handle_folder_drop_on(self, src_folder_id, target_folder_id, t_before_db):
+        """处理文件夹拖到另一个文件夹上（改变父文件夹）"""
+        import time
+        
+        self.main_window.note_manager.update_folder_parent(src_folder_id, target_folder_id)
+        t_after_db = time.time()
+        print(f"[性能] 数据库更新(改变父文件夹)耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
+        
+        # 展开目标父文件夹及其祖先
+        if target_folder_id:
+            self._expand_folder_ancestors(target_folder_id)
+    
+    def _handle_folder_drop_between(self, src_folder_id, target_folder_id, insert_before, t_before_db):
+        """处理文件夹拖到两个文件夹之间（调整顺序）"""
+        import time
+        
+        # 获取目标文件夹的父文件夹ID
+        target_folder_info = self.main_window.note_manager.get_folder(target_folder_id)
+        if not target_folder_info:
+            print(f"[错误] 无法获取目标文件夹信息: {target_folder_id}")
+            return
+        
+        new_parent_id = target_folder_info.get('parent_folder_id')
+        
+        # 获取源文件夹的当前父文件夹ID
+        src_folder_info = self.main_window.note_manager.get_folder(src_folder_id)
+        current_parent_id = src_folder_info.get('parent_folder_id') if src_folder_info else None
+        
+        # 如果父文件夹不同，先改变父文件夹
+        if new_parent_id != current_parent_id:
+            self.main_window.note_manager.update_folder_parent(src_folder_id, new_parent_id)
+            print(f"[调试] 改变父文件夹: {current_parent_id} -> {new_parent_id}")
+        
+        # 调整顺序
+        success = self.main_window.note_manager.reorder_folder(src_folder_id, target_folder_id, insert_before)
+        t_after_db = time.time()
+        if success:
+            print(f"[性能] 数据库更新(调整位置)耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
+        else:
+            print(f"[性能] 调整位置失败: {(t_after_db - t_before_db)*1000:.2f}ms")
+        
+        # 展开新父文件夹及其祖先
+        if new_parent_id:
+            self._expand_folder_ancestors(new_parent_id)
+    
+    def _handle_folder_drop_blank(self, src_folder_id, t_before_db):
+        """处理文件夹拖到空白处（移到顶级）"""
+        import time
+        
+        self.main_window.note_manager.update_folder_parent(src_folder_id, None)
+        t_after_db = time.time()
+        print(f"[性能] 数据库更新(移到顶级)耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
+    
+    def _handle_folder_drop(self, src_folder_id, target_folder_id, t_start):
+        """处理文件夹拖拽"""
+        import time
+        
+        t_before_db = time.time()
+        print(f"[性能] 准备阶段耗时: {(t_before_db - t_start)*1000:.2f}ms")
+        
+        # 检查是否拖到自己上
+        if target_folder_id == src_folder_id:
+            self._clear_drop_indicator()
+            return False
+        
+        # 根据拖放指示器位置决定操作类型
+        if self._drop_indicator_position == 'on':
+            self._handle_folder_drop_on(src_folder_id, target_folder_id, t_before_db)
+        elif self._drop_indicator_position in ('above', 'below'):
+            insert_before = (self._drop_indicator_position == 'above')
+            self._handle_folder_drop_between(src_folder_id, target_folder_id, insert_before, t_before_db)
+        else:
+            self._handle_folder_drop_blank(src_folder_id, t_before_db)
+        
+        # 清除拖放指示器
+        self._clear_drop_indicator()
+        
+        # 延迟刷新UI
+        QTimer.singleShot(50, lambda: self._delayed_refresh_folder_ui(src_folder_id))
+        
+        t_end = time.time()
+        print(f"[性能] dropEvent总耗时(不含延迟): {(t_end - t_start)*1000:.2f}ms")
+        
+        return True
+    
+    def _clear_drop_indicator(self):
+        """清除拖放指示器"""
+        self._drop_indicator_position = None
+        self._drop_indicator_rect = None
+        self._drop_target_item = None
+        self.viewport().update()
+    
+    def _reselect_folder(self, folder_id):
+        """重新选中指定的文件夹"""
+        import time
+        t_start = time.time()
+        
+        for i in range(self.count()):
+            item = self.item(i)
+            if item:
+                item_data = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(item_data, tuple) and len(item_data) == 2 and item_data[0] == "folder":
+                    if item_data[1] == folder_id:
+                        self.setCurrentItem(item)
+                        self.scrollToItem(item, QListWidget.ScrollHint.EnsureVisible)
+                        t_end = time.time()
+                        print(f"[性能] 重新选中文件夹耗时: {(t_end - t_start)*1000:.2f}ms")
+                        return
+        
+        print(f"[警告] 未找到被拖动的文件夹 {folder_id}")
+    
     def dropEvent(self, event):
         """处理拖拽放下事件：支持文件夹拖拽和笔记拖拽"""
         try:
             import time
             t_start = time.time()
             
-            # 1. 获取拖拽源数据
+            # 1. 验证拖拽数据格式
             mime_data = event.mimeData()
             if not mime_data.hasFormat("application/x-qabstractitemmodeldatalist"):
                 super().dropEvent(event)
                 return
             
-            # 从当前选中项获取源数据
-            # 需要判断是从文件夹列表拖动还是从笔记列表拖动
-            note_list = self.main_window.note_list
-            folder_list = self
-            
-            # 检查拖拽源是笔记还是文件夹
-            # 关键修复：通过event.source()判断拖动源是哪个列表
-            drag_source = event.source()
-            is_note_drag = False
-            src_note_id = None
-            src_folder_id = None
-            
-            if drag_source == note_list:
-                # 拖动源是笔记列表
-                is_note_drag = True
-                
-                # 检查是否有多选笔记
-                src_note_ids = []
-                if hasattr(self.main_window, 'selected_note_rows') and self.main_window.selected_note_rows:
-                    # 有多选笔记，获取所有选中的笔记ID
-                    for row in self.main_window.selected_note_rows:
-                        item = note_list.item(row)
-                        if item:
-                            note_id = item.data(Qt.ItemDataRole.UserRole)
-                            if note_id:
-                                src_note_ids.append(note_id)
-                else:
-                    # 没有多选，使用当前选中的笔记
-                    note_current_item = note_list.currentItem()
-                    if not note_current_item:
-                        super().dropEvent(event)
-                        return
-                    note_data = note_current_item.data(Qt.ItemDataRole.UserRole)
-                    if note_data:
-                        src_note_ids = [note_data]
-                    else:
-                        super().dropEvent(event)
-                        return
-                
-                if not src_note_ids:
-                    super().dropEvent(event)
-                    return
-            elif drag_source == folder_list:
-                # 拖动源是文件夹列表
-                is_note_drag = False
-                folder_current_item = folder_list.currentItem()
-                if not folder_current_item:
-                    super().dropEvent(event)
-                    return
-                src_data = folder_current_item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(src_data, tuple) and len(src_data) == 2 and src_data[0] == "folder":
-                    src_folder_id = src_data[1]
-                else:
-                    super().dropEvent(event)
-                    return
-            else:
-                # 拖动源不是笔记列表也不是文件夹列表
+            # 2. 获取拖拽源数据
+            drag_data = self._get_drag_source_data(event)
+            if not drag_data:
                 super().dropEvent(event)
                 return
             
-            # 2. 获取目标位置
-            drop_pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
-            target_item = self.itemAt(drop_pos)
+            is_note_drag, src_note_ids, src_folder_id = drag_data
             
-            # 3. 确定目标文件夹ID
-            if target_item:
-                # 拖到某个文件夹上
-                target_data = target_item.data(Qt.ItemDataRole.UserRole)
-                
-                # 从 tuple 中提取实际的 folder_id
-                if isinstance(target_data, tuple) and len(target_data) == 2 and target_data[0] == "folder":
-                    target_folder_id = target_data[1]
-                else:
-                    # 拖到了非文件夹项（如标签、标题等）
-                    event.ignore()
-                    return
-            else:
-                # 拖到空白处
-                target_folder_id = None
+            # 3. 获取目标文件夹
+            target_folder_id = self._get_drop_target_folder(event)
+            if target_folder_id is False:
+                # 拖到了非文件夹项
+                event.ignore()
+                return
             
-            t_before_db = time.time()
-            
-            # 4. 根据拖拽类型执行不同的操作
+            # 4. 根据拖拽类型执行操作
             if is_note_drag:
-                # 处理笔记拖拽（支持多选）
-                print(f"[性能-笔记拖拽] 准备阶段耗时: {(t_before_db - t_start)*1000:.2f}ms")
-                print(f"[笔记拖拽] 移动 {len(src_note_ids)} 个笔记到文件夹: {target_folder_id}")
-                
-                # 批量更新笔记所属文件夹
-                for note_id in src_note_ids:
-                    self.main_window.note_manager.move_note_to_folder(note_id, target_folder_id)
-                
-                t_after_db = time.time()
-                print(f"[性能-笔记拖拽] 数据库更新耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
-                
-                # 如果拖到某个文件夹下，自动展开目标文件夹及其所有祖先文件夹
-                if target_folder_id:
-                    t_before_expand = time.time()
-                    self.main_window._folder_expanded[target_folder_id] = True
-                    
-                    current_folder_id = target_folder_id
-                    ancestor_count = 0
-                    while current_folder_id:
-                        folder_info = self.main_window.note_manager.get_folder(current_folder_id)
-                        if folder_info and folder_info.get('parent_folder_id'):
-                            parent_id = folder_info['parent_folder_id']
-                            self.main_window._folder_expanded[parent_id] = True
-                            current_folder_id = parent_id
-                            ancestor_count += 1
-                        else:
-                            break
-                    t_after_expand = time.time()
-                    print(f"[性能-笔记拖拽] 展开{ancestor_count}个祖先文件夹耗时: {(t_after_expand - t_before_expand)*1000:.2f}ms")
-                
-                # 延迟刷新UI
-                def delayed_refresh_note():
-                    t_refresh_start = time.time()
-                    
-                    try:
-                        self.main_window.note_manager.conn.commit()
-                        t_after_commit = time.time()
-                        print(f"[性能-笔记拖拽] 数据库commit耗时: {(t_after_commit - t_refresh_start)*1000:.2f}ms")
-                    except Exception:
-                        pass
-                    
-                    t_before_load_folders = time.time()
-                    self.main_window.load_folders()
-                    t_after_load_folders = time.time()
-                    print(f"[性能-笔记拖拽] load_folders()耗时: {(t_after_load_folders - t_before_load_folders)*1000:.2f}ms")
-                    
-                    t_before_load_notes = time.time()
-                    self.main_window.load_notes()
-                    t_after_load_notes = time.time()
-                    print(f"[性能-笔记拖拽] load_notes()耗时: {(t_after_load_notes - t_before_load_notes)*1000:.2f}ms")
-                    
-                    t_before_ui_refresh = time.time()
-                    note_list.viewport().update()
-                    folder_list.viewport().update()
-                    note_list.repaint()
-                    folder_list.repaint()
-                    from PyQt6.QtWidgets import QApplication
-                    QApplication.processEvents()
-                    t_after_ui_refresh = time.time()
-                    print(f"[性能-笔记拖拽] UI刷新耗时: {(t_after_ui_refresh - t_before_ui_refresh)*1000:.2f}ms")
-                    
-                    t_refresh_end = time.time()
-                    print(f"[性能-笔记拖拽] delayed_refresh总耗时: {(t_refresh_end - t_refresh_start)*1000:.2f}ms")
-                
-                QTimer.singleShot(50, delayed_refresh_note)
-                
-                t_end = time.time()
-                print(f"[性能-笔记拖拽] dropEvent总耗时(不含延迟): {(t_end - t_start)*1000:.2f}ms")
-                
+                self._handle_note_drop(src_note_ids, target_folder_id, t_start)
             else:
-                # 处理文件夹拖拽
-                print(f"[性能] 准备阶段耗时: {(t_before_db - t_start)*1000:.2f}ms")
-                
-                # 检查是否拖到自己上
-                if target_folder_id == src_folder_id:
-                    self._drop_indicator_position = None
-                    self._drop_indicator_rect = None
-                    self._drop_target_item = None
-                    self.viewport().update()
+                if not self._handle_folder_drop(src_folder_id, target_folder_id, t_start):
                     event.ignore()
                     return
-                
-                # 根据拖放指示器位置决定操作类型
-                if self._drop_indicator_position == 'on':
-                    # 拖到文件夹上：改变父文件夹
-                    self.main_window.note_manager.update_folder_parent(src_folder_id, target_folder_id)
-                    t_after_db = time.time()
-                    print(f"[性能] 数据库更新(改变父文件夹)耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
-                    
-                    # 自动展开目标父文件夹及其所有祖先文件夹
-                    if target_folder_id:
-                        t_before_expand = time.time()
-                        self.main_window._folder_expanded[target_folder_id] = True
-                        
-                        current_folder_id = target_folder_id
-                        ancestor_count = 0
-                        while current_folder_id:
-                            folder_info = self.main_window.note_manager.get_folder(current_folder_id)
-                            if folder_info and folder_info.get('parent_folder_id'):
-                                parent_id = folder_info['parent_folder_id']
-                                self.main_window._folder_expanded[parent_id] = True
-                                current_folder_id = parent_id
-                                ancestor_count += 1
-                            else:
-                                break
-                        t_after_expand = time.time()
-                        print(f"[性能] 展开{ancestor_count}个祖先文件夹耗时: {(t_after_expand - t_before_expand)*1000:.2f}ms")
-                
-                elif self._drop_indicator_position in ('above', 'below'):
-                    # 拖到文件夹之间：自动检测父文件夹并调整位置
-                    # 策略：目标文件夹的父文件夹就是新位置的父文件夹
-                    insert_before = (self._drop_indicator_position == 'above')
-                    
-                    # 获取目标文件夹的父文件夹ID
-                    target_folder_info = self.main_window.note_manager.get_folder(target_folder_id)
-                    if target_folder_info:
-                        new_parent_id = target_folder_info.get('parent_folder_id')
-                        
-                        # 获取源文件夹的当前父文件夹ID
-                        src_folder_info = self.main_window.note_manager.get_folder(src_folder_id)
-                        current_parent_id = src_folder_info.get('parent_folder_id') if src_folder_info else None
-                        
-                        # 如果父文件夹不同，先改变父文件夹
-                        if new_parent_id != current_parent_id:
-                            self.main_window.note_manager.update_folder_parent(src_folder_id, new_parent_id)
-                            print(f"[调试] 改变父文件夹: {current_parent_id} -> {new_parent_id}")
-                        
-                        # 调整顺序
-                        success = self.main_window.note_manager.reorder_folder(src_folder_id, target_folder_id, insert_before)
-                        t_after_db = time.time()
-                        if success:
-                            print(f"[性能] 数据库更新(调整位置)耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
-                        else:
-                            print(f"[性能] 调整位置失败: {(t_after_db - t_before_db)*1000:.2f}ms")
-                        
-                        # 如果新父文件夹存在，自动展开它及其祖先
-                        if new_parent_id:
-                            t_before_expand = time.time()
-                            self.main_window._folder_expanded[new_parent_id] = True
-                            
-                            current_folder_id = new_parent_id
-                            ancestor_count = 0
-                            while current_folder_id:
-                                folder_info = self.main_window.note_manager.get_folder(current_folder_id)
-                                if folder_info and folder_info.get('parent_folder_id'):
-                                    parent_id = folder_info['parent_folder_id']
-                                    self.main_window._folder_expanded[parent_id] = True
-                                    current_folder_id = parent_id
-                                    ancestor_count += 1
-                                else:
-                                    break
-                            t_after_expand = time.time()
-                            print(f"[性能] 展开{ancestor_count}个祖先文件夹耗时: {(t_after_expand - t_before_expand)*1000:.2f}ms")
-                    else:
-                        print(f"[错误] 无法获取目标文件夹信息: {target_folder_id}")
-                        t_after_db = time.time()
-                
-                else:
-                    # 拖到空白处：移到顶级
-                    self.main_window.note_manager.update_folder_parent(src_folder_id, None)
-                    t_after_db = time.time()
-                    print(f"[性能] 数据库更新(移到顶级)耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
-                
-                # 清除拖放指示器并立即更新视图
-                self._drop_indicator_position = None
-                self._drop_indicator_rect = None
-                self._drop_target_item = None
-                self.viewport().update()  # 立即触发重绘，清除蓝色线
-                
-                # 延迟刷新UI
-                def delayed_refresh_folder():
-                    t_refresh_start = time.time()
-                    
-                    try:
-                        self.main_window.note_manager.conn.commit()
-                        t_after_commit = time.time()
-                        print(f"[性能] 数据库commit耗时: {(t_after_commit - t_refresh_start)*1000:.2f}ms")
-                    except Exception:
-                        pass
-                    
-                    t_before_load = time.time()
-                    self.main_window.load_folders()
-                    t_after_load = time.time()
-                    print(f"[性能] load_folders()耗时: {(t_after_load - t_before_load)*1000:.2f}ms")
-                    
-                    t_before_ui_refresh = time.time()
-                    self.viewport().update()
-                    self.repaint()
-                    from PyQt6.QtWidgets import QApplication
-                    QApplication.processEvents()
-                    t_after_ui_refresh = time.time()
-                    print(f"[性能] UI刷新耗时: {(t_after_ui_refresh - t_before_ui_refresh)*1000:.2f}ms")
-                    
-                    # 重新选中被拖动的文件夹
-                    t_before_reselect = time.time()
-                    found = False
-                    for i in range(self.count()):
-                        item = self.item(i)
-                        if item:
-                            item_data = item.data(Qt.ItemDataRole.UserRole)
-                            if isinstance(item_data, tuple) and len(item_data) == 2 and item_data[0] == "folder":
-                                if item_data[1] == src_folder_id:
-                                    self.setCurrentItem(item)
-                                    self.scrollToItem(item, QListWidget.ScrollHint.EnsureVisible)
-                                    found = True
-                                    t_after_reselect = time.time()
-                                    print(f"[性能] 重新选中文件夹耗时: {(t_after_reselect - t_before_reselect)*1000:.2f}ms")
-                                    break
-                    
-                    if not found:
-                        print(f"[警告] 未找到被拖动的文件夹 {src_folder_id}")
-                    
-                    t_refresh_end = time.time()
-                    print(f"[性能] delayed_refresh总耗时: {(t_refresh_end - t_refresh_start)*1000:.2f}ms")
-                
-                QTimer.singleShot(50, delayed_refresh_folder)
-                
-                t_end = time.time()
-                print(f"[性能] dropEvent总耗时(不含延迟): {(t_end - t_start)*1000:.2f}ms")
             
             event.accept()
             
@@ -684,9 +696,6 @@ class FolderListWidget(QListWidget):
             import traceback
             traceback.print_exc()
             super().dropEvent(event)
-
-
-
 
 class NoteListWidget(QListWidget):
     """支持笔记拖拽到文件夹的自定义列表控件
