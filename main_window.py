@@ -5026,39 +5026,75 @@ class MainWindow(QMainWindow):
             # 退出应用
             self.close()
     
-    def closeEvent(self, event):
-        """关闭事件"""
-        # 持久化窗口大小/位置（用户调整过的尺寸下次启动恢复）
+    def _get_settings(self):
+        """获取QSettings实例
+        
+        Returns:
+            QSettings: 设置对象
+        """
+        settings = getattr(self, "_settings", None)
+        if settings is None:
+            settings = QSettings("encnotes", "encnotes")
+        return settings
+    
+    def _save_window_geometry(self, settings):
+        """保存窗口几何信息（位置和大小）
+        
+        Args:
+            settings: QSettings 设置对象
+        """
         try:
-            settings = getattr(self, "_settings", None)
-            if settings is None:
-                settings = QSettings("encnotes", "encnotes")
             settings.setValue("main_window/geometry", self.saveGeometry())
             settings.setValue("main_window/state", self.saveState())
-            
-            # 保存当前选中的文件夹信息
+        except Exception:
+            pass
+    
+    def _save_current_folder_state(self, settings):
+        """保存当前选中的文件夹状态
+        
+        Args:
+            settings: QSettings 设置对象
+        """
+        try:
             current_folder_row = self.folder_list.currentRow()
-            if current_folder_row >= 0:
-                current_item = self.folder_list.item(current_folder_row)
-                if current_item:
-                    payload = current_item.data(Qt.ItemDataRole.UserRole)
-                    if isinstance(payload, tuple) and len(payload) == 2:
-                        folder_type, folder_value = payload
-                        settings.setValue("last_folder_type", folder_type)
-                        settings.setValue("last_folder_value", folder_value)
-                    else:
-                        settings.remove("last_folder_type")
-                        settings.remove("last_folder_value")
-                else:
-                    settings.remove("last_folder_type")
-                    settings.remove("last_folder_value")
+            
+            # 如果没有选中任何文件夹，清除保存的状态
+            if current_folder_row < 0:
+                settings.remove("last_folder_type")
+                settings.remove("last_folder_value")
+                return
+            
+            # 获取当前选中的文件夹项
+            current_item = self.folder_list.item(current_folder_row)
+            if not current_item:
+                settings.remove("last_folder_type")
+                settings.remove("last_folder_value")
+                return
+            
+            # 获取文件夹数据并保存
+            payload = current_item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and len(payload) == 2:
+                folder_type, folder_value = payload
+                settings.setValue("last_folder_type", folder_type)
+                settings.setValue("last_folder_value", folder_value)
             else:
                 settings.remove("last_folder_type")
                 settings.remove("last_folder_value")
-            
-            # 保存当前打开的笔记ID和光标位置
+        except Exception:
+            pass
+    
+    def _save_current_note_state(self, settings):
+        """保存当前笔记状态和光标位置
+        
+        Args:
+            settings: QSettings 设置对象
+        """
+        try:
             if self.current_note_id:
+                # 保存笔记ID
                 settings.setValue("last_note_id", self.current_note_id)
+                
+                # 保存光标位置
                 try:
                     cursor = self.editor.text_edit.textCursor()
                     cursor_position = cursor.position()
@@ -5071,21 +5107,56 @@ class MainWindow(QMainWindow):
                 settings.remove("last_cursor_position")
         except Exception:
             pass
-
+    
+    def _cleanup_on_close(self):
+        """关闭前的清理工作"""
+        # 保存当前笔记
         self.save_current_note()
-
-        # 退出程序时：清理当前笔记“已删除但可撤销”的附件
+        
+        # 清理当前笔记"已删除但可撤销"的附件
         try:
             if self.current_note_id and getattr(self.note_manager, 'attachment_manager', None):
                 self.note_manager.attachment_manager.cleanup_note_attachment_trash(self.current_note_id)
         except Exception:
             pass
+    
+    def _sync_before_close(self):
+        """关闭前同步笔记（如果启用了同步）"""
+        try:
+            if self.sync_manager.sync_enabled:
+                self.sync_manager.sync_notes()
+        except Exception:
+            pass
+    
+    def closeEvent(self, event):
+        """关闭事件
         
-        # 如果启用了同步，在关闭前同步一次
-        if self.sync_manager.sync_enabled:
-            self.sync_manager.sync_notes()
+        Args:
+            event: QCloseEvent 关闭事件对象
+        """
+        # 1. 获取设置对象
+        settings = self._get_settings()
         
-        # 关闭数据库连接
-        self.note_manager.close()
-            
+        # 2. 保存窗口状态
+        self._save_window_geometry(settings)
+        
+        # 3. 保存当前文件夹状态
+        self._save_current_folder_state(settings)
+        
+        # 4. 保存当前笔记状态和光标位置
+        self._save_current_note_state(settings)
+        
+        # 5. 执行清理工作
+        self._cleanup_on_close()
+        
+        # 6. 同步笔记（如果启用）
+        self._sync_before_close()
+        
+        # 7. 关闭数据库连接
+        try:
+            self.note_manager.close()
+        except Exception:
+            pass
+        
+        # 8. 接受关闭事件
         event.accept()
