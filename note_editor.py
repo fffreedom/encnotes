@@ -2749,100 +2749,109 @@ class NoteEditor(QWidget):
     def setTextCursor(self, cursor):
         self.text_edit.setTextCursor(cursor)
     
+    def _create_title_format(self):
+        """创建标题字符格式（28号粗体）"""
+        title_fmt = QTextCharFormat()
+        title_fmt.setFontPointSize(28)
+        title_fmt.setFontWeight(QFont.Weight.Bold)
+        return title_fmt
+    
+    def _create_body_format(self):
+        """创建正文字符格式（14号普通）"""
+        body_fmt = QTextCharFormat()
+        body_fmt.setFontPointSize(14)
+        body_fmt.setFontWeight(QFont.Weight.Normal)
+        return body_fmt
+    
+    def _initialize_empty_document(self):
+        """初始化空文档，插入零宽度空格并设置标题格式"""
+        title_fmt = self._create_title_format()
+        cursor = self.text_edit.textCursor()
+        cursor.insertText('\u200B', title_fmt)
+        # 设置完之后不需要移动开头位置
+        # cursor.movePosition(cursor.MoveOperation.Start)
+        self.text_edit.setTextCursor(cursor)
+        self.text_edit.setCurrentCharFormat(title_fmt)
+    
+    def _is_first_line_title_formatted(self, first_block):
+        """检查第一行是否已经是标题格式（28号字体）"""
+        first_cursor = QTextCursor(first_block)
+        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        char_fmt = first_cursor.charFormat()
+        return char_fmt.fontPointSize() == 28
+    
+    def _apply_title_format_to_first_line(self, first_block):
+        """应用标题格式到第一行"""
+        first_line_text = first_block.text()
+        
+        # 如果第一行为空或只有零宽度空格，不需要应用格式
+        if first_line_text in ("", "\u200B"):
+            return
+        
+        # 应用格式到第一行已有文本
+        title_fmt = self._create_title_format()
+        first_cursor = QTextCursor(first_block)
+        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        
+        self.text_edit.blockSignals(True)
+        first_cursor.mergeCharFormat(title_fmt)
+        self.text_edit.blockSignals(False)
+    
+    def _set_title_input_format(self):
+        """设置标题输入格式（保留当前格式的其他属性）"""
+        current_fmt = self.text_edit.currentCharFormat()
+        current_fmt.setFontPointSize(28)
+        current_fmt.setFontWeight(QFont.Weight.Bold)
+        self.text_edit.setCurrentCharFormat(current_fmt)
+    
+    def _set_body_input_format(self, current_cursor, current_block):
+        """设置正文输入格式，如果当前行为空则插入零宽度空格"""
+        body_fmt = self._create_body_format()
+        
+        # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
+        if current_block.text() == "":
+            self.text_edit.blockSignals(True)
+            current_cursor.setCharFormat(body_fmt)
+            current_cursor.insertText("\u200B")
+            current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            self.text_edit.setTextCursor(current_cursor)
+            self.text_edit.blockSignals(False)
+        
+        self.text_edit.setCurrentCharFormat(body_fmt)
+    
     def auto_format_first_line(self):
         """自动将第一行格式化为标题格式（28号字体），其他行为正文格式"""
-        
-        # 获取文档
         document = self.text_edit.document()
+        
+        # 处理空文档
         if document.isEmpty():
-            # 创建标题字符格式
-            title_char_fmt = QTextCharFormat()
-            title_char_fmt.setFontPointSize(28)
-            title_char_fmt.setFontWeight(QFont.Weight.Bold)
-            
-            # 获取光标并插入零宽度空格
-            cursor = self.text_edit.textCursor()
-            cursor.insertText('\u200B', title_char_fmt)
-            
-            # 将光标移回开头
-            cursor.movePosition(cursor.MoveOperation.Start)
-            self.text_edit.setTextCursor(cursor)
-            
-            # 设置当前输入格式
-            self.text_edit.setCurrentCharFormat(title_char_fmt)
+            self._initialize_empty_document()
             return
         
         # 获取当前光标
         current_cursor = self.text_edit.textCursor()
         
-        # 如果当前有选区（用户正在拖选），不要执行格式化
-        # 因为格式化操作可能会影响选区内容，导致图片等特殊字符丢失
+        # 如果有选区，不执行格式化（避免影响选区内容）
         if current_cursor.hasSelection():
             return
         
         current_block = current_cursor.block()
         current_block_number = current_block.blockNumber()
         
-        # 获取第一个文本块（第一行）
+        # 获取并验证第一行
         first_block = document.firstBlock()
         if not first_block.isValid():
             return
         
-        # 只在必要时格式化第一行
-        first_cursor = QTextCursor(first_block)
-        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        # 格式化第一行为标题格式（如果需要）
+        if not self._is_first_line_title_formatted(first_block):
+            self._apply_title_format_to_first_line(first_block)
         
-        # 检查第一行是否已经是标题格式
-        char_fmt = first_cursor.charFormat()
-        current_size = char_fmt.fontPointSize()
-        
-        # 如果第一行不是标题格式（28号字体），则应用格式
-        if current_size != 28:
-            # 获取第一行的文本内容
-            first_line_text = first_block.text()
-            
-            # 设置字符格式
-            new_char_fmt = QTextCharFormat()
-            new_char_fmt.setFontPointSize(28)
-            new_char_fmt.setFontWeight(QFont.Weight.Bold)
-            
-            # 如果第一行为空或只有零宽度空格，不要重新插入，直接设置当前输入格式即可
-            if first_line_text == "" or first_line_text == "\u200B":
-                # 不做任何操作，让后面的代码设置当前输入格式
-                pass
-            else:
-                # 应用格式到第一行已有文本
-                # 阻止信号，避免递归
-                self.text_edit.blockSignals(True)
-                first_cursor.mergeCharFormat(new_char_fmt)
-                # 恢复信号
-                self.text_edit.blockSignals(False)
-        
-        # 根据光标所在行设置当前输入格式
+        # 根据光标位置设置当前输入格式
         if current_block_number == 0:
-            # 光标在第一行（标题），设置标题格式为当前输入格式
-            # 获取当前光标的字符格式，保留其他属性
-            current_fmt = self.text_edit.currentCharFormat()
-            current_fmt.setFontPointSize(28)
-            current_fmt.setFontWeight(QFont.Weight.Bold)
-            self.text_edit.setCurrentCharFormat(current_fmt)
+            self._set_title_input_format()
         else:
-            # 光标在第二行或之后（正文），设置正文格式为当前输入格式
-            body_fmt = QTextCharFormat()
-            body_fmt.setFontPointSize(14)
-            body_fmt.setFontWeight(QFont.Weight.Normal)
-            
-            # 如果当前行为空，插入一个零宽度空格，让光标有正确的格式依附
-            if current_block.text() == "":
-                self.text_edit.blockSignals(True)
-                current_cursor.setCharFormat(body_fmt)
-                current_cursor.insertText("\u200B")  # 零宽度空格
-                # 将光标移回零宽度空格之后
-                current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-                self.text_edit.setTextCursor(current_cursor)
-                self.text_edit.blockSignals(False)
-            
-            self.text_edit.setCurrentCharFormat(body_fmt)
+            self._set_body_input_format(current_cursor, current_block)
     
     # 格式化方法
     def apply_heading(self, level):
