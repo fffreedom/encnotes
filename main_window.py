@@ -4237,84 +4237,136 @@ class MainWindow(QMainWindow):
         self._last_folder_click_type = item_type
 
         
-    def on_note_selected(self, current, previous):
-        """笔记选中事件"""
+    def _update_item_widget_selection(self, item, selected: bool):
+        """更新列表项widget的选中状态
         
-        # 让选中背景由条目widget自身绘制（避免QListWidget默认选中背景出现上下错位）
-        def _set_item_widget_selected(item, selected: bool):
-            if not item:
-                return
-            w = self.note_list.itemWidget(item)
-            if not w:
-                return
-
-            # itemWidget 现在就是 `note_item_widget` 本身
-            if w.objectName() != "note_item_widget":
-                return
-
-            w.setProperty("selected", selected)
-            # 触发QSS重新应用
-            w.style().unpolish(w)
-            w.style().polish(w)
-            w.update()
-
-        if previous:
-            _set_item_widget_selected(previous, False)
-            # 保存之前的笔记
-            prev_note_id = self.current_note_id
-            self.save_current_note()
-
-            # 切换笔记时：清理“已删除但可撤销”的附件（此时用户已离开该笔记）
-            try:
-                if prev_note_id and getattr(self.note_manager, 'attachment_manager', None):
-                    self.note_manager.attachment_manager.cleanup_note_attachment_trash(prev_note_id)
-            except Exception:
-                pass
-            
+        让选中背景由条目widget自身绘制（避免QListWidget默认选中背景出现上下错位）
+        
+        Args:
+            item: QListWidgetItem 列表项
+            selected: bool 是否选中
+        """
+        if not item:
+            return
+        
+        widget = self.note_list.itemWidget(item)
+        if not widget or widget.objectName() != "note_item_widget":
+            return
+        
+        widget.setProperty("selected", selected)
+        # 触发QSS重新应用
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget.update()
+    
+    def _handle_previous_note_cleanup(self, previous_item):
+        """处理之前笔记的清理工作
+        
+        Args:
+            previous_item: QListWidgetItem 之前选中的列表项
+        """
+        if not previous_item:
+            return
+        
+        # 取消之前项的选中状态
+        self._update_item_widget_selection(previous_item, False)
+        
+        # 保存之前的笔记
+        prev_note_id = self.current_note_id
+        self.save_current_note()
+        
+        # 切换笔记时：清理"已删除但可撤销"的附件（此时用户已离开该笔记）
+        self._cleanup_note_attachment_trash(prev_note_id)
+    
+    def _cleanup_note_attachment_trash(self, note_id):
+        """清理笔记的附件垃圾
+        
+        Args:
+            note_id: str 笔记ID
+        """
+        try:
+            if note_id and getattr(self.note_manager, 'attachment_manager', None):
+                self.note_manager.attachment_manager.cleanup_note_attachment_trash(note_id)
+        except Exception:
+            pass
+    
+    def _set_editor_cursor_to_title_end(self):
+        """将编辑器光标移动到标题末尾，并设置标题格式"""
+        from PyQt6.QtGui import QTextCursor, QFont, QTextCharFormat
+        
+        cursor = self.editor.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)  # 移动到文档开始
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)  # 移动到第一行末尾
+        
+        # 设置光标的字符格式，使光标的视觉高度正确
+        title_fmt = QTextCharFormat()
+        title_fmt.setFontPointSize(28)
+        title_fmt.setFontWeight(QFont.Weight.Bold)
+        cursor.setCharFormat(title_fmt)
+        
+        # 应用光标并设置焦点
+        self.editor.text_edit.setTextCursor(cursor)
+        self.editor.text_edit.setFocus()
+    
+    def _load_and_display_note(self, note_id):
+        """加载并显示笔记内容
+        
+        Args:
+            note_id: str 笔记ID
+        """
+        note = self.note_manager.get_note(note_id)
+        if not note:
+            return
+        
+        # 加载笔记内容（阻止信号避免触发自动保存）
+        self.editor.blockSignals(True)
+        self.editor.setHtml(note['content'])
+        self.editor.blockSignals(False)
+        
+        # 手动调用 auto_format_first_line 确保第一行格式正确
+        # 因为 blockSignals 阻止了 textChanged 信号，所以需要手动调用
+        self.editor.auto_format_first_line()
+        
+        # 设置光标到标题末尾
+        self._set_editor_cursor_to_title_end()
+    
+    def _clear_editor(self):
+        """清空编辑器"""
+        self.current_note_id = None
+        self.editor.current_note_id = None
+        self.editor.clear()
+        try:
+            self.editor.text_edit.clearFocus()
+        except Exception:
+            pass
+    
+    def on_note_selected(self, current, previous):
+        """笔记选中事件
+        
+        Args:
+            current: QListWidgetItem 当前选中的列表项
+            previous: QListWidgetItem 之前选中的列表项
+        """
+        # 1. 处理之前笔记的清理工作
+        self._handle_previous_note_cleanup(previous)
+        
+        # 2. 处理当前选中的笔记
         if current:
-            _set_item_widget_selected(current, True)
+            # 更新选中状态
+            self._update_item_widget_selection(current, True)
+            
+            # 设置当前笔记ID
             note_id = current.data(Qt.ItemDataRole.UserRole)
             self.current_note_id = note_id
-            self.editor.current_note_id = note_id  # 设置编辑器的当前笔记ID
-            note = self.note_manager.get_note(note_id)
+            self.editor.current_note_id = note_id
             
-            if note:
-                self.editor.blockSignals(True)
-                self.editor.setHtml(note['content'])
-                self.editor.blockSignals(False)
-                
-                # 手动调用 auto_format_first_line 确保第一行格式正确
-                # 因为 blockSignals 阻止了 textChanged 信号，所以需要手动调用
-                self.editor.auto_format_first_line()
-                
-                # 将光标移动到第一行（标题）的末尾，并设置标题格式
-                from PyQt6.QtGui import QTextCursor, QFont, QTextCharFormat
-                cursor = self.editor.text_edit.textCursor()
-                cursor.movePosition(QTextCursor.MoveOperation.Start)  # 移动到文档开始
-                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)  # 移动到第一行末尾
-                
-                # 在应用光标之前，先设置光标的字符格式
-                # 这样光标的视觉高度就会正确
-                title_fmt = QTextCharFormat()
-                title_fmt.setFontPointSize(28)
-                title_fmt.setFontWeight(QFont.Weight.Bold)
-                cursor.setCharFormat(title_fmt)
-                
-                # 应用光标
-                self.editor.text_edit.setTextCursor(cursor)
-                
-                # 设置焦点到编辑器，让光标闪烁
-                self.editor.text_edit.setFocus()
+            # 加载并显示笔记
+            self._load_and_display_note(note_id)
         else:
-            self.current_note_id = None
-            self.editor.current_note_id = None
-            self.editor.clear()
-            try:
-                self.editor.text_edit.clearFocus()
-            except Exception:
-                pass
-
-        # 选中变化后刷新"新建笔记"可用状态
+            # 没有选中任何笔记，清空编辑器
+            self._clear_editor()
+        
+        # 3. 刷新"新建笔记"按钮的可用状态
         self._update_new_note_action_enabled()
 
     def select_single_note(self, row):
