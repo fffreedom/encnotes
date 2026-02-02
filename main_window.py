@@ -4516,96 +4516,192 @@ class MainWindow(QMainWindow):
 
 
             
+    def _normalize_text(self, text):
+        """标准化文本：统一换行符
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            str: 标准化后的文本（使用\n作为换行符）
+        """
+        return (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    
+    def _extract_title_from_content(self, plain_text):
+        """从笔记内容中提取标题
+        
+        规则：
+        - 整条笔记为空（没有任何可见字符）=> 标题使用"新笔记"
+        - 第一行只有零宽度字符（U+200B）=> 标题使用"新笔记"
+        - 正文有内容但第一行为空 => 标题为"无标题"
+        
+        Args:
+            plain_text: 笔记的纯文本内容
+            
+        Returns:
+            str: 提取的标题
+        """
+        normalized_plain = self._normalize_text(plain_text)
+        is_note_empty = normalized_plain.strip() == ""
+
+        if is_note_empty:
+            return "新笔记"
+        
+        first_line = normalized_plain.split("\n")[0][:50]
+        # 移除零宽度字符后检查
+        first_line_cleaned = first_line.replace('\u200B', '').strip()
+        
+        if not first_line_cleaned:
+            # 第一行只有零宽度字符或空白
+            return "新笔记"
+        
+        return first_line.strip() or "无标题"
+    
+    def _extract_preview_text(self, plain_text, title):
+        """从笔记内容中提取预览文本（正文第一行）
+        
+        规则：跳过空行、跳过与标题相同的行
+        
+        Args:
+            plain_text: 笔记的纯文本内容
+            title: 笔记标题
+            
+        Returns:
+            str: 预览文本（最多35个字符）
+        """
+        normalized_plain = self._normalize_text(plain_text)
+        lines = [l.strip() for l in normalized_plain.split("\n") if l.strip()]
+        candidates = lines[1:] if len(lines) >= 2 else []
+
+        preview_text = ""
+        for c in candidates:
+            if not c:
+                continue
+            if title and c == title:
+                continue
+            preview_text = c
+            break
+
+        if len(preview_text) > 35:
+            preview_text = preview_text[:35] + '...'
+        
+        return preview_text
+    
+    def _get_note_time_string(self, note_id):
+        """获取笔记的更新时间字符串
+        
+        Args:
+            note_id: 笔记ID
+            
+        Returns:
+            str: 格式化的时间字符串（YYYY/MM/DD）
+        """
+        from datetime import datetime
+        try:
+            note_obj = self.note_manager.get_note(note_id)
+            updated_at = datetime.fromisoformat(note_obj.get('updated_at')) if note_obj else None
+            return updated_at.strftime('%Y/%m/%d') if updated_at else ''
+        except Exception:
+            return ''
+    
+    def _update_label_text(self, label, text):
+        """更新标签文本（支持 ElidedLabel 和 QLabel）
+        
+        Args:
+            label: 标签控件
+            text: 要设置的文本
+        """
+        if isinstance(label, ElidedLabel):
+            label.setFullText(text)
+            label.setToolTip(text)
+        elif isinstance(label, QLabel):
+            label.setText(text)
+    
+    def _update_note_list_item_title(self, layout, title):
+        """更新笔记列表项的标题
+        
+        Args:
+            layout: 笔记列表项的布局
+            title: 新标题
+        """
+        if layout.count() > 0:
+            title_label = layout.itemAt(0).widget()
+            self._update_label_text(title_label, title)
+    
+    def _update_note_list_item_preview(self, layout, plain_text, title):
+        """更新笔记列表项的预览信息（时间 + 正文第一行）
+        
+        Args:
+            layout: 笔记列表项的布局
+            plain_text: 笔记的纯文本内容
+            title: 笔记标题
+        """
+        try:
+            preview_text = self._extract_preview_text(plain_text, title)
+            time_str = self._get_note_time_string(self.current_note_id)
+            info_text = f"{time_str}    {preview_text}"
+
+            if layout.count() > 1:
+                info_label = layout.itemAt(1).widget()
+                self._update_label_text(info_label, info_text)
+        except Exception:
+            pass
+    
+    def _find_note_list_item_by_id(self, note_id):
+        """根据笔记ID查找列表中对应的item
+        
+        Args:
+            note_id: 笔记ID
+            
+        Returns:
+            tuple: (item, widget, layout) 或 (None, None, None)
+        """
+        for i in range(self.note_list.count()):
+            item = self.note_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == note_id:
+                widget = self.note_list.itemWidget(item)
+                if widget:
+                    layout = widget.layout()
+                    if layout and layout.count() > 0:
+                        return item, widget, layout
+        return None, None, None
+    
+    def _update_note_list_display(self, title, plain_text):
+        """更新笔记列表中的显示（标题和预览）
+        
+        Args:
+            title: 笔记标题
+            plain_text: 笔记的纯文本内容
+        """
+        item, widget, layout = self._find_note_list_item_by_id(self.current_note_id)
+        if layout:
+            # 更新标题
+            self._update_note_list_item_title(layout, title)
+            # 更新预览
+            self._update_note_list_item_preview(layout, plain_text, title)
+    
     def save_current_note(self):
         """保存当前笔记"""
-        if self.current_note_id:
-            content = self.editor.toHtml()
-            plain_text = self.editor.toPlainText()
-            
-            # 从内容中提取标题（第一行）
-            # 规则：
-            # - 整条笔记为空（没有任何可见字符）=> 标题使用"新笔记"（便于继续编辑，也用于"仅允许一个空草稿"判断）
-            # - 第一行只有零宽度字符（U+200B）=> 标题使用"新笔记"
-            # - 正文有内容但第一行为空 => 标题为"无标题"
-            normalized_plain = (plain_text or "").replace("\r\n", "\n").replace("\r", "\n")
-            is_note_empty = normalized_plain.strip() == ""
+        if not self.current_note_id:
+            return
+        
+        # 1. 获取编辑器内容
+        content = self.editor.toHtml()
+        plain_text = self.editor.toPlainText()
+        
+        # 2. 提取标题
+        title = self._extract_title_from_content(plain_text)
+        
+        # 3. 更新笔记到数据库
+        self.note_manager.update_note(
+            self.current_note_id,
+            title=title,
+            content=content
+        )
+        
+        # 4. 更新列表中的显示
+        self._update_note_list_display(title, plain_text)
 
-            if is_note_empty:
-                title = "新笔记"
-            else:
-                first_line = normalized_plain.split("\n")[0][:50]
-                # 移除零宽度字符后检查
-                first_line_cleaned = first_line.replace('\u200B', '').strip()
-                if not first_line_cleaned:
-                    # 第一行只有零宽度字符或空白
-                    title = "新笔记"
-                else:
-                    title = first_line.strip() or "无标题"
-
-            self.note_manager.update_note(
-                self.current_note_id,
-                title=title,
-                content=content
-            )
-            
-            # 更新列表中的标题/预览（根据note_id查找对应的item）
-            for i in range(self.note_list.count()):
-                item = self.note_list.item(i)
-                if item and item.data(Qt.ItemDataRole.UserRole) == self.current_note_id:
-                    widget = self.note_list.itemWidget(item)
-                    if widget:
-                        layout = widget.layout()
-                        if layout and layout.count() > 0:
-                            # 1) 标题（第一行）
-                            title_label = layout.itemAt(0).widget()
-                            if isinstance(title_label, ElidedLabel):
-                                title_label.setFullText(title)
-                                title_label.setToolTip(title)
-                            elif isinstance(title_label, QLabel):
-                                title_label.setText(title)
-
-                            # 2) 预览（第二行：时间 + 正文第一行）
-                            try:
-                                # 从编辑器纯文本提取“正文第一行”（排除标题行）
-                                # 规则与 _add_note_item 保持一致：跳过空行、跳过与标题相同的行。
-                                normalized_plain = (plain_text or "").replace("\r\n", "\n").replace("\r", "\n")
-                                lines = [l.strip() for l in normalized_plain.split("\n") if l.strip()]
-                                candidates = lines[1:] if len(lines) >= 2 else []
-
-                                preview_text = ""
-                                for c in candidates:
-                                    if not c:
-                                        continue
-                                    if title and c == title:
-                                        continue
-                                    preview_text = c
-                                    break
-
-                                if len(preview_text) > 35:
-                                    preview_text = preview_text[:35] + '...'
-
-                                # 更新时间字符串：尽量用 note_manager 里刚写入的 updated_at
-                                from datetime import datetime
-                                try:
-                                    note_obj = self.note_manager.get_note(self.current_note_id)
-                                    updated_at = datetime.fromisoformat(note_obj.get('updated_at')) if note_obj else None
-                                    time_str = updated_at.strftime('%Y/%m/%d') if updated_at else ''
-                                except Exception:
-                                    time_str = ''
-
-                                info_text = f"{time_str}    {preview_text}"
-
-                                if layout.count() > 1:
-                                    info_label = layout.itemAt(1).widget()
-                                    if isinstance(info_label, ElidedLabel):
-                                        info_label.setFullText(info_text)
-                                        info_label.setToolTip(info_text)
-                                    elif isinstance(info_label, QLabel):
-                                        info_label.setText(info_text)
-                            except Exception:
-                                pass
-                    break
-                
     def insert_image(self):
         """插入图片"""
         if not self.current_note_id:
