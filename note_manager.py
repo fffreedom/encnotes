@@ -70,6 +70,7 @@ class NoteManager:
                 ZISFAVORITE INTEGER DEFAULT 0,
                 ZISDELETED INTEGER DEFAULT 0,
                 ZISPINNED INTEGER DEFAULT 0,
+                ZCURSORPOSITION INTEGER DEFAULT 0,
                 ZCKRECORDID TEXT,
                 ZCKRECORDCHANGETAG TEXT,
                 ZCKRECORDSYSTEMFIELDS BLOB,
@@ -194,6 +195,21 @@ class NoteManager:
         except Exception as e:
             print(f"数据库迁移警告: {e}")
         
+        # 数据库迁移：为现有数据库添加ZCURSORPOSITION字段
+        try:
+            # 检查ZNOTE表是否已有ZCURSORPOSITION字段
+            cursor.execute("PRAGMA table_info(ZNOTE)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'ZCURSORPOSITION' not in columns:
+                # 添加ZCURSORPOSITION字段
+                cursor.execute('''
+                    ALTER TABLE ZNOTE ADD COLUMN ZCURSORPOSITION INTEGER DEFAULT 0
+                ''')
+                print("数据库迁移：已添加ZCURSORPOSITION字段")
+        except Exception as e:
+            print(f"数据库迁移警告: {e}")
+        
         self.conn.commit()
         
     def _timestamp_to_cocoa(self, dt: datetime) -> float:
@@ -244,8 +260,15 @@ class NoteManager:
         return None
         
     def update_note(self, note_id: str, title: Optional[str] = None, 
-                   content: Optional[str] = None):
-        """更新笔记"""
+                   content: Optional[str] = None, cursor_position: Optional[int] = None):
+        """更新笔记
+        
+        Args:
+            note_id: 笔记ID
+            title: 标题（可选）
+            content: 内容（可选）
+            cursor_position: 光标位置（可选）
+        """
         cursor = self.conn.cursor()
         
         # 获取当前笔记
@@ -265,6 +288,11 @@ class NoteManager:
             cursor.execute('''
                 UPDATE ZNOTE SET ZCONTENT = ? WHERE ZIDENTIFIER = ?
             ''', (encrypted_content, note_id))
+        
+        if cursor_position is not None:
+            cursor.execute('''
+                UPDATE ZNOTE SET ZCURSORPOSITION = ? WHERE ZIDENTIFIER = ?
+            ''', (cursor_position, note_id))
             
         # 更新修改时间
         cocoa_time = self._timestamp_to_cocoa(datetime.now())

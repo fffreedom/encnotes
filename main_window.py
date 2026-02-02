@@ -755,91 +755,201 @@ class NoteListWidget(QListWidget):
 
         painter.end()
 
-    def mousePressEvent(self, event):
-        """处理鼠标按下事件，支持多选"""
-        # 获取点击的item
-        item = self.itemAt(event.pos())
+    def _is_valid_selectable_item(self, item):
+        """验证item是否有效且可选中
+        
+        Args:
+            item: QListWidgetItem 列表项
+            
+        Returns:
+            bool: 是否有效且可选中
+        """
         if not item:
+            return False
+        return bool(item.flags() & Qt.ItemFlag.ItemIsSelectable)
+    
+    def _is_command_or_ctrl_pressed(self, modifiers):
+        """判断是否按下了 Command 或 Ctrl 键
+        
+        Args:
+            modifiers: Qt.KeyboardModifier 键盘修饰符
+            
+        Returns:
+            bool: 是否按下了 Command 或 Ctrl 键
+        """
+        return bool(modifiers & Qt.KeyboardModifier.ControlModifier or 
+                   modifiers & Qt.KeyboardModifier.MetaModifier)
+    
+    def _handle_command_click(self, clicked_row):
+        """处理 Command/Ctrl 键点击（跳选：添加/移除单个项）
+        
+        Args:
+            clicked_row: int 点击的行号
+        """
+        if self.main_window:
+            self.main_window.toggle_note_selection(clicked_row)
+        self.last_selected_row = clicked_row
+    
+    def _handle_shift_click(self, clicked_row):
+        """处理 Shift 键点击（范围选择）
+        
+        Args:
+            clicked_row: int 点击的行号
+        """
+        if self.main_window and self.last_selected_row is not None:
+            self.main_window.select_note_range(self.last_selected_row, clicked_row)
+    
+    def _is_item_in_multi_select(self, clicked_row):
+        """判断点击的item是否在多选集合中
+        
+        Args:
+            clicked_row: int 点击的行号
+            
+        Returns:
+            bool: 是否在多选集合中
+        """
+        if not self.main_window:
+            return False
+        return clicked_row in self.main_window.selected_note_rows
+    
+    def _keep_multi_select_for_drag(self, clicked_row, event_pos):
+        """保持多选状态用于拖动
+        
+        Args:
+            clicked_row: int 点击的行号
+            event_pos: QPoint 点击位置
+        """
+        # 记录点击信息，用于在mouseReleaseEvent中判断是否发生了拖动
+        self.press_pos = event_pos
+        self.press_row = clicked_row
+        self.was_in_multi_select = len(self.main_window.selected_note_rows) > 1
+        
+        # 保持多选状态，但需要设置currentItem以支持拖动
+        self.blockSignals(True)
+        self.setCurrentRow(clicked_row)
+        self.blockSignals(False)
+        
+        # 强制刷新视觉选中状态，确保所有选中项都正确显示
+        self.main_window._update_visual_selection()
+    
+    def _handle_normal_click(self, clicked_row, event_pos):
+        """处理普通点击（单选或保持多选用于拖动）
+        
+        Args:
+            clicked_row: int 点击的行号
+            event_pos: QPoint 点击位置
+        """
+        if not self.main_window:
+            return
+        
+        # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动）
+        if self._is_item_in_multi_select(clicked_row):
+            self._keep_multi_select_for_drag(clicked_row, event_pos)
+        else:
+            # 点击的是未选中的笔记，执行单选
+            self.main_window.select_single_note(clicked_row)
+        
+        self.last_selected_row = clicked_row
+    
+    def mousePressEvent(self, event):
+        """处理鼠标按下事件，支持多选
+        
+        Args:
+            event: QMouseEvent 鼠标事件
+        """
+        # 1. 获取并验证点击的item
+        item = self.itemAt(event.pos())
+        if not self._is_valid_selectable_item(item):
             super().mousePressEvent(event)
             return
         
-        # 检查是否是可选中的笔记项（排除分组标题等）
-        if not (item.flags() & Qt.ItemFlag.ItemIsSelectable):
-            super().mousePressEvent(event)
-            return
-        
-        clicked_row = self.row(item)
-        modifiers = event.modifiers()
-        
-        # 只处理左键点击的多选逻辑，右键用于显示菜单
+        # 2. 只处理左键点击，右键用于显示菜单
         if event.button() != Qt.MouseButton.LeftButton:
             # 不调用super()，直接返回，让Qt的事件系统继续传递到contextMenuEvent
             return
         
-        # Command键：跳选（添加/移除单个项）
-        if modifiers & Qt.KeyboardModifier.ControlModifier or modifiers & Qt.KeyboardModifier.MetaModifier:
-            if self.main_window:
-                self.main_window.toggle_note_selection(clicked_row)
-            self.last_selected_row = clicked_row
-            # 不要return，继续调用super()以支持拖动
+        # 3. 获取点击信息
+        clicked_row = self.row(item)
+        modifiers = event.modifiers()
         
-        # Shift键：范围选择
+        # 4. 根据修饰键处理不同的点击逻辑
+        if self._is_command_or_ctrl_pressed(modifiers):
+            # Command/Ctrl键：跳选（添加/移除单个项）
+            self._handle_command_click(clicked_row)
         elif modifiers & Qt.KeyboardModifier.ShiftModifier:
-            if self.main_window and self.last_selected_row is not None:
-                self.main_window.select_note_range(self.last_selected_row, clicked_row)
-            # 不要return，继续调用super()以支持拖动
-        
-        # 普通点击：单选或保持多选（用于拖动）
+            # Shift键：范围选择
+            self._handle_shift_click(clicked_row)
         else:
-            if self.main_window:
-                # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动）
-                if clicked_row in self.main_window.selected_note_rows:
-                    # 记录点击信息，用于在mouseReleaseEvent中判断是否发生了拖动
-                    self.press_pos = event.pos()
-                    self.press_row = clicked_row
-                    self.was_in_multi_select = len(self.main_window.selected_note_rows) > 1
-                    
-                    # 保持多选状态，但需要设置currentItem以支持拖动
-                    self.blockSignals(True)
-                    self.setCurrentRow(clicked_row)
-                    self.blockSignals(False)
-                    # 强制刷新视觉选中状态，确保所有选中项都正确显示
-                    self.main_window._update_visual_selection()
-                else:
-                    # 点击的是未选中的笔记，执行单选
-                    self.main_window.select_single_note(clicked_row)
-            self.last_selected_row = clicked_row
+            # 普通点击：单选或保持多选（用于拖动）
+            self._handle_normal_click(clicked_row, event.pos())
         
-        # 调用父类方法以支持拖动功能
+        # 5. 调用父类方法以支持拖动功能
         super().mousePressEvent(event)
 
-    def mouseReleaseEvent(self, event):
-        """处理鼠标释放事件，如果是点击而非拖动，则取消多选状态"""
-        # 日志：记录鼠标释放事件
-        button_name = "Left" if event.button() == Qt.MouseButton.LeftButton else "Right" if event.button() == Qt.MouseButton.RightButton else "Other"
-        print(f"[mouseReleaseEvent] Button: {button_name}, press_pos: {self.press_pos}, was_in_multi_select: {self.was_in_multi_select}")
+    def _log_mouse_release(self, event):
+        """记录鼠标释放事件的调试日志
         
-        # 只处理左键释放事件，右键用于显示菜单，不应该影响选中状态
-        if event.button() == Qt.MouseButton.LeftButton:
-            # 检查是否记录了按下位置（说明是在多选状态下点击的）
-            if self.press_pos is not None and self.was_in_multi_select:
-                # 计算鼠标移动距离
-                move_distance = (event.pos() - self.press_pos).manhattanLength()
-                print(f"[mouseReleaseEvent] Move distance: {move_distance}")
-                
-                # 如果移动距离很小（小于5像素），认为是点击而非拖动
-                if move_distance < 5:
-                    # 取消多选状态，只选中当前点击的笔记
-                    if self.main_window and self.press_row is not None:
-                        print(f"[mouseReleaseEvent] Canceling multi-select, selecting single note: {self.press_row}")
-                        self.main_window.select_single_note(self.press_row)
+        Args:
+            event: QMouseEvent 鼠标事件
+        """
+        button_name = "Left" if event.button() == Qt.MouseButton.LeftButton else \
+                     "Right" if event.button() == Qt.MouseButton.RightButton else "Other"
+        print(f"[mouseReleaseEvent] Button: {button_name}, "
+              f"press_pos: {self.press_pos}, "
+              f"was_in_multi_select: {self.was_in_multi_select}")
+    
+    def _is_click_not_drag(self, release_pos, threshold=5):
+        """判断是点击还是拖动
+        
+        Args:
+            release_pos: QPoint 鼠标释放位置
+            threshold: int 判断阈值（像素），默认5像素
             
-            # 清除记录的点击信息
-            self.press_pos = None
-            self.press_row = None
-            self.was_in_multi_select = False
+        Returns:
+            bool: True表示是点击，False表示是拖动
+        """
+        if self.press_pos is None:
+            return False
         
-        # 调用父类方法
+        move_distance = (release_pos - self.press_pos).manhattanLength()
+        print(f"[mouseReleaseEvent] Move distance: {move_distance}")
+        return move_distance < threshold
+    
+    def _handle_click_in_multi_select(self):
+        """处理多选状态下的点击事件（取消多选，只选中当前笔记）"""
+        if self.main_window and self.press_row is not None:
+            print(f"[mouseReleaseEvent] Canceling multi-select, "
+                  f"selecting single note: {self.press_row}")
+            self.main_window.select_single_note(self.press_row)
+    
+    def _clear_press_info(self):
+        """清除记录的按下信息"""
+        self.press_pos = None
+        self.press_row = None
+        self.was_in_multi_select = False
+    
+    def mouseReleaseEvent(self, event):
+        """处理鼠标释放事件，如果是点击而非拖动，则取消多选状态
+        
+        Args:
+            event: QMouseEvent 鼠标事件
+        """
+        # 1. 记录调试日志
+        self._log_mouse_release(event)
+        
+        # 2. 只处理左键释放事件，右键用于显示菜单，不应该影响选中状态
+        if event.button() == Qt.MouseButton.LeftButton:
+            # 3. 检查是否在多选状态下点击
+            if self.press_pos is not None and self.was_in_multi_select:
+                # 4. 判断是点击还是拖动
+                if self._is_click_not_drag(event.pos()):
+                    # 5. 如果是点击，取消多选状态，只选中当前点击的笔记
+                    self._handle_click_in_multi_select()
+            
+            # 6. 清除记录的点击信息
+            self._clear_press_info()
+        
+        # 7. 调用父类方法
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event):
@@ -4327,8 +4437,27 @@ class MainWindow(QMainWindow):
         # 因为 blockSignals 阻止了 textChanged 信号，所以需要手动调用
         self.editor.auto_format_first_line()
         
-        # 设置光标到标题末尾
-        self._set_editor_cursor_to_title_end()
+        # 恢复光标位置
+        try:
+            cursor_position = note.get('cursor_position', 0)
+            if cursor_position is not None and cursor_position > 0:
+                # 恢复到上次保存的光标位置
+                from PyQt6.QtGui import QTextCursor
+                cursor = self.editor.text_edit.textCursor()
+                # 确保位置不超过文档长度
+                max_position = len(self.editor.text_edit.toPlainText())
+                position = min(int(cursor_position), max_position)
+                cursor.setPosition(position)
+                self.editor.text_edit.setTextCursor(cursor)
+            else:
+                # 如果没有保存的光标位置，设置到标题末尾
+                self._set_editor_cursor_to_title_end()
+        except Exception:
+            # 出错时设置到标题末尾
+            self._set_editor_cursor_to_title_end()
+        
+        # 设置焦点到编辑器
+        self.editor.text_edit.setFocus()
     
     def _clear_editor(self):
         """清空编辑器"""
@@ -4692,14 +4821,22 @@ class MainWindow(QMainWindow):
         # 2. 提取标题
         title = self._extract_title_from_content(plain_text)
         
-        # 3. 更新笔记到数据库
+        # 3. 获取光标位置
+        try:
+            cursor = self.editor.text_edit.textCursor()
+            cursor_position = cursor.position()
+        except Exception:
+            cursor_position = 0
+        
+        # 4. 更新笔记到数据库（包括光标位置）
         self.note_manager.update_note(
             self.current_note_id,
             title=title,
-            content=content
+            content=content,
+            cursor_position=cursor_position
         )
         
-        # 4. 更新列表中的显示
+        # 5. 更新列表中的显示
         self._update_note_list_display(title, plain_text)
 
     def insert_image(self):
