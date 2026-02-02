@@ -1596,9 +1596,13 @@ class PasteImageTextEdit(QTextEdit):
         need_title_format = False
         # 第一行为空行或只有零宽空格或当前字体大小异常（大于0小于1），需要设置标题格式
         if block_text == "" or block_text == "\u200B":
+            # 如果标题行只有零宽空格，删除它，并移动光标到行首
             if block_text == "\u200B":
+                # 选中整个block（整行）
                 cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                # 删除选中的文本
                 cursor.removeSelectedText()
+                # 删除后，光标会被定位到删除位置的起点（这儿是移动光标到行首），所以这儿相当于设置光标到行首位置
                 self.setTextCursor(cursor)
             need_title_format = True
         elif current_size == 0.0 or current_size < 1.0:

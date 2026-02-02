@@ -1885,19 +1885,17 @@ class MainWindow(QMainWindow):
         item.setSizeHint(QSize(200, 47))
 
     
-    def load_notes(self, select_note_id=None):
-        """加载笔记列表
+    def _clear_note_list_widgets(self):
+        """清除笔记列表中的所有自定义widget。
         
-        Args:
-            select_note_id: 要选中的笔记ID，如果为None则选中第一个笔记
+        必须在clear()之前删除所有widget，避免重叠。
         """
         # 清除多选状态
         self.selected_note_rows.clear()
         if hasattr(self, 'note_list') and self.note_list:
             self.note_list.last_selected_row = None
         
-        # 手动删除所有自定义widget，避免重叠
-        # 必须在clear()之前删除所有widget
+        # 手动删除所有自定义widget
         widgets_to_delete = []
         for i in range(self.note_list.count()):
             item = self.note_list.item(i)
@@ -1919,24 +1917,33 @@ class MainWindow(QMainWindow):
         
         # 清空列表
         self.note_list.clear()
+    
+    def _calculate_folder_indices(self):
+        """计算文件夹列表中各个区域的行索引。
         
-        # 根据当前选中的文件夹/标签加载笔记
-        current_row = self.folder_list.currentRow()
-        
-        # 计算实际的索引（考虑不可选中的标题项）
-        # 索引布局：
-        # 0: iCloud标题（不可选）
-        # 1: 所有笔记
-        # 2~(2+n-1): 自定义文件夹
-        # (2+n): 最近删除
-        # (2+n+1): 标签标题（不可选）
-        # (2+n+2)~: 标签
-        
+        Returns:
+            tuple: (deleted_row, tag_header_row, first_tag_row)
+                - deleted_row: "最近删除"的行索引
+                - tag_header_row: "标签"标题的行索引
+                - first_tag_row: 第一个标签的行索引
+        """
         folder_count = len(self.custom_folders)
         deleted_row = 2 + folder_count
         tag_header_row = deleted_row + 1
         first_tag_row = tag_header_row + 1
+        return deleted_row, tag_header_row, first_tag_row
+    
+    def _load_notes_by_current_selection(self, current_row, deleted_row, first_tag_row):
+        """根据当前选中的文件夹/标签加载笔记。
         
+        Args:
+            current_row: 当前选中的行索引
+            deleted_row: "最近删除"的行索引
+            first_tag_row: 第一个标签的行索引
+            
+        Returns:
+            list: 笔记列表
+        """
         if current_row == 1:  # 所有笔记
             notes = self.note_manager.get_all_notes()
             self.current_folder_id = None
@@ -1948,47 +1955,82 @@ class MainWindow(QMainWindow):
             self.current_tag_id = None
             self.is_viewing_deleted = True
         elif 2 <= current_row < deleted_row:  # 自定义文件夹
-            folder_index = current_row - 2
-            if 0 <= folder_index < len(self.custom_folders):
-                folder_id = self.custom_folders[folder_index]['id']
-                notes = self.note_manager.get_notes_by_folder(folder_id)
-                self.current_folder_id = folder_id
-                self.current_tag_id = None
-                self.is_viewing_deleted = False
-            else:
-                notes = []
+            notes = self._load_notes_from_folder(current_row)
         elif current_row >= first_tag_row:  # 标签
-            tag_index = current_row - first_tag_row
-            if 0 <= tag_index < len(self.tags):
-                tag = self.tags[tag_index]
-                tag_id = tag['id']
-
-                # 空标签名：允许选中/重命名，但不让右侧编辑器进入可编辑态（不显示光标）
-                tag_name = str(tag.get('name', '') or '').strip()
-                if not tag_name:
-                    notes = []
-                    # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
-                    self.current_tag_id = tag_id
-                    self.is_viewing_deleted = False
-
-                    self.current_note_id = None
-                    self.editor.current_note_id = None
-                    self.editor.clear()
-                    try:
-                        self.editor.text_edit.clearFocus()
-                    except Exception:
-                        pass
-                else:
-                    notes = self.note_manager.get_notes_by_tag(tag_id)
-                    # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
-                    self.current_tag_id = tag_id
-                    self.is_viewing_deleted = False
-            else:
-                notes = []
+            notes = self._load_notes_from_tag(current_row, first_tag_row)
         else:
             notes = []
         
-        # 将笔记分为置顶和普通笔记
+        return notes
+    
+    def _load_notes_from_folder(self, current_row):
+        """从自定义文件夹加载笔记。
+        
+        Args:
+            current_row: 当前选中的行索引
+            
+        Returns:
+            list: 笔记列表
+        """
+        folder_index = current_row - 2
+        if 0 <= folder_index < len(self.custom_folders):
+            folder_id = self.custom_folders[folder_index]['id']
+            notes = self.note_manager.get_notes_by_folder(folder_id)
+            self.current_folder_id = folder_id
+            self.current_tag_id = None
+            self.is_viewing_deleted = False
+        else:
+            notes = []
+        return notes
+    
+    def _load_notes_from_tag(self, current_row, first_tag_row):
+        """从标签加载笔记。
+        
+        Args:
+            current_row: 当前选中的行索引
+            first_tag_row: 第一个标签的行索引
+            
+        Returns:
+            list: 笔记列表
+        """
+        tag_index = current_row - first_tag_row
+        if 0 <= tag_index < len(self.tags):
+            tag = self.tags[tag_index]
+            tag_id = tag['id']
+
+            # 空标签名：允许选中/重命名，但不让右侧编辑器进入可编辑态（不显示光标）
+            tag_name = str(tag.get('name', '') or '').strip()
+            if not tag_name:
+                notes = []
+                # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
+                self.current_tag_id = tag_id
+                self.is_viewing_deleted = False
+
+                self.current_note_id = None
+                self.editor.current_note_id = None
+                self.editor.clear()
+                try:
+                    self.editor.text_edit.clearFocus()
+                except Exception:
+                    pass
+            else:
+                notes = self.note_manager.get_notes_by_tag(tag_id)
+                # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
+                self.current_tag_id = tag_id
+                self.is_viewing_deleted = False
+        else:
+            notes = []
+        return notes
+    
+    def _categorize_notes(self, notes):
+        """将笔记分为置顶和普通笔记。
+        
+        Args:
+            notes: 笔记列表
+            
+        Returns:
+            tuple: (pinned_notes, normal_notes)
+        """
         pinned_notes = []
         normal_notes = []
         
@@ -1998,7 +2040,17 @@ class MainWindow(QMainWindow):
             else:
                 normal_notes.append(note)
         
-        # 按时间分组普通笔记
+        return pinned_notes, normal_notes
+    
+    def _group_notes_by_time(self, normal_notes):
+        """按时间分组普通笔记。
+        
+        Args:
+            normal_notes: 普通笔记列表
+            
+        Returns:
+            dict: 时间分组字典，key为分组名称，value为笔记列表
+        """
         time_groups = {}
         for note in normal_notes:
             group_name = self._get_time_group(note['created_at'])
@@ -2006,7 +2058,17 @@ class MainWindow(QMainWindow):
                 time_groups[group_name] = []
             time_groups[group_name].append(note)
         
-        # 定义分组顺序
+        return time_groups
+    
+    def _get_group_order(self, time_groups):
+        """获取时间分组的显示顺序。
+        
+        Args:
+            time_groups: 时间分组字典
+            
+        Returns:
+            list: 分组名称的有序列表
+        """
         group_order = ["今天", "昨天", "过去一周", "过去30天"]
         
         # 添加年份分组（按年份降序）
@@ -2017,22 +2079,37 @@ class MainWindow(QMainWindow):
         if "其他" in time_groups:
             group_order.append("其他")
         
-        # 显示置顶笔记
-        if pinned_notes:
-            self._add_group_header("置顶")
-            for idx, note in enumerate(pinned_notes):
-                self._add_note_item(note)
-
-                # 分组的第一条笔记：关闭其“顶部线”，避免与分组标题下面的分隔线重复
-                if idx == 0:
-                    try:
-                        it = self.note_list.item(self.note_list.count() - 1)
-                        if it and (it.flags() & Qt.ItemFlag.ItemIsSelectable):
-                            it.setData(Qt.ItemDataRole.UserRole + 1, False)
-                    except Exception:
-                        pass
+        return group_order
+    
+    def _display_pinned_notes(self, pinned_notes):
+        """显示置顶笔记。
         
-        # 显示按时间分组的普通笔记
+        Args:
+            pinned_notes: 置顶笔记列表
+        """
+        if not pinned_notes:
+            return
+        
+        self._add_group_header("置顶")
+        for idx, note in enumerate(pinned_notes):
+            self._add_note_item(note)
+
+            # 分组的第一条笔记：关闭其"顶部线"，避免与分组标题下面的分隔线重复
+            if idx == 0:
+                try:
+                    it = self.note_list.item(self.note_list.count() - 1)
+                    if it and (it.flags() & Qt.ItemFlag.ItemIsSelectable):
+                        it.setData(Qt.ItemDataRole.UserRole + 1, False)
+                except Exception:
+                    pass
+    
+    def _display_grouped_notes(self, time_groups, group_order):
+        """显示按时间分组的普通笔记。
+        
+        Args:
+            time_groups: 时间分组字典
+            group_order: 分组名称的有序列表
+        """
         for group_name in group_order:
             if group_name in time_groups and time_groups[group_name]:
                 group_notes = time_groups[group_name]
@@ -2040,7 +2117,7 @@ class MainWindow(QMainWindow):
                 for idx, note in enumerate(group_notes):
                     self._add_note_item(note)
 
-                    # 分组的第一条笔记：关闭其“顶部线”，避免与分组标题下面的分隔线重复
+                    # 分组的第一条笔记：关闭其"顶部线"，避免与分组标题下面的分隔线重复
                     if idx == 0:
                         try:
                             it = self.note_list.item(self.note_list.count() - 1)
@@ -2048,49 +2125,90 @@ class MainWindow(QMainWindow):
                                 it.setData(Qt.ItemDataRole.UserRole + 1, False)
                         except Exception:
                             pass
-
+    
+    def _select_or_default_note_in_list(self, select_note_id):
+        """在笔记列表中选中指定的笔记或第一个笔记。
         
-        if notes:
-            # 现在分隔线画在 item 的顶部边缘，因此“最后一条笔记”也应该保留顶部线（无需关闭）。
-            pass
-
-            # 触发重绘（应用分隔线状态变化）
-            self.note_list.viewport().update()
-
-            
-            # 如果指定了要选中的笔记ID，尝试选中它
-            note_selected = False
-            if select_note_id:
-                for i in range(self.note_list.count()):
-                    item = self.note_list.item(i)
-                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
-                        if item.data(Qt.ItemDataRole.UserRole) == select_note_id:
-                            self.note_list.setCurrentRow(i)
-                            self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
-                            self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
-                            note_selected = True
-                            break
-            
-            # 如果没有指定笔记ID或指定的笔记不存在，选中第一个可选中的笔记项
-            if not note_selected:
-                for i in range(self.note_list.count()):
-                    item = self.note_list.item(i)
-                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+        Args:
+            select_note_id: 要选中的笔记ID，如果为None则选中第一个笔记
+        """
+        # 现在分隔线画在 item 的顶部边缘，因此"最后一条笔记"也应该保留顶部线（无需关闭）。
+        # 触发重绘（应用分隔线状态变化）
+        self.note_list.viewport().update()
+        
+        # 如果指定了要选中的笔记ID，尝试选中它
+        note_selected = False
+        if select_note_id:
+            for i in range(self.note_list.count()):
+                item = self.note_list.item(i)
+                if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                    if item.data(Qt.ItemDataRole.UserRole) == select_note_id:
                         self.note_list.setCurrentRow(i)
                         self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
                         self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
+                        note_selected = True
                         break
+        
+        # 如果没有指定笔记ID或指定的笔记不存在，选中第一个可选中的笔记项
+        if not note_selected:
+            for i in range(self.note_list.count()):
+                item = self.note_list.item(i)
+                if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                    self.note_list.setCurrentRow(i)
+                    self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
+                    self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
+                    break
+    
+    def _clear_editor_for_empty_list(self):
+        """当笔记列表为空时，清空编辑器并设置为不可编辑状态。"""
+        self.current_note_id = None
+        self.editor.current_note_id = None
+        self.editor.clear()
+        try:
+            self.editor.text_edit.clearFocus()
+        except Exception:
+            pass
+    
+    def load_notes(self, select_note_id=None):
+        """加载笔记列表。
+        
+        主函数协调整个加载流程：
+        1. 清除widget和多选状态
+        2. 根据选中的文件夹/标签加载笔记
+        3. 分类和分组笔记
+        4. 显示笔记
+        5. 选中指定笔记
+        6. 更新菜单状态
+        
+        Args:
+            select_note_id: 要选中的笔记ID，如果为None则选中第一个笔记
+        """
+        # 1. 清除widget和多选状态
+        self._clear_note_list_widgets()
+        
+        # 2. 根据当前选中的文件夹/标签加载笔记
+        current_row = self.folder_list.currentRow()
+        deleted_row, tag_header_row, first_tag_row = self._calculate_folder_indices()
+        notes = self._load_notes_by_current_selection(current_row, deleted_row, first_tag_row)
+        
+        # 3. 将笔记分为置顶和普通笔记
+        pinned_notes, normal_notes = self._categorize_notes(notes)
+        
+        # 4. 按时间分组普通笔记
+        time_groups = self._group_notes_by_time(normal_notes)
+        group_order = self._get_group_order(time_groups)
+        
+        # 5. 显示置顶笔记和分组的普通笔记
+        self._display_pinned_notes(pinned_notes)
+        self._display_grouped_notes(time_groups, group_order)
+        
+        # 6. 选中指定的笔记或第一个笔记
+        if notes:
+            self._select_or_default_note_in_list(select_note_id)
         else:
-            # 空列表：保持编辑器“不可编辑/无光标闪烁”的观感
-            self.current_note_id = None
-            self.editor.current_note_id = None
-            self.editor.clear()
-            try:
-                self.editor.text_edit.clearFocus()
-            except Exception:
-                pass
-
-        # 根据当前文件夹是否已有“空的新笔记草稿”刷新菜单可用状态
+            self._clear_editor_for_empty_list()
+        
+        # 7. 更新新建笔记菜单的可用状态
         self._update_new_note_action_enabled()
 
     
