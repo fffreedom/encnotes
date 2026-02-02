@@ -4514,7 +4514,7 @@ class MainWindow(QMainWindow):
             if self.current_note_id:
                 self.save_current_note()
             
-            # 阻止信号，避免触发on_note_selected
+            # 阻止信号，避免触发on_note_selected，如果不阻塞，此操作会触发currentItemChanged 信号，导致调用on_note_selected
             self.note_list.blockSignals(True)
             self.note_list.setCurrentItem(item)
             self.note_list.blockSignals(False)
@@ -4523,25 +4523,7 @@ class MainWindow(QMainWindow):
             note_id = item.data(Qt.ItemDataRole.UserRole)
             self.current_note_id = note_id
             self.editor.current_note_id = note_id
-            note = self.note_manager.get_note(note_id)
-            
-            if note:
-                self.editor.blockSignals(True)
-                self.editor.setHtml(note['content'])
-                self.editor.blockSignals(False)
-                
-                # 将光标移动到第一行（标题）的末尾
-                from PyQt6.QtGui import QTextCursor
-                cursor = self.editor.text_edit.textCursor()
-                cursor.movePosition(QTextCursor.MoveOperation.Start)
-                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-                self.editor.text_edit.setTextCursor(cursor)
-                
-                # 设置焦点到编辑器
-                self.editor.text_edit.setFocus()
-            
-            # 刷新"新建笔记"可用状态
-            self._update_new_note_action_enabled()
+            self._load_and_display_note(note_id)
     
     def toggle_note_selection(self, row):
         """切换笔记的选中状态（Command键跳选）"""
