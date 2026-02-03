@@ -971,27 +971,42 @@ class NoteListWidget(QListWidget):
         if not self.main_window:
             return
         
-        # 获取点击位置的笔记
         item = self.itemAt(event.pos())
+        
+        # 点击空白区域：只显示"新建笔记"
         if not item:
-            # 点击在空白区域，只显示"新建笔记"
-            menu = QMenu(self)
-            new_note_action = QAction("新建笔记", self)
-            new_note_action.triggered.connect(lambda: self.main_window.create_note_in_current_folder())
-            if self.main_window.current_folder_id is None or self.main_window.is_viewing_deleted:
-                new_note_action.setEnabled(False)
-            menu.addAction(new_note_action)
-            menu.exec(event.globalPos())
+            self._show_blank_area_menu(event.globalPos())
             return
         
-        clicked_row = self.row(item)
-        note_id = item.data(Qt.ItemDataRole.UserRole)
+        # 处理笔记选择
+        selected_note_ids = self._handle_note_selection(item)
+        if not selected_note_ids:
+            return
+        
+        # 创建并显示完整菜单
+        menu = self._create_note_context_menu(selected_note_ids)
+        menu.exec(event.globalPos())
+    
+    def _show_blank_area_menu(self, global_pos):
+        """显示空白区域的右键菜单（仅包含新建笔记）"""
+        menu = QMenu(self)
+        new_note_action = QAction("新建笔记", self)
+        new_note_action.triggered.connect(lambda: self.main_window.create_note_in_current_folder())
+        
+        # 在"所有笔记"和"最近删除"视图中禁用
+        if self.main_window.current_folder_id is None or self.main_window.is_viewing_deleted:
+            new_note_action.setEnabled(False)
+        
+        menu.addAction(new_note_action)
+        menu.exec(global_pos)
+    
+    def _handle_note_selection(self, clicked_item):
+        """处理笔记选择逻辑，返回选中的笔记ID列表"""
+        clicked_row = self.row(clicked_item)
         
         # 如果点击的笔记不在选中集合中，则只选中当前笔记
         if clicked_row not in self.main_window.selected_note_rows:
             self.main_window.select_single_note(clicked_row)
-        else:
-            pass
         
         # 获取所有选中的笔记ID
         selected_note_ids = []
@@ -1001,74 +1016,103 @@ class NoteListWidget(QListWidget):
                 selected_note_ids.append(item.data(Qt.ItemDataRole.UserRole))
         
         logger.debug(f"[contextMenuEvent] Final selected note IDs: {selected_note_ids}, count: {len(selected_note_ids)}")
-        
-        if not selected_note_ids:
-            return
-        
-        is_single_note = len(selected_note_ids) == 1
-        
-        # 创建右键菜单
+        return selected_note_ids
+    
+    def _create_note_context_menu(self, selected_note_ids):
+        """创建笔记的完整右键菜单"""
         menu = QMenu(self)
         
-        # 1. 新建笔记（在"所有笔记"和"最近删除"视图中禁用）
-        new_note_action = QAction("新建笔记", self)
-        new_note_action.triggered.connect(lambda: self.main_window.create_new_note())
-        if self.main_window.current_folder_id is None or self.main_window.is_viewing_deleted:
-            new_note_action.setEnabled(False)
-        menu.addAction(new_note_action)
-        
+        # 1. 新建笔记
+        self._add_new_note_action(menu)
         menu.addSeparator()
         
-        # 2. 移到文件夹（使用树形结构）
-        move_menu = menu.addMenu("移到")
-        self._populate_move_to_menu(move_menu, selected_note_ids)
-        
+        # 2. 移到文件夹
+        self._add_move_to_menu(menu, selected_note_ids)
         menu.addSeparator()
         
         # 3. 置顶/取消置顶
-        all_pinned = all(self.main_window.note_manager.is_note_pinned(nid) for nid in selected_note_ids)
-        pin_text = "取消置顶" if all_pinned else "置顶"
-        pin_action = QAction(pin_text, self)
-        pin_action.triggered.connect(lambda: self.main_window.batch_toggle_pin_notes(selected_note_ids))
-        menu.addAction(pin_action)
-        
+        self._add_pin_action(menu, selected_note_ids)
         menu.addSeparator()
         
         # 4. 标签
-        tag_menu = menu.addMenu("标签")
-        all_tags = self.main_window.note_manager.get_all_tags()
-        if all_tags:
-            # 获取第一个笔记的标签（用于显示对勾）
-            first_note_tags = self.main_window.note_manager.get_note_tags(selected_note_ids[0])
-            first_note_tag_ids = {t['id'] for t in first_note_tags}
-            
-            for tag in all_tags:
-                tag_id = tag['id']
-                tag_name = tag['name']
-                
-                # 检查是否已添加标签（显示对勾）
-                has_tag = tag_id in first_note_tag_ids
-                display_name = f"✓ {tag_name}" if has_tag else tag_name
-                
-                action = QAction(display_name, self)
-                action.triggered.connect(lambda checked, tid=tag_id, tname=tag_name, has=has_tag: 
-                                       self.main_window.toggle_tag_for_notes(selected_note_ids, tid, tname, has))
-                tag_menu.addAction(action)
-        else:
-            no_tags_action = QAction("(无标签)", self)
-            no_tags_action.setEnabled(False)
-            tag_menu.addAction(no_tags_action)
-        
+        self._add_tag_menu(menu, selected_note_ids)
         menu.addSeparator()
         
         # 5. 删除笔记
-        delete_text = f"删除笔记 ({len(selected_note_ids)}个)" if len(selected_note_ids) > 1 else "删除笔记"
+        self._add_delete_action(menu, selected_note_ids)
+        
+        return menu
+    
+    def _add_new_note_action(self, menu):
+        """添加"新建笔记"菜单项"""
+        new_note_action = QAction("新建笔记", self)
+        new_note_action.triggered.connect(lambda: self.main_window.create_new_note())
+        
+        # 在"所有笔记"和"最近删除"视图中禁用
+        if self.main_window.current_folder_id is None or self.main_window.is_viewing_deleted:
+            new_note_action.setEnabled(False)
+        
+        menu.addAction(new_note_action)
+    
+    def _add_move_to_menu(self, menu, selected_note_ids):
+        """添加"移到"子菜单"""
+        move_menu = menu.addMenu("移到")
+        self._populate_move_to_menu(move_menu, selected_note_ids)
+    
+    def _add_pin_action(self, menu, selected_note_ids):
+        """添加"置顶/取消置顶"菜单项"""
+        all_pinned = all(self.main_window.note_manager.is_note_pinned(nid) for nid in selected_note_ids)
+        pin_text = "取消置顶" if all_pinned else "置顶"
+        
+        pin_action = QAction(pin_text, self)
+        pin_action.triggered.connect(lambda: self.main_window.batch_toggle_pin_notes(selected_note_ids))
+        menu.addAction(pin_action)
+    
+    def _add_tag_menu(self, menu, selected_note_ids):
+        """添加"标签"子菜单"""
+        tag_menu = menu.addMenu("标签")
+        all_tags = self.main_window.note_manager.get_all_tags()
+        
+        if all_tags:
+            self._populate_tag_menu(tag_menu, all_tags, selected_note_ids)
+        else:
+            self._add_no_tags_placeholder(tag_menu)
+    
+    def _populate_tag_menu(self, tag_menu, all_tags, selected_note_ids):
+        """填充标签子菜单的内容"""
+        # 获取第一个笔记的标签（用于显示对勾）
+        first_note_tags = self.main_window.note_manager.get_note_tags(selected_note_ids[0])
+        first_note_tag_ids = {t['id'] for t in first_note_tags}
+        
+        for tag in all_tags:
+            tag_id = tag['id']
+            tag_name = tag['name']
+            has_tag = tag_id in first_note_tag_ids
+            
+            # 显示对勾表示已添加
+            display_name = f"✓ {tag_name}" if has_tag else tag_name
+            
+            action = QAction(display_name, self)
+            action.triggered.connect(
+                lambda checked, tid=tag_id, tname=tag_name, has=has_tag: 
+                    self.main_window.toggle_tag_for_notes(selected_note_ids, tid, tname, has)
+            )
+            tag_menu.addAction(action)
+    
+    def _add_no_tags_placeholder(self, tag_menu):
+        """添加"无标签"占位符"""
+        no_tags_action = QAction("(无标签)", self)
+        no_tags_action.setEnabled(False)
+        tag_menu.addAction(no_tags_action)
+    
+    def _add_delete_action(self, menu, selected_note_ids):
+        """添加"删除笔记"菜单项"""
+        count = len(selected_note_ids)
+        delete_text = f"删除笔记 ({count}个)" if count > 1 else "删除笔记"
+        
         delete_action = QAction(delete_text, self)
         delete_action.triggered.connect(lambda: self.main_window.batch_delete_notes(selected_note_ids))
         menu.addAction(delete_action)
-        
-        # 显示菜单
-        menu.exec(event.globalPos())
     
     def _populate_move_to_menu(self, menu: QMenu, note_ids: list):
         """填充"移到"子菜单：展示所有文件夹（含层级），支持批量移动"""
