@@ -77,7 +77,7 @@ def _selected_char_format(
 
     # 输出选中的字符（调试用）
     selected_char = c0.selectedText()
-    print(f"[DEBUG] 位置 {p} 选中的字符: '{selected_char}' (Unicode: {ord(selected_char) if selected_char else 'N/A'})")
+    # print(f"[DEBUG] 位置 {p} 选中的字符: '{selected_char}' (Unicode: {ord(selected_char) if selected_char else 'N/A'})")
 
     return c0.charFormat()
 
