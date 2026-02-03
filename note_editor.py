@@ -1916,72 +1916,117 @@ class PasteImageTextEdit(QTextEdit):
                 return True
         
         return False
-    
+    # 英文输入法或功能键（Ctrl、Alt、Shift等+具体键）会触发此事件。
+    # 使用功能键+其他键时，此事件触发时只能获取到功能键，+上的那个键值获取不到。
+    # 其他输入法触发inputMethodEvent事件
     def keyPressEvent(self, event):
         """键盘事件 - 使用默认行为，允许删除选区中的所有内容（包括图片）"""
+        key = event.key()
+        key_text = event.text()
+        modifiers = event.modifiers()
+        logger.debug(f"[keyPressEvent] 按键事件触发 - key: {key}, text: '{key_text}', modifiers: {modifiers}")
+        
         # 处理第一行标题格式
         # need_restore_format, saved_format = self._handle_first_line_title_format(event)
         
         # 恢复光标显示并清除表格选中状态
+        logger.debug("[keyPressEvent] 恢复光标显示并清除表格选中状态")
         self._restore_cursor_and_clear_table_selection(event)
         
         # 处理删除键
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            logger.debug(f"[keyPressEvent] 检测到删除键: {'Delete' if key == Qt.Key.Key_Delete else 'Backspace'}")
             current_cursor = self.textCursor()
             
             # 先处理附件删除
+            logger.debug("[keyPressEvent] 检查是否需要删除附件")
             if self._handle_attachment_deletion(event, current_cursor):
+                logger.debug("[keyPressEvent] 附件删除已处理，返回")
                 return
             
             current_table = current_cursor.currentTable()
             
             # 处理已选中表格的删除
+            logger.debug("[keyPressEvent] 检查是否需要删除已选中的表格")
             if self._handle_selected_table_deletion(event, current_table):
+                logger.debug("[keyPressEvent] 已选中表格删除已处理，返回")
                 return
             
             # 处理表格选中（第一次按删除键）
             cursor_pos = current_cursor.position()
+            logger.debug(f"[keyPressEvent] 检查是否需要选中表格 - cursor_pos: {cursor_pos}")
             if self._handle_table_selection(event, cursor_pos):
+                logger.debug("[keyPressEvent] 表格已选中，返回")
                 return
         
         # 使用默认行为
+        logger.debug("[keyPressEvent] 调用父类方法处理按键事件")
         super().keyPressEvent(event)
+        logger.debug("[keyPressEvent] 按键事件处理完成")
         
         # 恢复格式
         # if need_restore_format and saved_format:
         #     self.setCurrentCharFormat(saved_format)
-    
+    # 使用非英文输入法（中文等）时，会触发inputMethodEvent，每次输入一个字母都会触发此事件，
+    # 通过event.preeditString()来获取所有输入的字母，最后确认后（空格或者手动选择）可以通过commitString来获取输入法输入的值
     def inputMethodEvent(self, event):
-        """输入法事件 - 处理中文等输入法输入"""
-        # 获取输入的文本
-        commit_string = event.commitString()
+        """处理输入法事件（如中文输入）
         
-        if commit_string:  # 有实际输入的文本
-            cursor = self.textCursor()
-            block = cursor.block()
-            block_number = block.blockNumber()
-            
-            # 如果在第一行
-            if block_number == 0:
-                # 检查第一行是否为空或只有零宽度空格
-                block_text = block.text()
-                
-                if block_text == "" or block_text == "\u200B":
-                    # 设置标题格式
-                    title_fmt = self.currentCharFormat()
-                    title_fmt.setFontPointSize(28)
-                    title_fmt.setFontWeight(QFont.Weight.Bold)
-                    self.setCurrentCharFormat(title_fmt)
+        输入法输入完成后，会自动触发格式更新，确保标题格式正确。
+        """
+        commit_string = event.commitString()
+        preedit_string = event.preeditString()
+        logger.debug(f"[inputMethodEvent] 输入法事件触发 - commitString: '{commit_string}', preeditString: '{preedit_string}'")
+        
+        # 在输入前预设置标题格式（如果需要）
+        if commit_string and self._should_apply_title_format_before_input():
+            logger.debug("[inputMethodEvent] 需要在输入前预设置标题格式")
+            self._apply_title_format_to_cursor()
+        elif commit_string:
+            logger.debug("[inputMethodEvent] 有提交文本但不需要预设置格式")
         
         # 调用父类方法处理输入法事件
         super().inputMethodEvent(event)
         
-        # 输入完成后，触发格式检查
+        # 输入完成后，触发格式检查和更新
         if commit_string:
-            # 调用父对象（NoteEditor）的 auto_format_first_line 方法
-            parent = self.parent()
-            if parent and hasattr(parent, 'auto_format_first_line'):
-                parent.auto_format_first_line()
+            logger.debug("[inputMethodEvent] 输入完成，触发格式更新")
+            self._trigger_format_update()
+        else:
+            logger.debug("[inputMethodEvent] 无提交文本（预编辑阶段），跳过格式更新")
+    
+    def _should_apply_title_format_before_input(self) -> bool:
+        """判断是否需要在输入前应用标题格式
+        
+        Returns:
+            bool: 如果光标在第一行且该行为空，返回 True
+        """
+        cursor = self.textCursor()
+        block = cursor.block()
+        
+        # 只在第一行且为空时才需要预设置格式
+        if block.blockNumber() != 0:
+            return False
+        
+        block_text = block.text()
+        return block_text == "" or block_text == "\u200B"
+    
+    def _apply_title_format_to_cursor(self):
+        """为当前光标应用标题格式"""
+        title_fmt = self.currentCharFormat()
+        title_fmt.setFontPointSize(28)
+        title_fmt.setFontWeight(QFont.Weight.Bold)
+        self.setCurrentCharFormat(title_fmt)
+    
+    def _trigger_format_update(self):
+        """触发父对象的格式更新
+        
+        调用 NoteEditor 的 update_title_and_input_format 方法，
+        确保第一行格式正确，并根据光标位置设置输入格式。
+        """
+        parent = self.parent()
+        if parent and hasattr(parent, 'update_title_and_input_format'):
+            parent.update_title_and_input_format()
     
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
@@ -2321,7 +2366,7 @@ class NoteEditor(QWidget):
         self.text_edit.setAcceptRichText(True)
         
         # 监听光标位置变化，自动格式化第一行
-        self.text_edit.cursorPositionChanged.connect(self.auto_format_first_line)
+        self.text_edit.cursorPositionChanged.connect(self.update_title_and_input_format)
         
         layout.addWidget(self.text_edit)
         
@@ -2827,7 +2872,7 @@ class NoteEditor(QWidget):
         """应用标题格式到第一行"""
         first_line_text = first_block.text()
         
-        # 如果第一行为空或只有零宽度空格，不需要应用格式
+        # 如果第一行为空或只有零宽度空格，不需要应用格式，只需要后面根据光标位置设置相应的光标格式即可
         if first_line_text in ("", "\u200B"):
             return
         
@@ -2861,9 +2906,15 @@ class NoteEditor(QWidget):
             self.text_edit.blockSignals(False)
         
         self.text_edit.setCurrentCharFormat(body_fmt)
-    
-    def auto_format_first_line(self):
-        """自动将第一行格式化为标题格式（28号字体），其他行为正文格式"""
+    # 在光标变化和加载笔记（切换笔记）时调用
+    def update_title_and_input_format(self):
+        """更新第一行标题格式并设置当前光标的输入格式
+        
+        功能包括：
+        1. 初始化空文档（插入零宽度字符）
+        2. 确保第一行为标题格式（28pt 粗体）
+        3. 根据光标位置设置输入格式（标题或正文）
+        """
         document = self.text_edit.document()
         
         # 处理空文档
@@ -2886,7 +2937,7 @@ class NoteEditor(QWidget):
         if not first_block.isValid():
             return
         
-        # 格式化第一行为标题格式（如果需要）
+        # 格式化第一行为标题格式（如果需要），防御因历史数据、粘贴内容、用户错误操作、程序bug等导致的标题没有格式化的相关问题
         if not self._is_first_line_title_formatted(first_block):
             self._apply_title_format_to_first_line(first_block)
         

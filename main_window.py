@@ -4491,9 +4491,9 @@ class MainWindow(QMainWindow):
         self.editor.setHtml(note['content'])
         self.editor.blockSignals(False)
         
-        # 手动调用 auto_format_first_line 确保第一行格式正确
+        # 手动调用 update_title_and_input_format 确保第一行格式正确
         # 因为 blockSignals 阻止了 textChanged 信号，所以需要手动调用
-        self.editor.auto_format_first_line()
+        self.editor.update_title_and_input_format()
         
         # 恢复光标位置
         try:

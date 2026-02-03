@@ -56,7 +56,7 @@
 - ✅ **无感体验**：自动应用格式，无需手动操作
 
 ### 🔧 技术实现
-- 添加 `auto_format_first_line()` 方法，监听光标位置变化
+- 添加 `update_title_and_input_format()` 方法（原 `auto_format_first_line()`），监听光标位置变化
 - 自动检测第一个文本块并应用大标题格式
 - 使用 `blockSignals()` 避免递归触发
 
