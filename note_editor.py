@@ -794,28 +794,69 @@ class PasteImageTextEdit(QTextEdit):
         # 返回图片的矩形区域（在视口坐标系中）
         return result_rect
     
+    # 重写的焦点获得事件，当编辑器获得焦点时会触发（第一次加载后设置光标或者鼠标点击时触发）
+    # 编辑器获得焦点后，再点击鼠标就不再会触发了，只会触发mousePressEvent
     def focusInEvent(self, event):
-        """焦点获得事件"""
-        # 如果当前没有笔记，阻止获得焦点
-        if hasattr(self, 'parent_editor') and self.parent_editor:
-            if not getattr(self.parent_editor, 'current_note_id', None):
-                event.ignore()
-                return
+        """焦点获得事件：验证笔记状态并恢复标题格式"""
+        logger.debug("[focusInEvent] 焦点获得事件触发")
         
+        # 验证是否允许获得焦点
+        if not self._can_accept_focus():
+            logger.debug("[focusInEvent] 拒绝焦点：没有打开的笔记")
+            event.ignore()
+            return
+
+        # 调用父类处理
         super().focusInEvent(event)
         
-        # 如果光标在第一行且第一行为空，恢复标题格式
-        cursor = self.textCursor()
-        block_num = cursor.block().blockNumber()
-        block_text = cursor.block().text()
+        # 如果光标在空的第一行，恢复标题格式
+        self._restore_title_format_if_needed()
+        logger.debug("[focusInEvent] 焦点处理完成")
+    
+    def _can_accept_focus(self) -> bool:
+        """检查编辑器是否可以接受焦点
         
-        if block_num == 0:
-            if block_text == "" or block_text == "\u200B":
-                # 设置标题格式
-                char_fmt = QTextCharFormat()
-                char_fmt.setFontPointSize(28)
-                char_fmt.setFontWeight(QFont.Weight.Bold)
-                self.setCurrentCharFormat(char_fmt)
+        Returns:
+            如果当前有打开的笔记返回True，否则返回False
+        """
+        if not (hasattr(self, 'parent_editor') and self.parent_editor):
+            return True
+        
+        return bool(getattr(self.parent_editor, 'current_note_id', None))
+    
+    def _restore_title_format_if_needed(self):
+        """如果光标在空的第一行，恢复标题格式"""
+        cursor = self.textCursor()
+        
+        # 只处理第一行
+        if cursor.block().blockNumber() != 0:
+            return
+        
+        # 检查第一行是否为空（包括零宽字符）
+        block_text = cursor.block().text()
+        if not self._is_empty_title_line(block_text):
+            return
+        
+        # 应用标题格式
+        self._apply_title_format()
+    
+    def _is_empty_title_line(self, text: str) -> bool:
+        """判断是否为空的标题行
+        
+        Args:
+            text: 行文本内容
+            
+        Returns:
+            如果是空行或只包含零宽字符返回True
+        """
+        return text == "" or text == "\u200B"
+    
+    def _apply_title_format(self):
+        """应用标题格式（28pt + 粗体）"""
+        char_fmt = QTextCharFormat()
+        char_fmt.setFontPointSize(28)  # 标题字号
+        char_fmt.setFontWeight(QFont.Weight.Bold)  # 粗体
+        self.setCurrentCharFormat(char_fmt)
 
     def _handle_anchor_click(self, event) -> bool:
         """处理附件链接点击
@@ -1013,29 +1054,22 @@ class PasteImageTextEdit(QTextEdit):
             self.selected_image_cursor = None
             self.viewport().update()
 
-    def _restore_title_format_if_needed(self):
-        """如果光标在第一行且为空，恢复标题格式"""
-        cursor = self.textCursor()
-        if cursor.block().blockNumber() == 0:
-            block_text = cursor.block().text()
-            if block_text == "" or block_text == "\u200B":
-                # 设置标题格式
-                char_fmt = QTextCharFormat()
-                char_fmt.setFontPointSize(28)
-                char_fmt.setFontWeight(QFont.Weight.Bold)
-                self.setCurrentCharFormat(char_fmt)
-
     def mousePressEvent(self, event):
         """鼠标按下事件"""
+        button_name = event.button().name if hasattr(event.button(), 'name') else str(event.button())
+        pos = event.pos()
+        logger.debug(f"[mousePressEvent] 鼠标按下事件触发 - 按钮: {button_name}, 位置: ({pos.x()}, {pos.y()})")
         
         # 检查是否应该忽略事件
         if self._should_ignore_mouse_event():
+            logger.debug("[mousePressEvent] 忽略鼠标事件：没有打开的笔记")
             event.ignore()
             return
         
         # 标记鼠标已按下
         if event.button() == Qt.MouseButton.LeftButton:
             self.mouse_pressed = True
+            logger.debug("[mousePressEvent] 标记鼠标左键已按下")
         
         # 恢复光标显示
         self._restore_cursor_visibility()
@@ -1043,16 +1077,20 @@ class PasteImageTextEdit(QTextEdit):
         if event.button() == Qt.MouseButton.LeftButton:
             # 首先检查是否点击了链接（附件）
             if self._handle_anchor_click(event):
+                logger.debug("[mousePressEvent] 处理链接点击，事件结束")
                 return
             
             # 检查是否点击了表格
             cursor = self.cursorForPosition(event.pos())
             table = cursor.currentTable()
             if table:
+                logger.debug("[mousePressEvent] 点击了表格区域")
                 # 检查是否点击了表格边框
                 if self._handle_table_border_click(table, cursor, event):
+                    logger.debug("[mousePressEvent] 处理表格边框点击，事件结束")
                     return
                 # 点击了表格内容区域，取消表格选中，进入编辑模式
+                logger.debug("[mousePressEvent] 处理表格内容点击")
                 self._handle_table_content_click(event)
                 # 使用默认行为，进入单元格编辑模式
                 super().mousePressEvent(event)
@@ -1062,22 +1100,27 @@ class PasteImageTextEdit(QTextEdit):
 
             # 检查是否点击了图片缩放控制点
             if self._handle_image_resize_handle_click(event):
+                logger.debug("[mousePressEvent] 处理图片缩放控制点点击，事件结束")
                 return
             
             # 检查是否点击了图片中心区域（用于拖动移动）
             if self._handle_image_drag_click(event):
+                logger.debug("[mousePressEvent] 处理图片拖动点击，事件结束")
                 return
             
             # 检查是否点击了图片
             if self._handle_image_click(event):
+                logger.debug("[mousePressEvent] 处理图片点击，事件结束")
                 return
             # 取消图片选中
             self._clear_image_selection()
-        
+            logger.debug("[mousePressEvent] 点击了普通文本区域")
+
         super().mousePressEvent(event)
         
         # 如果点击的是第一行且第一行为空，恢复标题格式
         self._restore_title_format_if_needed()
+        logger.debug("[mousePressEvent] 鼠标按下事件处理完成")
     
     def _handle_image_resizing(self, event) -> bool:
         """处理图片缩放
@@ -1569,57 +1612,57 @@ class PasteImageTextEdit(QTextEdit):
             
             _select_range(cursor, table_start, table_end + 1)
             cursor.removeSelectedText()
-    
-    def _handle_first_line_title_format(self, event):
-        """处理第一行标题格式设置
-        
-        返回：(need_restore_format, saved_format) 元组
-        """
-        need_restore_format = False
-        saved_format = None
-        # 如果按键没有文本输出（如 Ctrl、Shift 等功能键）或者是空白字符（空格、Tab等），则不处理
-        if not event.text() or event.text().isspace():
-            return need_restore_format, saved_format
-
-        # 如果光标不在第一行（标题行），不处理
-        cursor = self.textCursor()
-        block = cursor.block()
-        
-        if block.blockNumber() != 0:
-            return need_restore_format, saved_format
-        
-        block_text = block.text()
-        current_fmt = self.currentCharFormat()
-        current_size = current_fmt.fontPointSize()
-        
-        # 检查是否需要设置标题格式
-        need_title_format = False
-        # 第一行为空行或只有零宽空格或当前字体大小异常（大于0小于1），需要设置标题格式
-        if block_text == "" or block_text == "\u200B":
-            # 如果标题行只有零宽空格，删除它，并移动光标到行首
-            if block_text == "\u200B":
-                # 选中整个block（整行）
-                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-                # 删除选中的文本
-                cursor.removeSelectedText()
-                # 删除后，光标会被定位到删除位置的起点（这儿是移动光标到行首），所以这儿相当于设置光标到行首位置
-                self.setTextCursor(cursor)
-            need_title_format = True
-        elif current_size == 0.0 or current_size < 1.0:
-            need_title_format = True
-        # 设置标题格式
-        if need_title_format:
-            title_fmt = QTextCharFormat()
-            title_fmt.setFontPointSize(28)
-            title_fmt.setFontWeight(QFont.Weight.Bold)
-            self.setCurrentCharFormat(title_fmt)
-        
-        # 记录是否需要在插入后恢复格式
-        if block_text == "" or block_text == "\u200B":
-            need_restore_format = True
-            saved_format = self.currentCharFormat()
-        
-        return need_restore_format, saved_format
+    #
+    # def _handle_first_line_title_format(self, event):
+    #     """处理第一行标题格式设置
+    #
+    #     返回：(need_restore_format, saved_format) 元组
+    #     """
+    #     need_restore_format = False
+    #     saved_format = None
+    #     # 如果按键没有文本输出（如 Ctrl、Shift 等功能键）或者是空白字符（空格、Tab等），则不处理
+    #     if not event.text() or event.text().isspace():
+    #         return need_restore_format, saved_format
+    #
+    #     # 如果光标不在第一行（标题行），不处理
+    #     cursor = self.textCursor()
+    #     block = cursor.block()
+    #
+    #     if block.blockNumber() != 0:
+    #         return need_restore_format, saved_format
+    #
+    #     block_text = block.text()
+    #     current_fmt = self.currentCharFormat()
+    #     current_size = current_fmt.fontPointSize()
+    #
+    #     # 检查是否需要设置标题格式
+    #     need_title_format = False
+    #     # 第一行为空行或只有零宽空格或当前字体大小异常（大于0小于1），需要设置标题格式
+    #     if block_text == "" or block_text == "\u200B":
+    #         # 如果标题行只有零宽空格，删除它，并移动光标到行首
+    #         if block_text == "\u200B":
+    #             # 选中整个block（整行）
+    #             cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+    #             # 删除选中的文本
+    #             cursor.removeSelectedText()
+    #             # 删除后，光标会被定位到删除位置的起点（这儿是移动光标到行首），所以这儿相当于设置光标到行首位置
+    #             self.setTextCursor(cursor)
+    #         need_title_format = True
+    #     elif current_size == 0.0 or current_size < 1.0:
+    #         need_title_format = True
+    #     # 设置标题格式
+    #     if need_title_format:
+    #         title_fmt = QTextCharFormat()
+    #         title_fmt.setFontPointSize(28)
+    #         title_fmt.setFontWeight(QFont.Weight.Bold)
+    #         self.setCurrentCharFormat(title_fmt)
+    #
+    #     # 记录是否需要在插入后恢复格式
+    #     if block_text == "" or block_text == "\u200B":
+    #         need_restore_format = True
+    #         saved_format = self.currentCharFormat()
+    #
+    #     return need_restore_format, saved_format
     
     def _restore_cursor_and_clear_table_selection(self, event):
         """恢复光标显示并清除表格选中状态"""
