@@ -459,6 +459,7 @@ class NoteManager:
             'updated_at': updated_at.isoformat(),
             'is_favorite': bool(row['ZISFAVORITE']),
             'is_deleted': bool(row['ZISDELETED']),
+            'cursor_position': row['ZCURSORPOSITION'] if row['ZCURSORPOSITION'] is not None else 0,
             # CloudKit字段
             'ck_record_id': row['ZCKRECORDID'],
             'ck_change_tag': row['ZCKRECORDCHANGETAG'],
