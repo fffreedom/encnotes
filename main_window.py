@@ -1421,11 +1421,8 @@ class MainWindow(QMainWindow):
             sys.exit(0)
 
         self.init_ui()
-        self.load_folders()  # 加载文件夹
-        self.load_notes()
-
-        # 恢复上次打开的笔记和光标位置
-        self._restore_last_note()
+        self.load_folders(restore_from_settings=True)  # 加载文件夹并恢复状态
+        # self.load_notes()
 
         # 设置自动同步定时器（每5分钟）
         self.sync_timer = QTimer()
@@ -2628,8 +2625,12 @@ class MainWindow(QMainWindow):
             item.setSizeHint(QSize(200, 61))
 
             
-    def load_folders(self):
-        """加载文件夹列表（新布局：iCloud分组，支持多级文件夹）"""
+    def load_folders(self, restore_from_settings: bool = False):
+        """加载文件夹列表（新布局：iCloud分组，支持多级文件夹）
+        
+        Args:
+            restore_from_settings: 是否从 QSettings 恢复状态（仅初始化时使用）
+        """
         # 保存当前选中的行
         current_row = self.folder_list.currentRow()
         
@@ -2646,7 +2647,7 @@ class MainWindow(QMainWindow):
         self._add_tags_section()
         
         # 恢复选中状态
-        self._restore_selection(current_row)
+        self._restore_selection(current_row, restore_from_settings=restore_from_settings)
         
         # 强制刷新UI
         self.folder_list.viewport().update()
@@ -2807,20 +2808,98 @@ class MainWindow(QMainWindow):
         self.folder_list.setItemWidget(tag_item, tag_widget)
         tag_item.setSizeHint(QSize(200, 40))
 
-    def _restore_selection(self, current_row: int):
-        """恢复之前的选中状态
+    def _restore_selection(self, current_row: int, restore_from_settings: bool = False):
+        """恢复选中状态
         
         Args:
-            current_row: 之前选中的行号
+            current_row: 之前选中的行号（非初始化场景使用）
+            restore_from_settings: 是否从 QSettings 恢复完整状态（初始化场景使用）
         """
-        if current_row >= 0 and current_row < self.folder_list.count():
-            item = self.folder_list.item(current_row)
-            if item and item.flags() & Qt.ItemFlag.ItemIsEnabled:
-                self.folder_list.setCurrentRow(current_row)
+        if restore_from_settings:
+            # 初始化场景：从 QSettings 恢复完整状态
+            self._restore_from_settings()
+        else:
+            # 非初始化场景：保持当前选中行
+            if current_row >= 0 and current_row < self.folder_list.count():
+                item = self.folder_list.item(current_row)
+                if item and item.flags() & Qt.ItemFlag.ItemIsEnabled:
+                    self.folder_list.setCurrentRow(current_row)
+                else:
+                    self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
             else:
                 self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
-        else:
-            self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
+    
+    def _restore_from_settings(self):
+        """从 QSettings 恢复完整状态（文件夹/标签、笔记、光标位置）"""
+        try:
+            settings = QSettings("encnotes", "encnotes")
+            
+            # 1. 恢复文件夹/标签选中状态
+            last_folder_type = settings.value("last_folder_type")
+            last_folder_value = settings.value("last_folder_value")
+            
+            folder_restored = False
+            if last_folder_type and last_folder_value:
+                for i in range(self.folder_list.count()):
+                    item = self.folder_list.item(i)
+                    if item:
+                        payload = item.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(payload, tuple) and len(payload) == 2:
+                            if payload[0] == last_folder_type and payload[1] == last_folder_value:
+                                self.folder_list.setCurrentRow(i)
+                                folder_restored = True
+                                break
+            
+            # 2. 如果没有恢复成功，使用默认值（"所有笔记"）
+            if not folder_restored:
+                for i in range(self.folder_list.count()):
+                    item = self.folder_list.item(i)
+                    if item:
+                        payload = item.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(payload, tuple) and len(payload) == 2:
+                            if payload[0] == "system" and payload[1] == "all_notes":
+                                self.folder_list.setCurrentRow(i)
+                                break
+            
+            # 3. 等待笔记列表加载完成后恢复笔记选中状态
+            # 使用 QTimer.singleShot 延迟执行，确保 load_notes 已完成
+            QTimer.singleShot(100, self._restore_note_and_cursor)
+            
+        except Exception as e:
+            print(f"恢复状态失败: {e}")
+            # 失败时使用默认值
+            self.folder_list.setCurrentRow(1)
+    
+    def _restore_note_and_cursor(self):
+        """恢复笔记选中状态和光标位置（延迟执行）"""
+        try:
+            settings = QSettings("encnotes", "encnotes")
+            
+            # 恢复笔记选中状态
+            last_note_id = settings.value("last_note_id")
+            if last_note_id:
+                for i in range(self.note_list.count()):
+                    item = self.note_list.item(i)
+                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                        if item.data(Qt.ItemDataRole.UserRole) == last_note_id:
+                            self.note_list.setCurrentRow(i)
+                            
+                            # 恢复光标位置
+                            last_cursor_position = settings.value("last_cursor_position")
+                            if last_cursor_position is not None:
+                                try:
+                                    from PyQt6.QtGui import QTextCursor
+                                    cursor = self.editor.text_edit.textCursor()
+                                    max_position = len(self.editor.text_edit.toPlainText())
+                                    position = min(int(last_cursor_position), max_position)
+                                    cursor.setPosition(position)
+                                    self.editor.text_edit.setTextCursor(cursor)
+                                    self.editor.text_edit.setFocus()
+                                except Exception:
+                                    pass
+                            break
+        except Exception as e:
+            print(f"恢复笔记和光标失败: {e}")
 
     def _add_folders_recursive(self, all_folders, parent_id, level, flat_list):
         """递归添加文件夹，支持多级层级显示（带展开/折叠箭头）
