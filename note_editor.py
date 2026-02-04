@@ -27,6 +27,7 @@ import base64
 import html
 import re
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -2915,6 +2916,10 @@ class NoteEditor(QWidget):
         2. 确保第一行为标题格式（28pt 粗体）
         3. 根据光标位置设置输入格式（标题或正文）
         """
+        # Debug: 打印调用栈
+        logger.debug("=== update_title_and_input_format called ===")
+        # logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
+        
         document = self.text_edit.document()
         
         # 处理空文档

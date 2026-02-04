@@ -2640,38 +2640,27 @@ class MainWindow(QMainWindow):
         # 清空列表
         self.folder_list.clear()
         
-        # 添加iCloud标题（不可选中）：与“🏷️ 标签”等普通文本项的图标起始位置对齐
-        icloud_header = QListWidgetItem()
-        icloud_header.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
-
-        header_widget = QWidget()
-        header_layout = QHBoxLayout(header_widget)
-        # 使用与QListWidget默认item padding一致的左边距，让图标起始位置与“🏷️ 标签”对齐
-        header_layout.setContentsMargins(0, 0, 10, 0)
-
-        header_layout.setSpacing(6)
-
-        header_label = ElidedLabel("☁️ iCloud")
-        header_label.setFullText("☁️ iCloud")
-        header_label.setStyleSheet("""
-            font-size: 13px;
-            font-weight: bold;
-            color: #000000;
-            background: transparent;
-        """)
-        header_layout.addWidget(header_label, 1)
-
-        header_widget.setFixedHeight(28)
-        icloud_header.setSizeHint(QSize(200, 28))
-
-        self.folder_list.addItem(icloud_header)
-        self.folder_list.setItemWidget(icloud_header, header_widget)
-
+        # 预加载笔记计数数据
+        self._preload_note_counts()
         
-        # 预计算：系统项计数 + folder_id -> 笔记数量（不含已删除）
-        # 使用一次SQL聚合，避免逐个文件夹调用 get_notes_by_folder 造成卡顿
+        # 添加iCloud分组
+        self._add_icloud_section()
+        
+        # 添加标签分组
+        self._add_tags_section()
+        
+        # 恢复选中状态
+        self._restore_selection(current_row)
+        
+        # 强制刷新UI
+        self.folder_list.viewport().update()
+        self.folder_list.update()
+
+    def _preload_note_counts(self):
+        """预加载笔记计数数据，避免逐个查询造成卡顿"""
         self._folder_note_counts = {}
         self._system_note_counts = {"all_notes": 0, "deleted": 0}
+        
         try:
             cur = self.note_manager.conn.cursor()
 
@@ -2720,87 +2709,114 @@ class MainWindow(QMainWindow):
             self._folder_note_counts = {}
             self._system_note_counts = {"all_notes": 0, "deleted": 0}
 
-        # 添加系统文件夹（使用与自定义文件夹一致的布局，保证左侧文字对齐）
+    def _add_icloud_section(self):
+        """添加iCloud分组（包括标题、系统文件夹和自定义文件夹）"""
+        # 添加iCloud标题
+        self._add_section_header("☁️ iCloud")
+        
+        # 添加系统文件夹
         self._add_system_folder_item("all_notes", "📝 所有笔记")
         
         # 加载自定义文件夹（支持层级显示）
         all_folders = self.note_manager.get_all_folders()
-        
-        # 构建文件夹树结构
         self.custom_folders = []
         self._add_folders_recursive(all_folders, None, 1, self.custom_folders)
-
         
-        # 添加最近删除（使用一致布局）
+        # 添加最近删除
         self._add_system_folder_item("deleted", "🗑️ 最近删除")
 
+    def _add_tags_section(self):
+        """添加标签分组（包括标题和所有标签）"""
+        # 添加标签标题
+        tag_header = self._add_section_header("🏷️ 标签")
+        tag_header.setData(Qt.ItemDataRole.UserRole, ("tag_header", None))
         
-        # 添加标签标题（不可选中）：与iCloud标题保持一致的样式
-        tag_header = QListWidgetItem()
-        tag_header.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
-        tag_header.setData(Qt.ItemDataRole.UserRole, ("tag_header", None))  # 标记为标签标题
+        # 加载标签
+        self.tags = self.note_manager.get_all_tags()
+        for tag in self.tags:
+            self._add_tag_item(tag)
 
-        tag_header_widget = QWidget()
-        tag_header_layout = QHBoxLayout(tag_header_widget)
-        tag_header_layout.setContentsMargins(0, 0, 10, 0)
-        tag_header_layout.setSpacing(6)
+    def _add_section_header(self, title: str) -> QListWidgetItem:
+        """添加分组标题（不可选中）
+        
+        Args:
+            title: 标题文本
+            
+        Returns:
+            创建的QListWidgetItem
+        """
+        header_item = QListWidgetItem()
+        header_item.setFlags(Qt.ItemFlag.NoItemFlags)  # 不可选中
 
-        tag_header_label = ElidedLabel("🏷️ 标签")
-        tag_header_label.setFullText("🏷️ 标签")
-        tag_header_label.setStyleSheet("""
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 10, 0)
+        header_layout.setSpacing(6)
+
+        header_label = ElidedLabel(title)
+        header_label.setFullText(title)
+        header_label.setStyleSheet("""
             font-size: 13px;
             font-weight: bold;
             color: #000000;
             background: transparent;
         """)
-        tag_header_layout.addWidget(tag_header_label, 1)
+        header_layout.addWidget(header_label, 1)
 
-        tag_header_widget.setFixedHeight(28)
-        tag_header.setSizeHint(QSize(200, 28))
+        header_widget.setFixedHeight(28)
+        header_item.setSizeHint(QSize(200, 28))
 
-        self.folder_list.addItem(tag_header)
-        self.folder_list.setItemWidget(tag_header, tag_header_widget)
+        self.folder_list.addItem(header_item)
+        self.folder_list.setItemWidget(header_item, header_widget)
         
-        # 加载标签（缩进显示）
-        self.tags = self.note_manager.get_all_tags()
-        for tag in self.tags:
-            raw_name = str(tag.get('name', '') or '')
-            tag_name = raw_name.strip()
-            count = self.note_manager.get_tag_count(tag['id'])
+        return header_item
 
-            is_empty_tag = (tag_name == "")
-            display_name = tag_name if not is_empty_tag else "（未命名标签）"
-            item_text = f"    🏷️ {display_name} ({count})"
-
-            tag_item = QListWidgetItem()
-            tag_item.setData(Qt.ItemDataRole.UserRole, ("tag", tag['id']))  # 标记为标签项
-
-            # 为标签项创建自定义widget以支持高亮显示
-            tag_widget = QWidget()
-            tag_widget.setObjectName("folder_row_widget")  # 使用相同的样式
-            tag_layout = QHBoxLayout(tag_widget)
-            tag_layout.setContentsMargins(0, 0, 0, 0)
-            tag_layout.setSpacing(0)
-
-            tag_label = QLabel(item_text)
-            if is_empty_tag:
-                tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px; color: #8e8e93;")
-            else:
-                tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px;")
-            tag_layout.addWidget(tag_label)
-
-            # 如果当前选中的是这个标签，设置高亮
-            if self.current_tag_id == tag['id']:
-                tag_widget.setProperty("selected", True)
-                tag_item.setSelected(True)
-            else:
-                tag_widget.setProperty("selected", False)
-
-            self.folder_list.addItem(tag_item)
-            self.folder_list.setItemWidget(tag_item, tag_widget)
-            tag_item.setSizeHint(QSize(200, 40))  # 增加高度到40px，确保显示完整
+    def _add_tag_item(self, tag: dict):
+        """添加单个标签项
         
-        # 恢复选中状态
+        Args:
+            tag: 标签数据字典，包含id和name
+        """
+        raw_name = str(tag.get('name', '') or '')
+        tag_name = raw_name.strip()
+        count = self.note_manager.get_tag_count(tag['id'])
+
+        is_empty_tag = (tag_name == "")
+        display_name = tag_name if not is_empty_tag else "（未命名标签）"
+        item_text = f"    🏷️ {display_name} ({count})"
+
+        tag_item = QListWidgetItem()
+        tag_item.setData(Qt.ItemDataRole.UserRole, ("tag", tag['id']))
+
+        # 创建自定义widget以支持高亮显示
+        tag_widget = QWidget()
+        tag_widget.setObjectName("folder_row_widget")
+        tag_layout = QHBoxLayout(tag_widget)
+        tag_layout.setContentsMargins(0, 0, 0, 0)
+        tag_layout.setSpacing(0)
+
+        tag_label = QLabel(item_text)
+        if is_empty_tag:
+            tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px; color: #8e8e93;")
+        else:
+            tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px;")
+        tag_layout.addWidget(tag_label)
+
+        # 设置选中状态
+        is_selected = (self.current_tag_id == tag['id'])
+        tag_widget.setProperty("selected", is_selected)
+        tag_item.setSelected(is_selected)
+
+        self.folder_list.addItem(tag_item)
+        self.folder_list.setItemWidget(tag_item, tag_widget)
+        tag_item.setSizeHint(QSize(200, 40))
+
+    def _restore_selection(self, current_row: int):
+        """恢复之前的选中状态
+        
+        Args:
+            current_row: 之前选中的行号
+        """
         if current_row >= 0 and current_row < self.folder_list.count():
             item = self.folder_list.item(current_row)
             if item and item.flags() & Qt.ItemFlag.ItemIsEnabled:
@@ -2809,12 +2825,7 @@ class MainWindow(QMainWindow):
                 self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
         else:
             self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
-        
-        # 强制刷新UI
-        self.folder_list.viewport().update()
-        self.folder_list.update()
-        self.folder_list.repaint()
-    
+
     def _add_folders_recursive(self, all_folders, parent_id, level, flat_list):
         """递归添加文件夹，支持多级层级显示（带展开/折叠箭头）
         
@@ -4526,7 +4537,8 @@ class MainWindow(QMainWindow):
             self.editor.text_edit.clearFocus()
         except Exception:
             pass
-    
+
+    # note_list.clear()会触发这个事件，需要解决
     def on_note_selected(self, current, previous):
         """笔记选中事件
         
