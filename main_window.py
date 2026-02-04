@@ -1422,7 +1422,6 @@ class MainWindow(QMainWindow):
 
         self.init_ui()
         self.load_folders(restore_from_settings=True)  # 加载文件夹并恢复状态
-        # self.load_notes()
 
         # 设置自动同步定时器（每5分钟）
         self.sync_timer = QTimer()
@@ -2838,28 +2837,12 @@ class MainWindow(QMainWindow):
             last_folder_type = settings.value("last_folder_type")
             last_folder_value = settings.value("last_folder_value")
             
-            folder_restored = False
-            if last_folder_type and last_folder_value:
-                for i in range(self.folder_list.count()):
-                    item = self.folder_list.item(i)
-                    if item:
-                        payload = item.data(Qt.ItemDataRole.UserRole)
-                        if isinstance(payload, tuple) and len(payload) == 2:
-                            if payload[0] == last_folder_type and payload[1] == last_folder_value:
-                                self.folder_list.setCurrentRow(i)
-                                folder_restored = True
-                                break
+            # 尝试恢复上次选中的文件夹/标签
+            folder_restored = self._find_and_select_folder(last_folder_type, last_folder_value)
             
             # 2. 如果没有恢复成功，使用默认值（"所有笔记"）
             if not folder_restored:
-                for i in range(self.folder_list.count()):
-                    item = self.folder_list.item(i)
-                    if item:
-                        payload = item.data(Qt.ItemDataRole.UserRole)
-                        if isinstance(payload, tuple) and len(payload) == 2:
-                            if payload[0] == "system" and payload[1] == "all_notes":
-                                self.folder_list.setCurrentRow(i)
-                                break
+                self._select_default_folder()
             
             # 3. 等待笔记列表加载完成后恢复笔记选中状态
             # 使用 QTimer.singleShot 延迟执行，确保 load_notes 已完成
@@ -2867,39 +2850,119 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             print(f"恢复状态失败: {e}")
+            import traceback
+            traceback.print_exc()
             # 失败时使用默认值
-            self.folder_list.setCurrentRow(1)
+            self._select_default_folder()
+    
+    def _find_and_select_folder(self, folder_type, folder_value):
+        """查找并选中指定的文件夹/标签
+        
+        Args:
+            folder_type: 文件夹类型（如 "system", "custom", "tag"）
+            folder_value: 文件夹值（如 "all_notes", 文件夹ID, 标签ID）
+            
+        Returns:
+            bool: 是否成功找到并选中
+        """
+        if not folder_type or not folder_value:
+            return False
+        
+        for i in range(self.folder_list.count()):
+            item = self.folder_list.item(i)
+            if not item:
+                continue
+                
+            payload = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and len(payload) == 2:
+                if payload[0] == folder_type and payload[1] == folder_value:
+                    self.folder_list.setCurrentRow(i)
+                    return True
+        
+        return False
+    
+    def _select_default_folder(self):
+        """选中默认文件夹（"所有笔记"）"""
+        # 尝试选中"所有笔记"
+        if self._find_and_select_folder("system", "all_notes"):
+            return
+        
+        # 如果找不到"所有笔记"，选中第一个可用项
+        if self.folder_list.count() > 0:
+            self.folder_list.setCurrentRow(0)
     
     def _restore_note_and_cursor(self):
         """恢复笔记选中状态和光标位置（延迟执行）"""
         try:
             settings = QSettings("encnotes", "encnotes")
-            
-            # 恢复笔记选中状态
             last_note_id = settings.value("last_note_id")
-            if last_note_id:
-                for i in range(self.note_list.count()):
-                    item = self.note_list.item(i)
-                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
-                        if item.data(Qt.ItemDataRole.UserRole) == last_note_id:
-                            self.note_list.setCurrentRow(i)
-                            
-                            # 恢复光标位置
-                            last_cursor_position = settings.value("last_cursor_position")
-                            if last_cursor_position is not None:
-                                try:
-                                    from PyQt6.QtGui import QTextCursor
-                                    cursor = self.editor.text_edit.textCursor()
-                                    max_position = len(self.editor.text_edit.toPlainText())
-                                    position = min(int(last_cursor_position), max_position)
-                                    cursor.setPosition(position)
-                                    self.editor.text_edit.setTextCursor(cursor)
-                                    self.editor.text_edit.setFocus()
-                                except Exception:
-                                    pass
-                            break
+            
+            if not last_note_id:
+                return
+            
+            # 查找并选中笔记
+            note_index = self._find_note_by_id(last_note_id)
+            if note_index is None:
+                return
+            
+            # 选中笔记
+            self.note_list.setCurrentRow(note_index)
+            
+            # 恢复光标位置
+            last_cursor_position = settings.value("last_cursor_position")
+            if last_cursor_position is not None:
+                self._restore_cursor_position(last_cursor_position)
+                
         except Exception as e:
             print(f"恢复笔记和光标失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _find_note_by_id(self, note_id):
+        """根据笔记ID查找笔记在列表中的索引
+        
+        Args:
+            note_id: 笔记ID
+            
+        Returns:
+            int or None: 笔记索引，如果未找到返回 None
+        """
+        for i in range(self.note_list.count()):
+            item = self.note_list.item(i)
+            if not item or not (item.flags() & Qt.ItemFlag.ItemIsSelectable):
+                continue
+            
+            if item.data(Qt.ItemDataRole.UserRole) == note_id:
+                return i
+        
+        return None
+    
+    def _restore_cursor_position(self, cursor_position):
+        """恢复编辑器光标位置
+        
+        Args:
+            cursor_position: 光标位置（字符索引）
+        """
+        try:
+            from PyQt6.QtGui import QTextCursor
+            
+            # 获取当前文本长度，确保位置不超出范围
+            text_content = self.editor.text_edit.toPlainText()
+            max_position = len(text_content)
+            position = min(int(cursor_position), max_position)
+            
+            # 设置光标位置
+            cursor = self.editor.text_edit.textCursor()
+            cursor.setPosition(position)
+            self.editor.text_edit.setTextCursor(cursor)
+            
+            # 设置焦点到编辑器
+            self.editor.text_edit.setFocus()
+            
+        except (ValueError, TypeError) as e:
+            print(f"光标位置无效: {cursor_position}, 错误: {e}")
+        except Exception as e:
+            print(f"恢复光标位置失败: {e}")
 
     def _add_folders_recursive(self, all_folders, parent_id, level, flat_list):
         """递归添加文件夹，支持多级层级显示（带展开/折叠箭头）
@@ -5245,72 +5308,6 @@ class MainWindow(QMainWindow):
                         QApplication.quit()
                         return False
                     return False
-    
-    def _restore_last_note(self):
-        """恢复上次打开的笔记和光标位置"""
-        try:
-            settings = getattr(self, "_settings", None)
-            if settings is None:
-                settings = QSettings("encnotes", "encnotes")
-            
-            # 先恢复文件夹的选中状态
-            last_folder_type = settings.value("last_folder_type")
-            last_folder_value = settings.value("last_folder_value")
-            
-            folder_restored = False
-            if last_folder_type and last_folder_value:
-                # 在文件夹列表中查找匹配的项
-                for i in range(self.folder_list.count()):
-                    item = self.folder_list.item(i)
-                    if item:
-                        payload = item.data(Qt.ItemDataRole.UserRole)
-                        if isinstance(payload, tuple) and len(payload) == 2:
-                            if payload[0] == last_folder_type and payload[1] == last_folder_value:
-                                self.folder_list.setCurrentRow(i)
-                                folder_restored = True
-                                break
-            
-            # 如果没有恢复文件夹，使用默认选中（"所有笔记"通常在第1行）
-            if not folder_restored:
-                # 查找"所有笔记"项
-                for i in range(self.folder_list.count()):
-                    item = self.folder_list.item(i)
-                    if item:
-                        payload = item.data(Qt.ItemDataRole.UserRole)
-                        if isinstance(payload, tuple) and len(payload) == 2:
-                            if payload[0] == "system" and payload[1] == "all_notes":
-                                self.folder_list.setCurrentRow(i)
-                                break
-            
-            # 再恢复笔记的选中状态和光标位置
-            last_note_id = settings.value("last_note_id")
-            if last_note_id:
-                # 尝试在当前笔记列表中找到并选中该笔记
-                for i in range(self.note_list.count()):
-                    item = self.note_list.item(i)
-                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
-                        if item.data(Qt.ItemDataRole.UserRole) == last_note_id:
-                            self.note_list.setCurrentRow(i)
-                            
-                            # 恢复光标位置
-                            last_cursor_position = settings.value("last_cursor_position")
-                            if last_cursor_position is not None:
-                                try:
-                                    from PyQt6.QtGui import QTextCursor
-                                    cursor = self.editor.text_edit.textCursor()
-                                    # 确保位置不超过文档长度
-                                    max_position = len(self.editor.text_edit.toPlainText())
-                                    position = min(int(last_cursor_position), max_position)
-                                    cursor.setPosition(position)
-                                    self.editor.text_edit.setTextCursor(cursor)
-                                    
-                                    # 设置焦点到编辑器
-                                    self.editor.text_edit.setFocus()
-                                except Exception:
-                                    pass
-                            break
-        except Exception:
-            pass
             
     def change_password(self):
         """修改密码"""
