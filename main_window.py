@@ -1414,7 +1414,6 @@ class MainWindow(QMainWindow):
         # 加密管理器
         self.encryption_manager = self.note_manager.encryption_manager
 
-
         # 检查是否需要设置密码或解锁
         if not self._handle_encryption_setup():
             # 用户取消了密码设置或解锁，退出应用
@@ -1425,11 +1424,8 @@ class MainWindow(QMainWindow):
         self.load_folders()  # 加载文件夹
         self.load_notes()
 
-
-
         # 恢复上次打开的笔记和光标位置
         self._restore_last_note()
-
 
         # 设置自动同步定时器（每5分钟）
         self.sync_timer = QTimer()
@@ -4222,119 +4218,123 @@ class MainWindow(QMainWindow):
         
         self.delete_note_by_id(self.current_note_id)
             
+    def _set_row_widget_selected(self, row_widget: QWidget | None, selected: bool):
+        """设置行 widget 的选中状态"""
+        if not row_widget or row_widget.objectName() != "folder_row_widget":
+            return
+        row_widget.setProperty("selected", selected)
+        row_widget.style().unpolish(row_widget)
+        row_widget.style().polish(row_widget)
+        row_widget.update()
+
+    def _find_row_widget_by_payload(self, item_type: str, item_id: str):
+        """根据 payload 类型和 ID 查找对应的 row widget"""
+        if not item_id:
+            return None
+        
+        for i in range(self.folder_list.count()):
+            item = self.folder_list.item(i)
+            if not item:
+                continue
+            payload = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and len(payload) == 2:
+                if payload[0] == item_type and payload[1] == item_id:
+                    return self.folder_list.itemWidget(item)
+        return None
+
+    def _get_current_item_info(self, index):
+        """获取当前选中项的信息
+        
+        Returns:
+            tuple: (item_type, folder_id, system_key, tag_id, cur_item)
+        """
+        if index is None or not (0 <= index < self.folder_list.count()):
+            return None, None, None, None, None
+        
+        cur_item = self.folder_list.item(index)
+        if not cur_item:
+            return None, None, None, None, None
+        
+        payload = cur_item.data(Qt.ItemDataRole.UserRole)
+        if not (isinstance(payload, tuple) and len(payload) == 2):
+            return None, None, None, None, None
+        
+        item_type = payload[0]
+        item_id = payload[1]
+        
+        # 根据类型返回对应的信息
+        if item_type == "folder":
+            return item_type, item_id, None, None, cur_item
+        elif item_type == "system":
+            return item_type, None, item_id, None, cur_item
+        elif item_type == "tag":
+            return item_type, None, None, item_id, cur_item
+        
+        return item_type, None, None, None, cur_item
+
+    def _handle_tag_selection(self, cur_item, cur_tag_id: str):
+        """处理标签选中逻辑"""
+        # 取消之前选中标签的高亮
+        prev_tag_id = getattr(self, "_prev_selected_tag_id", None)
+        if prev_tag_id:
+            prev_tag_widget = self._find_row_widget_by_payload("tag", prev_tag_id)
+            self._set_row_widget_selected(prev_tag_widget, False)
+        
+        # 设置当前标签高亮
+        cur_tag_widget = self.folder_list.itemWidget(cur_item) if cur_item else None
+        self._set_row_widget_selected(cur_tag_widget, True)
+        
+        # 记录当前选中的标签（保持文件夹的选中状态，实现双选中）
+        self.current_tag_id = cur_tag_id
+        self._prev_selected_tag_id = cur_tag_id
+
+    def _handle_folder_or_system_selection(self, cur_item, cur_folder_id: str, cur_system_key: str):
+        """处理文件夹或系统项选中逻辑"""
+        # 取消之前的标签高亮
+        prev_tag_id = getattr(self, "_prev_selected_tag_id", None)
+        if prev_tag_id:
+            prev_tag_widget = self._find_row_widget_by_payload("tag", prev_tag_id)
+            self._set_row_widget_selected(prev_tag_widget, False)
+            self._prev_selected_tag_id = None
+        
+        # 取消之前的文件夹/系统项高亮
+        prev_folder_id = getattr(self, "_prev_selected_folder_id", None)
+        prev_system_key = getattr(self, "_prev_selected_system_key", None)
+        
+        prev_widget = None
+        if prev_folder_id:
+            prev_widget = self._find_row_widget_by_payload("folder", prev_folder_id)
+        elif prev_system_key:
+            prev_widget = self._find_row_widget_by_payload("system", prev_system_key)
+        
+        self._set_row_widget_selected(prev_widget, False)
+        
+        # 设置当前行选中
+        cur_widget = self.folder_list.itemWidget(cur_item) if cur_item else None
+        self._set_row_widget_selected(cur_widget, True)
+        
+        # 记录当前选中的语义ID
+        self._prev_selected_folder_id = cur_folder_id
+        self._prev_selected_system_key = cur_system_key
+        self.current_tag_id = None
+
     def on_folder_changed(self, index):
-        """文件夹切换"""
-        # 选中高亮由 `folder_row_widget` 自己绘制（避免与就地编辑的白色输入框冲突）
-        def _set_row_widget_selected(row_widget: QWidget | None, selected: bool):
-            if not row_widget:
-                return
-            if row_widget.objectName() != "folder_row_widget":
-                return
-            row_widget.setProperty("selected", selected)
-            row_widget.style().unpolish(row_widget)
-            row_widget.style().polish(row_widget)
-            row_widget.update()
-
-        def _find_folder_row_widget_by_id(folder_id: str):
-            if not folder_id:
-                return None
-            for i in range(self.folder_list.count()):
-                it = self.folder_list.item(i)
-                if not it:
-                    continue
-                payload = it.data(Qt.ItemDataRole.UserRole)
-                if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "folder" and payload[1] == folder_id:
-                    return self.folder_list.itemWidget(it)
-            return None
-
-        def _find_tag_row_widget_by_id(tag_id: str):
-            if not tag_id:
-                return None
-            for i in range(self.folder_list.count()):
-                it = self.folder_list.item(i)
-                if not it:
-                    continue
-                payload = it.data(Qt.ItemDataRole.UserRole)
-                if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "tag" and payload[1] == tag_id:
-                    return self.folder_list.itemWidget(it)
-            return None
-
+        """文件夹切换：选中行变化时，更新高亮状态并加载笔记"""
         try:
-            # 获取当前选中项的类型
-            cur_item_type = None
-            cur_folder_id = None
-            cur_system_key = None
-            cur_tag_id = None
+            # 获取当前选中项的信息
+            item_type, folder_id, system_key, tag_id, cur_item = self._get_current_item_info(index)
             
-            if index is not None and 0 <= index < self.folder_list.count():
-                cur_item = self.folder_list.item(index)
-                payload = cur_item.data(Qt.ItemDataRole.UserRole) if cur_item else None
-
-                if isinstance(payload, tuple) and len(payload) == 2:
-                    cur_item_type = payload[0]
-                    if payload[0] == "folder":
-                        cur_folder_id = payload[1]
-                    elif payload[0] == "system":
-                        cur_system_key = payload[1]
-                    elif payload[0] == "tag":
-                        cur_tag_id = payload[1]
+            if not item_type:
+                return
             
-            # 如果选中的是标签，保持文件夹的选中状态
-            if cur_item_type == "tag":
-                # 取消之前选中标签的高亮
-                prev_tag_id = getattr(self, "_prev_selected_tag_id", None)
-                if prev_tag_id:
-                    prev_tag_w = _find_tag_row_widget_by_id(prev_tag_id)
-                    _set_row_widget_selected(prev_tag_w, False)
-                
-                # 设置当前标签高亮
-                cur_tag_w = self.folder_list.itemWidget(cur_item) if cur_item else None
-                _set_row_widget_selected(cur_tag_w, True)
-                
-                # 记录当前选中的标签
-                self.current_tag_id = cur_tag_id
-                self._prev_selected_tag_id = cur_tag_id
-                # 不取消文件夹的高亮，保持双选中状态
+            # 根据类型处理选中逻辑
+            if item_type == "tag":
+                self._handle_tag_selection(cur_item, tag_id)
             else:
-                # 选中的是文件夹或系统项，取消之前的标签高亮
-                prev_tag_id = getattr(self, "_prev_selected_tag_id", None)
-                if prev_tag_id:
-                    prev_tag_w = _find_tag_row_widget_by_id(prev_tag_id)
-                    _set_row_widget_selected(prev_tag_w, False)
-                    self._prev_selected_tag_id = None
-                
-                # 取消之前的文件夹/系统项高亮
-                prev_folder_id = getattr(self, "_prev_selected_folder_id", None)
-                prev_system_key = getattr(self, "_prev_selected_system_key", None)
-
-                prev_w = None
-                if prev_folder_id:
-                    prev_w = _find_folder_row_widget_by_id(prev_folder_id)
-                elif prev_system_key:
-                    # system item: 通过 key 定位
-                    for i in range(self.folder_list.count()):
-                        it = self.folder_list.item(i)
-                        if not it:
-                            continue
-                        payload = it.data(Qt.ItemDataRole.UserRole)
-                        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "system" and payload[1] == prev_system_key:
-                            prev_w = self.folder_list.itemWidget(it)
-                            break
-
-                _set_row_widget_selected(prev_w, False)
-
-                # 设置当前行选中
-                cur_w = self.folder_list.itemWidget(cur_item) if cur_item else None
-                _set_row_widget_selected(cur_w, True)
-
-                # 记录"上一次选中"的语义ID（而不是 row）
-                self._prev_selected_folder_id = cur_folder_id
-                self._prev_selected_system_key = cur_system_key
-                # 清除标签选中状态
-                self.current_tag_id = None
+                self._handle_folder_or_system_selection(cur_item, folder_id, system_key)
         except Exception:
             pass
-
+        
         self.load_notes()
 
     def on_folder_item_double_clicked(self, item: QListWidgetItem):
