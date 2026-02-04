@@ -4470,22 +4470,15 @@ class MainWindow(QMainWindow):
             pass
     
     def _set_editor_cursor_to_title_end(self):
-        """将编辑器光标移动到标题末尾，并设置标题格式"""
+        """将编辑器光标移动到标题末尾，标题格式通过cursorPositionChanged信号处理"""
         from PyQt6.QtGui import QTextCursor, QFont, QTextCharFormat
         
         cursor = self.editor.text_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.Start)  # 移动到文档开始
         cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)  # 移动到第一行末尾
-        
-        # 设置光标的字符格式，使光标的视觉高度正确
-        title_fmt = QTextCharFormat()
-        title_fmt.setFontPointSize(28)
-        title_fmt.setFontWeight(QFont.Weight.Bold)
-        cursor.setCharFormat(title_fmt)
-        
+
         # 应用光标并设置焦点
         self.editor.text_edit.setTextCursor(cursor)
-        self.editor.text_edit.setFocus()
     
     def _load_and_display_note(self, note_id):
         """加载并显示笔记内容
@@ -4501,12 +4494,8 @@ class MainWindow(QMainWindow):
         self.editor.blockSignals(True)
         self.editor.setHtml(note['content'])
         self.editor.blockSignals(False)
-        
-        # 手动调用 update_title_and_input_format 确保第一行格式正确
-        # 因为 blockSignals 阻止了 textChanged 信号，所以需要手动调用
-        self.editor.update_title_and_input_format()
-        
-        # 恢复光标位置
+
+        # 恢复光标位置，在设置光标位置时会触发cursorPositionChanged信号，从而调用update_title_and_input_format进行标题格式设置
         try:
             cursor_position = note.get('cursor_position', 0)
             if cursor_position is not None and cursor_position > 0:
