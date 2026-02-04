@@ -2892,7 +2892,11 @@ class MainWindow(QMainWindow):
             self.folder_list.setCurrentRow(0)
     
     def _restore_note_and_cursor(self):
-        """恢复笔记选中状态和光标位置（延迟执行）"""
+        """恢复笔记选中状态（延迟执行）
+        
+        注意：光标位置现在在 _load_and_display_note 中自动恢复，
+        因为每个笔记都有自己保存的光标位置
+        """
         try:
             settings = QSettings("encnotes", "encnotes")
             last_note_id = settings.value("last_note_id")
@@ -2905,16 +2909,11 @@ class MainWindow(QMainWindow):
             if note_index is None:
                 return
             
-            # 选中笔记
+            # 选中笔记（光标位置会在 _load_and_display_note 中自动恢复）
             self.note_list.setCurrentRow(note_index)
-            
-            # 恢复光标位置
-            last_cursor_position = settings.value("last_cursor_position")
-            if last_cursor_position is not None:
-                self._restore_cursor_position(last_cursor_position)
                 
         except Exception as e:
-            print(f"恢复笔记和光标失败: {e}")
+            print(f"恢复笔记失败: {e}")
             import traceback
             traceback.print_exc()
     
@@ -2937,32 +2936,7 @@ class MainWindow(QMainWindow):
         
         return None
     
-    def _restore_cursor_position(self, cursor_position):
-        """恢复编辑器光标位置
-        
-        Args:
-            cursor_position: 光标位置（字符索引）
-        """
-        try:
-            from PyQt6.QtGui import QTextCursor
-            
-            # 获取当前文本长度，确保位置不超出范围
-            text_content = self.editor.text_edit.toPlainText()
-            max_position = len(text_content)
-            position = min(int(cursor_position), max_position)
-            
-            # 设置光标位置
-            cursor = self.editor.text_edit.textCursor()
-            cursor.setPosition(position)
-            self.editor.text_edit.setTextCursor(cursor)
-            
-            # 设置焦点到编辑器
-            self.editor.text_edit.setFocus()
-            
-        except (ValueError, TypeError) as e:
-            print(f"光标位置无效: {cursor_position}, 错误: {e}")
-        except Exception as e:
-            print(f"恢复光标位置失败: {e}")
+
 
     def _add_folders_recursive(self, all_folders, parent_id, level, flat_list):
         """递归添加文件夹，支持多级层级显示（带展开/折叠箭头）
@@ -4592,9 +4566,10 @@ class MainWindow(QMainWindow):
         # 取消之前项的选中状态
         self._update_item_widget_selection(previous_item, False)
         
-        # 保存之前的笔记
+        # 保存之前的笔记（包括光标位置）
         prev_note_id = self.current_note_id
-        self.save_current_note()
+        self._save_current_note_cursor_position()  # 保存光标位置
+        self.save_current_note()  # 保存笔记内容
         
         # 切换笔记时：清理"已删除但可撤销"的附件（此时用户已离开该笔记）
         self._cleanup_note_attachment_trash(prev_note_id)
@@ -4711,9 +4686,10 @@ class MainWindow(QMainWindow):
         # 加载笔记到编辑器
         item = self.note_list.item(row)
         if item:
-            # 保存之前的笔记
+            # 保存之前的笔记（包括光标位置）
             if self.current_note_id:
-                self.save_current_note()
+                self._save_current_note_cursor_position()  # 保存光标位置
+                self.save_current_note()  # 保存笔记内容
             
             # 阻止信号，避免触发on_note_selected，如果不阻塞，此操作会触发currentItemChanged 信号，导致调用on_note_selected
             self.note_list.blockSignals(True)
@@ -4732,12 +4708,18 @@ class MainWindow(QMainWindow):
             # 如果已选中，则取消选中
             self.selected_note_rows.discard(row)
             if not self.selected_note_rows:
-                # 如果没有选中项了，清空编辑器
+                # 如果没有选中项了，保存当前笔记的光标位置，然后清空编辑器
+                if self.current_note_id:
+                    self._save_current_note_cursor_position()
                 self.current_note_id = None
                 self.editor.current_note_id = None
                 self.editor.clear()
         else:
             # 如果未选中，则添加到选中集合
+            # 先保存当前笔记的光标位置
+            if self.current_note_id:
+                self._save_current_note_cursor_position()
+            
             self.selected_note_rows.add(row)
             # 将最后选中的项设为当前项
             item = self.note_list.item(row)
@@ -4749,11 +4731,7 @@ class MainWindow(QMainWindow):
                 note_id = item.data(Qt.ItemDataRole.UserRole)
                 self.current_note_id = note_id
                 self.editor.current_note_id = note_id
-                note = self.note_manager.get_note(note_id)
-                if note:
-                    self.editor.blockSignals(True)
-                    self.editor.setHtml(note['content'])
-                    self.editor.blockSignals(False)
+                self._load_and_display_note(note_id)
         
         self._update_visual_selection()
     
@@ -4823,11 +4801,28 @@ class MainWindow(QMainWindow):
             # 自动保存
             self.save_current_note()
 
-        # 文本一旦不再为空，可能需要重新允许“新建笔记”
+        # 文本一旦不再为空，可能需要重新允许"新建笔记"
         self._update_new_note_action_enabled()
 
-
+    def _save_current_note_cursor_position(self):
+        """保存当前笔记的光标位置"""
+        if not self.current_note_id:
+            return
+        
+        try:
+            # 获取当前光标位置
+            cursor = self.editor.text_edit.textCursor()
+            cursor_position = cursor.position()
             
+            # 只更新光标位置，不更新内容和标题
+            self.note_manager.update_note(
+                self.current_note_id,
+                cursor_position=cursor_position
+            )
+        except Exception:
+            # 静默失败，不影响用户体验
+            pass
+
     def _normalize_text(self, text):
         """标准化文本：统一换行符
         
@@ -5434,27 +5429,20 @@ class MainWindow(QMainWindow):
             pass
     
     def _save_current_note_state(self, settings):
-        """保存当前笔记状态和光标位置
+        """保存当前笔记状态
         
         Args:
             settings: QSettings 设置对象
+        
+        注意：光标位置现在保存在每个笔记的数据库记录中，不再保存到 QSettings
         """
         try:
             if self.current_note_id:
                 # 保存笔记ID
                 settings.setValue("last_note_id", self.current_note_id)
-                
-                # 保存光标位置
-                try:
-                    cursor = self.editor.text_edit.textCursor()
-                    cursor_position = cursor.position()
-                    settings.setValue("last_cursor_position", cursor_position)
-                except Exception:
-                    pass
             else:
                 # 如果没有打开笔记，清除保存的状态
                 settings.remove("last_note_id")
-                settings.remove("last_cursor_position")
         except Exception:
             pass
     
@@ -5493,8 +5481,9 @@ class MainWindow(QMainWindow):
         # 3. 保存当前文件夹状态
         self._save_current_folder_state(settings)
         
-        # 4. 保存当前笔记状态和光标位置
-        self._save_current_note_state(settings)
+        # 4. 保存当前笔记的光标位置和状态
+        self._save_current_note_cursor_position()  # 保存光标位置到数据库
+        self._save_current_note_state(settings)  # 保存笔记ID到QSettings
         
         # 5. 执行清理工作
         self._cleanup_on_close()

@@ -2918,7 +2918,7 @@ class NoteEditor(QWidget):
         """
         # Debug: 打印调用栈
         logger.debug("=== update_title_and_input_format called ===")
-        # logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
+        logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
         
         document = self.text_edit.document()
         
