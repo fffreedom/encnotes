@@ -1731,7 +1731,7 @@ class MainWindow(QMainWindow):
 
     def _init_editor(self):
         """初始化编辑器。"""
-        self.editor = NoteEditor(self.note_manager)
+        self.editor = NoteEditor(self.note_manager, main_window=self)
         self.editor.textChanged.connect(self.on_text_changed)
 
         # 空文件夹点击编辑器：自动新建笔记（仿备忘录行为）
@@ -4464,8 +4464,8 @@ class MainWindow(QMainWindow):
             prev_widget = self._find_row_widget_by_payload("folder", prev_folder_id)
         elif prev_system_key:
             prev_widget = self._find_row_widget_by_payload("system", prev_system_key)
-        
-        self._set_row_widget_selected(prev_widget, False)
+        if prev_widget:
+            self._set_row_widget_selected(prev_widget, False)
         
         # 设置当前行选中
         cur_widget = self.folder_list.itemWidget(cur_item) if cur_item else None

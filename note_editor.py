@@ -272,6 +272,9 @@ class PasteImageTextEdit(QTextEdit):
         # 监听滚动事件
         self.verticalScrollBar().valueChanged.connect(self.on_scroll)
         self.horizontalScrollBar().valueChanged.connect(self.on_scroll)
+        
+        # 监听光标位置变化，自动格式化第一行
+        self.cursorPositionChanged.connect(self._update_title_and_input_format)
 
     def _init_attachment_tag_style(self):
         """初始化附件 tag 的样式（只用于标记范围，不改变显示）"""
@@ -288,6 +291,132 @@ class PasteImageTextEdit(QTextEdit):
         except Exception:
             # 标记失败不应影响编辑器可用性
             pass
+
+    def _get_current_note_id(self):
+        """获取当前笔记ID
+        
+        通过调用parent_editor的_get_current_note_id方法来获取当前的笔记id
+        
+        Returns:
+            int or None: 当前笔记ID，如果没有parent_editor或parent_editor没有该方法则返回None
+        """
+        if self.parent_editor and hasattr(self.parent_editor, '_get_current_note_id'):
+            return self.parent_editor._get_current_note_id()
+        return None
+
+    def _create_title_format(self):
+        """创建标题字符格式（28号粗体）"""
+        title_fmt = QTextCharFormat()
+        title_fmt.setFontPointSize(28)
+        title_fmt.setFontWeight(QFont.Weight.Bold)
+        return title_fmt
+    
+    def _create_body_format(self):
+        """创建正文字符格式（14号普通）"""
+        body_fmt = QTextCharFormat()
+        body_fmt.setFontPointSize(14)
+        body_fmt.setFontWeight(QFont.Weight.Normal)
+        return body_fmt
+    
+    def _initialize_empty_document(self):
+        """初始化空文档，插入零宽度空格并设置标题格式"""
+        title_fmt = self._create_title_format()
+        cursor = self.textCursor()
+        cursor.insertText('\u200B', title_fmt)
+        # 设置完之后不需要移动开头位置
+        # cursor.movePosition(cursor.MoveOperation.Start)
+        self.setTextCursor(cursor)
+        self.setCurrentCharFormat(title_fmt)
+    
+    def _is_first_line_title_formatted(self, first_block):
+        """检查第一行是否已经是标题格式（28号字体）"""
+        first_cursor = QTextCursor(first_block)
+        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        char_fmt = first_cursor.charFormat()
+        return char_fmt.fontPointSize() == 28
+    
+    def _apply_title_format_to_first_line(self, first_block):
+        """应用标题格式到第一行"""
+        first_line_text = first_block.text()
+        
+        # 如果第一行为空或只有零宽度空格，不需要应用格式，只需要后面根据光标位置设置相应的光标格式即可
+        if first_line_text in ("", "\u200B"):
+            return
+        
+        # 应用格式到第一行已有文本
+        title_fmt = self._create_title_format()
+        first_cursor = QTextCursor(first_block)
+        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        
+        self.blockSignals(True)
+        first_cursor.mergeCharFormat(title_fmt)
+        self.blockSignals(False)
+    
+    def _set_title_input_format(self):
+        """设置标题输入格式（保留当前格式的其他属性）"""
+        current_fmt = self.currentCharFormat()
+        current_fmt.setFontPointSize(28)
+        current_fmt.setFontWeight(QFont.Weight.Bold)
+        self.setCurrentCharFormat(current_fmt)
+    
+    def _set_body_input_format(self, current_cursor, current_block):
+        """设置正文输入格式，如果当前行为空则插入零宽度空格"""
+        body_fmt = self._create_body_format()
+        
+        # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
+        if current_block.text() == "":
+            self.blockSignals(True)
+            current_cursor.setCharFormat(body_fmt)
+            current_cursor.insertText("\u200B")
+            current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            self.setTextCursor(current_cursor)
+            self.blockSignals(False)
+        
+        self.setCurrentCharFormat(body_fmt)
+    
+    def _update_title_and_input_format(self):
+        """更新第一行标题格式并设置当前光标的输入格式
+        
+        功能包括：
+        1. 初始化空文档（插入零宽度字符）
+        2. 确保第一行为标题格式（28pt 粗体）
+        3. 根据光标位置设置输入格式（标题或正文）
+        """
+        # Debug: 打印调用栈
+        logger.debug("=== _update_title_and_input_format called ===")
+        #logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
+        
+        document = self.document()
+        
+        # 处理空文档
+        if document.isEmpty():
+            self._initialize_empty_document()
+            return
+        
+        # 获取当前光标
+        current_cursor = self.textCursor()
+        
+        # 如果有选区，不执行格式化（避免影响选区内容）
+        if current_cursor.hasSelection():
+            return
+        
+        current_block = current_cursor.block()
+        current_block_number = current_block.blockNumber()
+        
+        # 获取并验证第一行
+        first_block = document.firstBlock()
+        if not first_block.isValid():
+            return
+        
+        # 格式化第一行为标题格式（如果需要），防御因历史数据、粘贴内容、用户错误操作、程序bug等导致的标题没有格式化的相关问题
+        if not self._is_first_line_title_formatted(first_block):
+            self._apply_title_format_to_first_line(first_block)
+        
+        # 根据光标位置设置当前输入格式
+        if current_block_number == 0:
+            self._set_title_input_format()
+        else:
+            self._set_body_input_format(current_cursor, current_block)
 
     def _cursor_is_in_attachment_block(self, cursor: QTextCursor) -> bool:
         """判断光标是否位于附件块的字符范围内（通过 charFormat 的 anchor 属性不可靠，所以用自定义 property 标识）"""
@@ -513,7 +642,7 @@ class PasteImageTextEdit(QTextEdit):
 
                 # 如果该附件此前被"延迟删除"挪进回收站，这里自动尝试恢复，确保打开不受影响
                 try:
-                    note_id = getattr(self.parent_editor, 'current_note_id', None)
+                    note_id = self._get_current_note_id()
                     if note_id:
                         attachment_manager.restore_deferred_attachment(attachment_id, note_id)
                 except Exception:
@@ -823,7 +952,7 @@ class PasteImageTextEdit(QTextEdit):
         if not (hasattr(self, 'parent_editor') and self.parent_editor):
             return True
         
-        return bool(getattr(self.parent_editor, 'current_note_id', None))
+        return bool(self._get_current_note_id())
     
     def _restore_title_format_if_needed(self):
         """如果光标在空的第一行，恢复标题格式"""
@@ -880,7 +1009,7 @@ class PasteImageTextEdit(QTextEdit):
             如果应该忽略返回True，否则返回False
         """
         if hasattr(self, 'parent_editor') and self.parent_editor:
-            if not getattr(self.parent_editor, 'current_note_id', None):
+            if not self._get_current_note_id():
                 return True
         return False
 
@@ -1738,7 +1867,7 @@ class PasteImageTextEdit(QTextEdit):
             logger.debug("[attachment-delete] extracted_attachment_ids=%s", attachment_ids)
             
             if attachment_ids and self.parent_editor and getattr(self.parent_editor, "note_manager", None):
-                note_id = getattr(self.parent_editor, "current_note_id", None)
+                note_id = self._get_current_note_id()
                 am = getattr(self.parent_editor.note_manager, "attachment_manager", None)
                 if note_id and am:
                     for aid in attachment_ids:
@@ -2020,14 +2149,11 @@ class PasteImageTextEdit(QTextEdit):
         self.setCurrentCharFormat(title_fmt)
     
     def _trigger_format_update(self):
-        """触发父对象的格式更新
+        """触发格式更新
         
-        调用 NoteEditor 的 update_title_and_input_format 方法，
         确保第一行格式正确，并根据光标位置设置输入格式。
         """
-        parent = self.parent()
-        if parent and hasattr(parent, 'update_title_and_input_format'):
-            parent.update_title_and_input_format()
+        self._update_title_and_input_format()
     
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
@@ -2325,23 +2451,22 @@ class PasteImageTextEdit(QTextEdit):
 
 class NoteEditor(QWidget):
     """笔记编辑器类 - 包含工具栏和编辑区"""
-    def __init__(self, note_manager=None):
+    def __init__(self, note_manager=None, main_window=None):
         super().__init__()
         self.math_renderer = MathRenderer()
         self.note_manager = note_manager
+        self.main_window = main_window  # 保存 MainWindow 引用
         self.attachments = {}  # 存储附件 {filename: filepath}
         self.init_ui()
     
-    @property
-    def current_note_id(self):
-        """从parent window获取当前笔记ID
+    def _get_current_note_id(self):
+        """从main window获取当前笔记ID
         
         Returns:
             int or None: 当前笔记ID
         """
-        parent = self.parent()
-        if parent and hasattr(parent, '_get_current_note_id'):
-            return parent._get_current_note_id()
+        if self.main_window and hasattr(self.main_window, '_get_current_note_id'):
+            return self.main_window._get_current_note_id()
         return None
         
     def init_ui(self):
@@ -2376,9 +2501,6 @@ class NoteEditor(QWidget):
         
         # 启用富文本
         self.text_edit.setAcceptRichText(True)
-        
-        # 监听光标位置变化，自动格式化第一行
-        self.text_edit.cursorPositionChanged.connect(self.update_title_and_input_format)
         
         layout.addWidget(self.text_edit)
         
@@ -2587,7 +2709,7 @@ class NoteEditor(QWidget):
         try:
             logger.debug(
                 "[attachment-remark] setHtml called note_id=%s html_len=%s plain_len=%s has_attachment_url=%s tag=%s",
-                getattr(self, "current_note_id", None),
+                self._get_current_note_id() if hasattr(self, '_get_current_note_id') else None,
                 len(html_content or ""),
                 len(self.text_edit.toPlainText() or ""),
                 ("attachment://" in (html_content or "")),
@@ -2848,120 +2970,6 @@ class NoteEditor(QWidget):
     
     def setTextCursor(self, cursor):
         self.text_edit.setTextCursor(cursor)
-    
-    def _create_title_format(self):
-        """创建标题字符格式（28号粗体）"""
-        title_fmt = QTextCharFormat()
-        title_fmt.setFontPointSize(28)
-        title_fmt.setFontWeight(QFont.Weight.Bold)
-        return title_fmt
-    
-    def _create_body_format(self):
-        """创建正文字符格式（14号普通）"""
-        body_fmt = QTextCharFormat()
-        body_fmt.setFontPointSize(14)
-        body_fmt.setFontWeight(QFont.Weight.Normal)
-        return body_fmt
-    
-    def _initialize_empty_document(self):
-        """初始化空文档，插入零宽度空格并设置标题格式"""
-        title_fmt = self._create_title_format()
-        cursor = self.text_edit.textCursor()
-        cursor.insertText('\u200B', title_fmt)
-        # 设置完之后不需要移动开头位置
-        # cursor.movePosition(cursor.MoveOperation.Start)
-        self.text_edit.setTextCursor(cursor)
-        self.text_edit.setCurrentCharFormat(title_fmt)
-    
-    def _is_first_line_title_formatted(self, first_block):
-        """检查第一行是否已经是标题格式（28号字体）"""
-        first_cursor = QTextCursor(first_block)
-        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        char_fmt = first_cursor.charFormat()
-        return char_fmt.fontPointSize() == 28
-    
-    def _apply_title_format_to_first_line(self, first_block):
-        """应用标题格式到第一行"""
-        first_line_text = first_block.text()
-        
-        # 如果第一行为空或只有零宽度空格，不需要应用格式，只需要后面根据光标位置设置相应的光标格式即可
-        if first_line_text in ("", "\u200B"):
-            return
-        
-        # 应用格式到第一行已有文本
-        title_fmt = self._create_title_format()
-        first_cursor = QTextCursor(first_block)
-        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        
-        self.text_edit.blockSignals(True)
-        first_cursor.mergeCharFormat(title_fmt)
-        self.text_edit.blockSignals(False)
-    
-    def _set_title_input_format(self):
-        """设置标题输入格式（保留当前格式的其他属性）"""
-        current_fmt = self.text_edit.currentCharFormat()
-        current_fmt.setFontPointSize(28)
-        current_fmt.setFontWeight(QFont.Weight.Bold)
-        self.text_edit.setCurrentCharFormat(current_fmt)
-    
-    def _set_body_input_format(self, current_cursor, current_block):
-        """设置正文输入格式，如果当前行为空则插入零宽度空格"""
-        body_fmt = self._create_body_format()
-        
-        # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
-        if current_block.text() == "":
-            self.text_edit.blockSignals(True)
-            current_cursor.setCharFormat(body_fmt)
-            current_cursor.insertText("\u200B")
-            current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-            self.text_edit.setTextCursor(current_cursor)
-            self.text_edit.blockSignals(False)
-        
-        self.text_edit.setCurrentCharFormat(body_fmt)
-    # 在光标变化和加载笔记（切换笔记）时调用
-    def update_title_and_input_format(self):
-        """更新第一行标题格式并设置当前光标的输入格式
-        
-        功能包括：
-        1. 初始化空文档（插入零宽度字符）
-        2. 确保第一行为标题格式（28pt 粗体）
-        3. 根据光标位置设置输入格式（标题或正文）
-        """
-        # Debug: 打印调用栈
-        logger.debug("=== update_title_and_input_format called ===")
-        logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
-        
-        document = self.text_edit.document()
-        
-        # 处理空文档
-        if document.isEmpty():
-            self._initialize_empty_document()
-            return
-        
-        # 获取当前光标
-        current_cursor = self.text_edit.textCursor()
-        
-        # 如果有选区，不执行格式化（避免影响选区内容）
-        if current_cursor.hasSelection():
-            return
-        
-        current_block = current_cursor.block()
-        current_block_number = current_block.blockNumber()
-        
-        # 获取并验证第一行
-        first_block = document.firstBlock()
-        if not first_block.isValid():
-            return
-        
-        # 格式化第一行为标题格式（如果需要），防御因历史数据、粘贴内容、用户错误操作、程序bug等导致的标题没有格式化的相关问题
-        if not self._is_first_line_title_formatted(first_block):
-            self._apply_title_format_to_first_line(first_block)
-        
-        # 根据光标位置设置当前输入格式
-        if current_block_number == 0:
-            self._set_title_input_format()
-        else:
-            self._set_body_input_format(current_cursor, current_block)
     
     # 格式化方法
     def apply_heading(self, level):
@@ -3432,7 +3440,7 @@ class NoteEditor(QWidget):
         返回：(success, attachment_id) 或 (False, None)
         """
         success, message, attachment_id = self.note_manager.attachment_manager.add_attachment(
-            file_path, self.current_note_id
+            file_path, self._get_current_note_id()
         )
         
         if not success:
@@ -3546,7 +3554,7 @@ class NoteEditor(QWidget):
             import os
             
             # 检查是否有note_manager和当前笔记ID
-            if not self.note_manager or not self.current_note_id:
+            if not self.note_manager or not self._get_current_note_id():
                 QMessageBox.warning(self, "错误", "无法添加附件：笔记未保存")
                 return
             
