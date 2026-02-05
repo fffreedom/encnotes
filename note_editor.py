@@ -366,7 +366,7 @@ class PasteImageTextEdit(QTextEdit):
         """设置正文输入格式，如果当前行为空则插入零宽度空格"""
         body_fmt = self._create_body_format()
         block_text = current_block.text()
-        is_empty_block = (block_text == "")
+        is_empty_block = (block_text == "" or block_text == "\u200B")
         
         logger.debug(f"[_set_body_input_format] 设置正文格式: block_number={current_block.blockNumber()}, "
                      f"is_empty={is_empty_block}, block_text_length={len(block_text)}")
@@ -380,11 +380,9 @@ class PasteImageTextEdit(QTextEdit):
             current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
             self.setTextCursor(current_cursor)
             self.blockSignals(False)
-        
-        self.setCurrentCharFormat(body_fmt)
-        logger.debug(f"[_set_body_input_format] 正文格式已设置: font_size={body_fmt.fontPointSize()}, "
-                     f"font_weight={body_fmt.fontWeight()}")
-    
+            logger.debug(f"[_set_body_input_format] 正文格式已设置: font_size={body_fmt.fontPointSize()}, "
+                         f"font_weight={body_fmt.fontWeight()}")
+
     def setCursorPosition(self, position):
         """设置光标位置的封装方法
         
