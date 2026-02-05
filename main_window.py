@@ -1414,6 +1414,9 @@ class MainWindow(QMainWindow):
         #   - "tag:{tag_id}" - 标签
         self._last_note_per_view = {}
 
+        # 编辑器初始化标志：防止启动时保存空笔记覆盖数据库内容
+        self._editor_initialized = False
+
         # 多选状态
         self.selected_note_rows = set()  # 当前选中的笔记行号集合
 
@@ -2303,6 +2306,8 @@ class MainWindow(QMainWindow):
         Args:
             select_note_id: 要选中的笔记ID，如果为None则选中第一个笔记
         """
+        logger.info(f"[_select_or_default_note_in_list] 开始选中笔记: select_note_id={select_note_id}")
+        
         # 现在分隔线画在 item 的顶部边缘，因此"最后一条笔记"也应该保留顶部线（无需关闭）。
         # 触发重绘（应用分隔线状态变化）
         self.note_list.viewport().update()
@@ -2314,6 +2319,8 @@ class MainWindow(QMainWindow):
                 item = self.note_list.item(i)
                 if item.flags() & Qt.ItemFlag.ItemIsSelectable:
                     if item.data(Qt.ItemDataRole.UserRole) == select_note_id:
+                        logger.info(f"[_select_or_default_note_in_list] 找到并选中指定笔记: note_id={select_note_id}, row={i}")
+                        # 这儿会触发on_note_selected事件，从而调用_load_and_display_note加载笔记
                         self.note_list.setCurrentRow(i)
                         self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
                         self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
@@ -2322,9 +2329,13 @@ class MainWindow(QMainWindow):
         
         # 如果没有指定笔记ID或指定的笔记不存在，选中第一个可选中的笔记项
         if not note_selected:
+            logger.info(f"[_select_or_default_note_in_list] 未找到指定笔记或未指定，选中第一个笔记")
             for i in range(self.note_list.count()):
                 item = self.note_list.item(i)
                 if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                    first_note_id = item.data(Qt.ItemDataRole.UserRole)
+                    logger.info(f"[_select_or_default_note_in_list] 选中第一个笔记: note_id={first_note_id}, row={i}")
+                    # 这儿会触发on_note_selected事件，从而调用_load_and_display_note加载笔记
                     self.note_list.setCurrentRow(i)
                     self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
                     self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
@@ -2843,18 +2854,23 @@ class MainWindow(QMainWindow):
         try:
             import json
             last_note_per_view_str = self.note_manager.get_app_state("last_note_per_view")
+            logger.info(f"[_restore_last_note_per_view] 开始恢复视图笔记映射: {last_note_per_view_str}")
             if last_note_per_view_str:
                 try:
                     last_note_per_view = json.loads(last_note_per_view_str)
                     if isinstance(last_note_per_view, dict):
                         self._last_note_per_view = last_note_per_view
+                        logger.info(f"[_restore_last_note_per_view] 视图笔记映射恢复成功: {last_note_per_view}")
                 except Exception as e:
+                    logger.error(f"[_restore_last_note_per_view] 解析 last_note_per_view 失败: {e}")
                     print(f"解析 last_note_per_view 失败: {e}")
         except Exception as e:
+            logger.error(f"[_restore_last_note_per_view] 恢复 last_note_per_view 失败: {e}")
             print(f"恢复 last_note_per_view 失败: {e}")
     
     def _restore_last_state(self):
         """从数据库恢复完整状态（文件夹/标签、笔记、光标位置）"""
+        logger.info("[_restore_last_state] 开始恢复应用状态")
         try:
             # 0. 首先恢复所有视图的笔记映射
             self._restore_last_note_per_view()
@@ -2862,16 +2878,20 @@ class MainWindow(QMainWindow):
             # 1. 恢复文件夹/标签选中状态
             last_folder_type = self.note_manager.get_app_state("last_folder_type")
             last_folder_value = self.note_manager.get_app_state("last_folder_value")
+            logger.info(f"[_restore_last_state] 恢复文件夹状态: type={last_folder_type}, value={last_folder_value}")
             
             # 尝试恢复上次选中的文件夹/标签
             folder_restored = self._find_and_select_folder(last_folder_type, last_folder_value)
             
             # 2. 如果没有恢复成功，使用默认值（"所有笔记"）
             if not folder_restored:
+                logger.info("[_restore_last_state] 文件夹恢复失败，使用默认文件夹")
                 self._select_default_folder()
+            else:
+                logger.info("[_restore_last_state] 文件夹恢复成功")
             
         except Exception as e:
-            print(f"恢复状态失败: {e}")
+            logger.error(f"[_restore_last_state] 恢复状态失败: {e}")
             import traceback
             traceback.print_exc()
             # 失败时使用默认值
@@ -2898,6 +2918,7 @@ class MainWindow(QMainWindow):
             payload = item.data(Qt.ItemDataRole.UserRole)
             if isinstance(payload, tuple) and len(payload) == 2:
                 if payload[0] == folder_type and payload[1] == folder_value:
+                    # 这儿会触发on_folder_changed事件
                     self.folder_list.setCurrentRow(i)
                     return True
         
@@ -4634,18 +4655,69 @@ class MainWindow(QMainWindow):
                 self.note_manager.attachment_manager.cleanup_note_attachment_trash(note_id)
         except Exception:
             pass
-    
+
+    def restore_cursor_position(self, note):
+        """恢复笔记的光标位置
+
+        Args:
+            note: dict 笔记对象，包含 cursor_position 字段
+
+        功能：
+            1. 如果笔记有保存的光标位置且大于0，恢复到该位置
+            2. 否则，设置光标到标题末尾
+            3. 设置光标位置时会触发 cursorPositionChanged 信号，从而调用 update_title_and_input_format 进行标题格式设置
+        """
+        note_id = note.get('id', 'unknown')
+        try:
+            cursor_position = note.get('cursor_position', 0)
+            if cursor_position is not None and cursor_position > 0:
+                # 恢复到上次保存的光标位置
+                self._set_editor_cursor_to_position(cursor_position, note_id)
+            else:
+                # 如果没有保存的光标位置，设置到标题末尾
+                logger.debug(f"[restore_cursor_position] 没有保存的光标位置或者光标位置为0，设置到标题末尾: note_id={note_id}, "
+                             f"cursor_position={cursor_position}")
+                self._set_editor_cursor_to_title_end()
+        except Exception as e:
+            # 出错时设置到标题末尾
+            logger.debug(f"[restore_cursor_position] 恢复光标位置出错，设置到标题末尾: note_id={note_id}, error={e}")
+            self._set_editor_cursor_to_title_end()
+
+    def _set_editor_cursor_to_position(self, cursor_position, note_id='unknown'):
+        """设置编辑器光标到指定位置
+
+        Args:
+            cursor_position: int 光标位置
+            note_id: str 笔记ID，用于日志记录
+
+        功能：
+            使用封装的 setCursorPosition 方法设置光标位置
+            这会触发 cursorPositionChanged 信号，从而调用 update_title_and_input_format 进行标题格式设置
+        """
+        logger.debug(f"[_set_editor_cursor_to_position] 设置光标位置: note_id={note_id}, "
+                     f"cursor_position={cursor_position}")
+        # 使用封装的 setCursorPosition 方法设置光标位置
+        # 这会触发 cursorPositionChanged 信号，从而调用 update_title_and_input_format 进行标题格式设置
+        self.editor.text_edit.setCursorPosition(cursor_position)
+
     def _set_editor_cursor_to_title_end(self):
         """将编辑器光标移动到标题末尾，标题格式通过cursorPositionChanged信号处理"""
-        from PyQt6.QtGui import QTextCursor, QFont, QTextCharFormat
-        
+        from PyQt6.QtGui import QTextCursor
         cursor = self.editor.text_edit.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)  # 移动到文档开始
+        initial_position = cursor.position()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)  # 移动到第一行末尾
         cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)  # 移动到第一行末尾
+        final_position = cursor.position()
+        # 如果光标位置有变化，设置光标，会触发cursorPositionChanged信号，进而调用update_title_and_input_format设置标题格式
+        if final_position != initial_position:
+            self.editor.text_edit.setCursorPosition(final_position)
+        logger.debug(f"[_set_editor_cursor_to_title_end] 初始光标位置: {initial_position}, 最终光标位置: {final_position}")
 
-        # 应用光标并设置焦点
-        self.editor.text_edit.setTextCursor(cursor)
-    
+        # 如果cursor位置没有变化（文档为空时），手动触发标题格式设置，因为前面的setTextCursor在position位置
+        # 相同的情况下不会调用setTextCursor（实际上即便调用了，因为position相同也不会触发cursorPositionChanged信号）
+        if initial_position == final_position:
+            self.editor.text_edit.update_title_and_input_format()
+
     def _load_and_display_note(self, note_id):
         """加载并显示笔记内容
         
@@ -4654,36 +4726,31 @@ class MainWindow(QMainWindow):
         """
         note = self.note_manager.get_note(note_id)
         if not note:
+            logger.warning(f"[_load_and_display_note] 笔记不存在: note_id={note_id}")
             return
+        
+        # 记录加载信息
+        content = note.get('content', '')
+        plain_text_preview = self.editor.toPlainText() if hasattr(self.editor, 'toPlainText') else ''
+        logger.info(f"[_load_and_display_note] 开始加载笔记: note_id={note_id}, title={note.get('title', '')}, "
+                    f"content_length={len(content)}, cursor_position={note.get('cursor_position', 0)}")
+        logger.debug(f"[_load_and_display_note] 内容前100字符: {content[:100] if content else '(空)'}")
         
         # 加载笔记内容（阻止信号避免触发自动保存）
         self.editor.blockSignals(True)
         self.editor.setHtml(note['content'])
         self.editor.blockSignals(False)
-
-        # 恢复光标位置，在设置光标位置时会触发cursorPositionChanged信号，从而调用update_title_and_input_format进行标题格式设置
-        try:
-            cursor_position = note.get('cursor_position', 0)
-            if cursor_position is not None and cursor_position > 0:
-                # 恢复到上次保存的光标位置
-                from PyQt6.QtGui import QTextCursor
-                cursor = self.editor.text_edit.textCursor()
-                # 确保位置不超过文档长度
-                max_position = len(self.editor.text_edit.toPlainText())
-                position = min(int(cursor_position), max_position)
-                cursor.setPosition(position)
-                self.editor.text_edit.setTextCursor(cursor)
-            else:
-                # 如果没有保存的光标位置，设置到标题末尾
-                self._set_editor_cursor_to_title_end()
-        except Exception:
-            # 出错时设置到标题末尾
-            self._set_editor_cursor_to_title_end()
         
-        # 设置焦点到编辑器
-        # 使用延迟确保窗口已经完全显示（特别是在应用启动时）
-        # from PyQt6.QtCore import QTimer
-        # QTimer.singleShot(0, lambda: self.editor.text_edit.setFocus())
+        # 验证加载后的内容
+        loaded_plain_text = self.editor.toPlainText()
+        logger.info(f"[_load_and_display_note] 笔记内容已加载到编辑器: plain_text_length={len(loaded_plain_text)}")
+
+        # 恢复光标位置
+        self.restore_cursor_position(note)
+        
+        # 标记编辑器已初始化（已加载过内容）
+        self._editor_initialized = True
+        logger.debug(f"[_load_and_display_note] 编辑器已初始化: note_id={note_id}")
     
     def _clear_editor(self):
         """清空编辑器"""
@@ -4844,11 +4911,6 @@ class MainWindow(QMainWindow):
         if self._get_current_note_id():
             # 自动保存
             self.save_current_note()
-
-        # 文本一旦不再为空，可能需要重新允许"新建笔记"
-        self._update_new_note_action_enabled()
-
-
 
     def _normalize_text(self, text):
         """标准化文本：统一换行符
@@ -5016,7 +5078,13 @@ class MainWindow(QMainWindow):
     
     def save_current_note(self):
         """保存当前笔记"""
+        # 如果编辑器还未初始化（启动阶段），不保存
+        if not self._editor_initialized:
+            logger.debug("[save_current_note] 编辑器未初始化，跳过保存")
+            return
+        
         if not self._get_current_note_id():
+            logger.debug("[save_current_note] 没有当前笔记ID，跳过保存")
             return
         
         # 1. 获取编辑器内容
@@ -5033,6 +5101,12 @@ class MainWindow(QMainWindow):
         except Exception:
             cursor_position = 0
         
+        # 记录保存信息
+        logger.info(f"[save_current_note] 开始保存笔记: note_id={self._get_current_note_id()}, title={title}, "
+                    f"content_length={len(content)}, plain_text_length={len(plain_text)}, "
+                    f"cursor_position={cursor_position}")
+        logger.debug(f"[save_current_note] 内容前100字符: {plain_text[:len(plain_text)] if plain_text else '(空)'}")
+        
         # 4. 更新笔记到数据库（包括光标位置）
         self.note_manager.update_note(
             self._get_current_note_id(),
@@ -5040,6 +5114,8 @@ class MainWindow(QMainWindow):
             content=content,
             cursor_position=cursor_position
         )
+        
+        logger.info(f"[save_current_note] 笔记保存完成: note_id={self._get_current_note_id()}")
         
         # 5. 更新列表中的显示
         self._update_note_list_display(title, plain_text)
@@ -5466,11 +5542,8 @@ class MainWindow(QMainWindow):
         """保存所有视图的笔记状态"""
         self._save_last_note_per_view()
     
-    def _cleanup_on_close(self):
-        """关闭前的清理工作"""
-        # 保存当前笔记
-        self.save_current_note()
-        
+    def _cleanup_attachments_on_close(self):
+        """关闭前的清理工作：清理附件垃圾箱"""
         # 清理当前笔记"已删除但可撤销"的附件
         try:
             if self._get_current_note_id() and getattr(self.note_manager, 'attachment_manager', None):
@@ -5492,6 +5565,8 @@ class MainWindow(QMainWindow):
         Args:
             event: QCloseEvent 关闭事件对象
         """
+        logger.info(f"[closeEvent] 应用程序关闭，开始保存状态: current_note_id={self._get_current_note_id()}")
+        
         # 1. 保存窗口状态
         self._save_window_geometry()
         
@@ -5499,11 +5574,13 @@ class MainWindow(QMainWindow):
         self._save_current_folder_state()
         
         # 3. 保存当前笔记和状态
+        logger.info(f"[closeEvent] 保存当前笔记: note_id={self._get_current_note_id()}")
         self.save_current_note()  # 保存笔记内容和光标位置到数据库
         self._save_current_note_state()  # 保存笔记ID到数据库
+        logger.info(f"[closeEvent] 当前笔记保存完成")
         
-        # 4. 执行清理工作
-        self._cleanup_on_close()
+        # 4. 清理附件垃圾箱
+        self._cleanup_attachments_on_close()
         
         # 5. 同步笔记（如果启用）
         self._sync_before_close()

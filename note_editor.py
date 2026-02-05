@@ -274,7 +274,7 @@ class PasteImageTextEdit(QTextEdit):
         self.horizontalScrollBar().valueChanged.connect(self.on_scroll)
         
         # 监听光标位置变化，自动格式化第一行
-        self.cursorPositionChanged.connect(self._update_title_and_input_format)
+        self.cursorPositionChanged.connect(self.update_title_and_input_format)
 
     def _init_attachment_tag_style(self):
         """初始化附件 tag 的样式（只用于标记范围，不改变显示）"""
@@ -319,14 +319,11 @@ class PasteImageTextEdit(QTextEdit):
         return body_fmt
     
     def _initialize_empty_document(self):
-        """初始化空文档，插入零宽度空格并设置标题格式"""
+        """初始化空文档，插入零宽度空格并设置标题格式，插入零宽度字符的目的是使光标大小符合标题格式"""
         title_fmt = self._create_title_format()
         cursor = self.textCursor()
+        # insertText会触发cursorPositionChanged信号，从而调用update_title_and_input_format方法
         cursor.insertText('\u200B', title_fmt)
-        # 设置完之后不需要移动开头位置
-        # cursor.movePosition(cursor.MoveOperation.Start)
-        self.setTextCursor(cursor)
-        self.setCurrentCharFormat(title_fmt)
     
     def _is_first_line_title_formatted(self, first_block):
         """检查第一行是否已经是标题格式（28号字体）"""
@@ -355,16 +352,28 @@ class PasteImageTextEdit(QTextEdit):
     def _set_title_input_format(self):
         """设置标题输入格式（保留当前格式的其他属性）"""
         current_fmt = self.currentCharFormat()
+        old_font_size = current_fmt.fontPointSize()
+        old_font_weight = current_fmt.fontWeight()
+        
         current_fmt.setFontPointSize(28)
         current_fmt.setFontWeight(QFont.Weight.Bold)
         self.setCurrentCharFormat(current_fmt)
+        
+        logger.debug(f"[_set_title_input_format] 设置标题格式: old_size={old_font_size}, new_size=28, "
+                     f"old_weight={old_font_weight}, new_weight=Bold")
     
     def _set_body_input_format(self, current_cursor, current_block):
         """设置正文输入格式，如果当前行为空则插入零宽度空格"""
         body_fmt = self._create_body_format()
+        block_text = current_block.text()
+        is_empty_block = (block_text == "")
+        
+        logger.debug(f"[_set_body_input_format] 设置正文格式: block_number={current_block.blockNumber()}, "
+                     f"is_empty={is_empty_block}, block_text_length={len(block_text)}")
         
         # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
-        if current_block.text() == "":
+        if is_empty_block:
+            logger.debug("[_set_body_input_format] 当前行为空，插入零宽度空格")
             self.blockSignals(True)
             current_cursor.setCharFormat(body_fmt)
             current_cursor.insertText("\u200B")
@@ -373,8 +382,36 @@ class PasteImageTextEdit(QTextEdit):
             self.blockSignals(False)
         
         self.setCurrentCharFormat(body_fmt)
+        logger.debug(f"[_set_body_input_format] 正文格式已设置: font_size={body_fmt.fontPointSize()}, "
+                     f"font_weight={body_fmt.fontWeight()}")
     
-    def _update_title_and_input_format(self):
+    def setCursorPosition(self, position):
+        """设置光标位置的封装方法
+        
+        Args:
+            position: 要设置的光标位置（整数）
+        
+        功能：
+            1. 确保位置不超过文档长度
+            2. 设置光标到指定位置
+            3. 触发 cursorPositionChanged 信号（如果位置发生变化）
+        """
+        # 确保位置不超过文档长度
+        max_position = len(self.toPlainText())
+        safe_position = min(int(position), max_position)
+        
+        logger.debug(f"[setCursorPosition] 设置光标位置: requested={position}, "
+                     f"max={max_position}, final={safe_position}")
+        
+        # 创建新光标并设置位置
+        cursor = self.textCursor()
+        cursor.setPosition(safe_position)
+        self.setTextCursor(cursor)
+        
+        # 应用光标并设置焦点，不设置焦点光标不会闪烁
+        self.setFocus()
+    
+    def update_title_and_input_format(self):
         """更新第一行标题格式并设置当前光标的输入格式
         
         功能包括：
@@ -383,39 +420,55 @@ class PasteImageTextEdit(QTextEdit):
         3. 根据光标位置设置输入格式（标题或正文）
         """
         # Debug: 打印调用栈
-        logger.debug("=== _update_title_and_input_format called ===")
-        #logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
+        logger.debug("=== update_title_and_input_format called ===")
+        logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
         
         document = self.document()
         
         # 处理空文档
         if document.isEmpty():
+            logger.debug("[update_title_and_input_format] 文档为空，初始化空文档")
             self._initialize_empty_document()
             return
         
         # 获取当前光标
         current_cursor = self.textCursor()
+        cursor_position = current_cursor.position()
         
         # 如果有选区，不执行格式化（避免影响选区内容）
         if current_cursor.hasSelection():
+            logger.debug(f"[update_title_and_input_format] 光标有选区，跳过格式化: position={cursor_position}, "
+                         f"selection_start={current_cursor.selectionStart()}, "
+                         f"selection_end={current_cursor.selectionEnd()}")
             return
         
         current_block = current_cursor.block()
         current_block_number = current_block.blockNumber()
+        current_block_text = current_block.text()
+        
+        logger.debug(f"[update_title_and_input_format] 光标信息: position={cursor_position}, "
+                     f"block_number={current_block_number}, block_text='{current_block_text[:50]}...' (前50字符)")
         
         # 获取并验证第一行
         first_block = document.firstBlock()
         if not first_block.isValid():
+            logger.debug("[update_title_and_input_format] 第一行无效，返回")
             return
         
         # 格式化第一行为标题格式（如果需要），防御因历史数据、粘贴内容、用户错误操作、程序bug等导致的标题没有格式化的相关问题
-        if not self._is_first_line_title_formatted(first_block):
+        first_line_formatted = self._is_first_line_title_formatted(first_block)
+        logger.debug(f"[update_title_and_input_format] 第一行格式检查: is_formatted={first_line_formatted}")
+        
+        if not first_line_formatted:
+            logger.debug("[update_title_and_input_format] 第一行未格式化，应用标题格式")
             self._apply_title_format_to_first_line(first_block)
         
         # 根据光标位置设置当前输入格式
         if current_block_number == 0:
+            logger.debug("[update_title_and_input_format] 光标在第一行，设置标题输入格式")
             self._set_title_input_format()
         else:
+            logger.debug(f"[update_title_and_input_format] 光标在正文区域（第{current_block_number}行），设置正文输入格式")
             self._set_body_input_format(current_cursor, current_block)
 
     def _cursor_is_in_attachment_block(self, cursor: QTextCursor) -> bool:
@@ -2153,7 +2206,7 @@ class PasteImageTextEdit(QTextEdit):
         
         确保第一行格式正确，并根据光标位置设置输入格式。
         """
-        self._update_title_and_input_format()
+        self.update_title_and_input_format()
     
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""

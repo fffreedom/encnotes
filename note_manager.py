@@ -6,11 +6,14 @@
 
 import sqlite3
 import uuid
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 from encryption_manager import EncryptionManager
 from attachment_manager import AttachmentManager
+
+logger = logging.getLogger(__name__)
 
 
 class NoteManager:
@@ -281,7 +284,14 @@ class NoteManager:
         
         row = cursor.fetchone()
         if row:
-            return self._row_to_dict(row)
+            note_dict = self._row_to_dict(row)
+            content_length = len(note_dict.get('content', ''))
+            logger.info(f"[get_note] 读取笔记成功: note_id={note_id}, title={note_dict.get('title', '')}, "
+                        f"content_length={content_length}, cursor_position={note_dict.get('cursor_position', 0)}")
+            logger.debug(f"[get_note] 内容前100字符: {note_dict.get('content', '')[:100]}")
+            return note_dict
+        else:
+            logger.warning(f"[get_note] 笔记不存在: note_id={note_id}")
         return None
         
     def update_note(self, note_id: str, title: Optional[str] = None, 
@@ -294,11 +304,15 @@ class NoteManager:
             content: 内容（可选）
             cursor_position: 光标位置（可选）
         """
+        logger.info(f"[update_note] 开始更新笔记: note_id={note_id}, title={title}, "
+                    f"content_length={len(content) if content else 0}, cursor_position={cursor_position}")
+        
         cursor = self.conn.cursor()
         
         # 获取当前笔记
         note = self.get_note(note_id)
         if not note:
+            logger.warning(f"[update_note] 笔记不存在: note_id={note_id}")
             return
             
         # 更新字段
@@ -326,6 +340,7 @@ class NoteManager:
         ''', (cocoa_time, note_id))
         
         self.conn.commit()
+        logger.info(f"[update_note] 笔记更新完成: note_id={note_id}")
         
     def delete_note(self, note_id: str):
         """删除笔记（移到最近删除）"""
