@@ -124,6 +124,16 @@ class NoteManager:
             )
         ''')
         
+        # 创建应用状态表（用于替代QSettings）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ZAPPSTATE (
+                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
+                ZKEY TEXT UNIQUE NOT NULL,
+                ZVALUE TEXT,
+                ZMODIFICATIONDATE REAL
+            )
+        ''')
+        
         # 创建标签表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ZTAG (
@@ -207,6 +217,21 @@ class NoteManager:
                     ALTER TABLE ZNOTE ADD COLUMN ZCURSORPOSITION INTEGER DEFAULT 0
                 ''')
                 print("数据库迁移：已添加ZCURSORPOSITION字段")
+        except Exception as e:
+            print(f"数据库迁移警告: {e}")
+        
+        # 数据库迁移：为现有数据库添加ZLASTNOTEID字段
+        try:
+            # 检查ZFOLDER表是否已有ZLASTNOTEID字段
+            cursor.execute("PRAGMA table_info(ZFOLDER)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'ZLASTNOTEID' not in columns:
+                # 添加ZLASTNOTEID字段
+                cursor.execute('''
+                    ALTER TABLE ZFOLDER ADD COLUMN ZLASTNOTEID TEXT
+                ''')
+                print("数据库迁移：已添加ZLASTNOTEID字段")
         except Exception as e:
             print(f"数据库迁移警告: {e}")
         
@@ -498,6 +523,53 @@ class NoteManager:
             INSERT OR REPLACE INTO ZCKMETADATA (ZKEY, ZVALUE)
             VALUES (?, ?)
         ''', (key, value))
+        
+        self.conn.commit()
+    
+    def get_app_state(self, key: str) -> Optional[str]:
+        """获取应用状态
+        
+        Args:
+            key: 状态键
+            
+        Returns:
+            状态值，如果不存在则返回None
+        """
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT ZVALUE FROM ZAPPSTATE WHERE ZKEY = ?
+        ''', (key,))
+        
+        row = cursor.fetchone()
+        return row['ZVALUE'] if row else None
+    
+    def set_app_state(self, key: str, value: str):
+        """设置应用状态
+        
+        Args:
+            key: 状态键
+            value: 状态值
+        """
+        cursor = self.conn.cursor()
+        cocoa_time = self._timestamp_to_cocoa(datetime.now())
+        
+        cursor.execute('''
+            INSERT OR REPLACE INTO ZAPPSTATE (ZKEY, ZVALUE, ZMODIFICATIONDATE)
+            VALUES (?, ?, ?)
+        ''', (key, value, cocoa_time))
+        
+        self.conn.commit()
+    
+    def remove_app_state(self, key: str):
+        """删除应用状态
+        
+        Args:
+            key: 状态键
+        """
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            DELETE FROM ZAPPSTATE WHERE ZKEY = ?
+        ''', (key,))
         
         self.conn.commit()
         
@@ -800,10 +872,17 @@ class NoteManager:
         created_at = self._cocoa_to_datetime(row['ZCREATIONDATE'])
         updated_at = self._cocoa_to_datetime(row['ZMODIFICATIONDATE'])
         
+        # 安全获取ZLASTNOTEID字段（可能不存在于旧数据库）
+        try:
+            last_note_id = row['ZLASTNOTEID'] if row['ZLASTNOTEID'] else None
+        except (KeyError, IndexError):
+            last_note_id = None
+        
         return {
             'id': row['ZIDENTIFIER'],
             'name': row['ZNAME'],
             'parent_folder_id': row['ZPARENTFOLDERID'] if row['ZPARENTFOLDERID'] else None,
+            'last_note_id': last_note_id,
             'created_at': created_at.isoformat(),
             'updated_at': updated_at.isoformat(),
             'order_index': row['ZORDERINDEX'],
@@ -1106,10 +1185,10 @@ class NoteManager:
         self.conn.commit()
 
     def delete_folder_to_trash(self, folder_id: str):
-        """删除文件夹：将该文件夹（含子文件夹）下的笔记全部移入“最近删除”，然后删除文件夹本身。
+        """删除文件夹：将该文件夹（含子文件夹）下的笔记全部移入"最近删除"，然后删除文件夹本身。
 
         说明：
-        - “最近删除”在本项目里由笔记字段 `ZISDELETED=1` 表示，而不是一个真实文件夹。
+        - "最近删除"在本项目里由笔记字段 `ZISDELETED=1` 表示，而不是一个真实文件夹。
         - 文件夹删除后，其子文件夹也会一并删除。
         """
         if not folder_id:
@@ -1127,6 +1206,52 @@ class NoteManager:
         cursor = self.conn.cursor()
         for fid in reversed(folder_ids):
             cursor.execute('DELETE FROM ZFOLDER WHERE ZIDENTIFIER = ?', (fid,))
+        self.conn.commit()
+    
+    def get_folder_last_note_id(self, folder_id: str) -> Optional[str]:
+        """获取文件夹的上次编辑笔记ID
+        
+        Args:
+            folder_id: 文件夹ID
+            
+        Returns:
+            上次编辑的笔记ID，如果没有则返回None
+        """
+        if not folder_id:
+            return None
+            
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT ZLASTNOTEID FROM ZFOLDER WHERE ZIDENTIFIER = ?
+        ''', (folder_id,))
+        
+        row = cursor.fetchone()
+        if row:
+            try:
+                return row['ZLASTNOTEID'] if row['ZLASTNOTEID'] else None
+            except (KeyError, IndexError):
+                return None
+        return None
+    
+    def set_folder_last_note_id(self, folder_id: str, note_id: Optional[str]):
+        """设置文件夹的上次编辑笔记ID
+        
+        Args:
+            folder_id: 文件夹ID
+            note_id: 笔记ID，可以为None
+        """
+        if not folder_id:
+            return
+            
+        cursor = self.conn.cursor()
+        cocoa_time = self._timestamp_to_cocoa(datetime.now())
+        
+        cursor.execute('''
+            UPDATE ZFOLDER
+            SET ZLASTNOTEID = ?, ZMODIFICATIONDATE = ?
+            WHERE ZIDENTIFIER = ?
+        ''', (note_id, cocoa_time, folder_id))
+        
         self.conn.commit()
     
     def __del__(self):

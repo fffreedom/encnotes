@@ -2329,9 +2329,20 @@ class NoteEditor(QWidget):
         super().__init__()
         self.math_renderer = MathRenderer()
         self.note_manager = note_manager
-        self.current_note_id = None  # 当前编辑的笔记ID
         self.attachments = {}  # 存储附件 {filename: filepath}
         self.init_ui()
+    
+    @property
+    def current_note_id(self):
+        """从parent window获取当前笔记ID
+        
+        Returns:
+            int or None: 当前笔记ID
+        """
+        parent = self.parent()
+        if parent and hasattr(parent, '_get_current_note_id'):
+            return parent._get_current_note_id()
+        return None
         
     def init_ui(self):
         """初始化界面"""

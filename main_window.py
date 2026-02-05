@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy
 )
 
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QSettings
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QDesktopServices
 from PyQt6.QtCore import QUrl
 
@@ -1306,7 +1306,7 @@ class MainWindow(QMainWindow):
                 return False
             
             # 只有"选中了某个自定义文件夹 + 当前没有选中笔记 + 当前不在标签视图"才自动创建
-            if self.current_folder_id and self.current_note_id is None and self.current_tag_id is None:
+            if self.current_folder_id and self._get_current_note_id() is None and self.current_tag_id is None:
                 self.create_note_in_folder(self.current_folder_id, default_title="新笔记")
                 event.accept()
                 return True
@@ -1346,7 +1346,7 @@ class MainWindow(QMainWindow):
                 self._is_editor_click(obj)
                 and event.type() == QEvent.Type.MouseButtonPress
                 and self.current_tag_id is not None
-                and self.current_note_id is None
+                and self._get_current_note_id() is None
             ):
                 return False
             
@@ -1398,12 +1398,21 @@ class MainWindow(QMainWindow):
 
         self.export_manager = ExportManager()
         self.sync_manager = CloudKitSyncManager(self.note_manager)
-        self.current_note_id = None
+        
+        # 视图状态
         self.current_folder_id = None  # 当前选中的文件夹ID
         self.current_tag_id = None  # 当前选中的标签ID
         self.is_viewing_deleted = False  # 是否正在查看最近删除
         self.custom_folders = []  # 自定义文件夹列表
         self.tags = []  # 标签列表
+        
+        # 每个视图记录上次编辑的笔记：{view_key: note_id}
+        # view_key 格式：
+        #   - "system:all_notes" - 所有笔记
+        #   - "system:deleted" - 最近删除
+        #   - "folder:{folder_id}" - 自定义文件夹
+        #   - "tag:{tag_id}" - 标签
+        self._last_note_per_view = {}
 
         # 多选状态
         self.selected_note_rows = set()  # 当前选中的笔记行号集合
@@ -1421,7 +1430,7 @@ class MainWindow(QMainWindow):
             sys.exit(0)
 
         self.init_ui()
-        self.load_folders(restore_from_settings=True)  # 加载文件夹并恢复状态
+        self.load_folders(True)  # 加载文件夹并恢复状态
 
         # 设置自动同步定时器（每5分钟）
         self.sync_timer = QTimer()
@@ -1434,11 +1443,12 @@ class MainWindow(QMainWindow):
         若用户曾调整过窗口大小，则按上次值恢复。
         若没有历史记录（首次启动），默认最大化。
         """
-        self._settings = QSettings("encnotes", "encnotes")
         restored = False
         try:
-            geo = self._settings.value("main_window/geometry")
-            if geo is not None:
+            import base64
+            geo_str = self.note_manager.get_app_state("main_window/geometry")
+            if geo_str:
+                geo = base64.b64decode(geo_str.encode())
                 restored = self.restoreGeometry(geo)
         except Exception:
             restored = False
@@ -1452,8 +1462,10 @@ class MainWindow(QMainWindow):
 
         # 可选：恢复窗口状态（例如工具栏停靠等）；失败不影响启动
         try:
-            st = self._settings.value("main_window/state")
-            if st is not None:
+            import base64
+            st_str = self.note_manager.get_app_state("main_window/state")
+            if st_str:
+                st = base64.b64decode(st_str.encode())
                 self.restoreState(st)
         except Exception:
             pass
@@ -2166,8 +2178,7 @@ class MainWindow(QMainWindow):
                 self.current_tag_id = tag_id
                 self.is_viewing_deleted = False
 
-                self.current_note_id = None
-                self.editor.current_note_id = None
+                self._set_current_note_id(None)
                 self.editor.clear()
                 try:
                     self.editor.text_edit.clearFocus()
@@ -2321,8 +2332,7 @@ class MainWindow(QMainWindow):
     
     def _clear_editor_for_empty_list(self):
         """当笔记列表为空时，清空编辑器并设置为不可编辑状态。"""
-        self.current_note_id = None
-        self.editor.current_note_id = None
+        self._set_current_note_id(None)
         self.editor.clear()
         try:
             self.editor.text_edit.clearFocus()
@@ -2624,11 +2634,11 @@ class MainWindow(QMainWindow):
             item.setSizeHint(QSize(200, 61))
 
             
-    def load_folders(self, restore_from_settings: bool = False):
+    def load_folders(self, restore_last_state: bool = False):
         """加载文件夹列表（新布局：iCloud分组，支持多级文件夹）
         
         Args:
-            restore_from_settings: 是否从 QSettings 恢复状态（仅初始化时使用）
+            restore_last_state: 是否从数据库恢夏状态（仅初始化时使用）
         """
         # 保存当前选中的行
         current_row = self.folder_list.currentRow()
@@ -2646,7 +2656,7 @@ class MainWindow(QMainWindow):
         self._add_tags_section()
         
         # 恢复选中状态
-        self._restore_selection(current_row, restore_from_settings=restore_from_settings)
+        self._restore_selection(current_row, restore_last_state)
         
         # 强制刷新UI
         self.folder_list.viewport().update()
@@ -2807,16 +2817,16 @@ class MainWindow(QMainWindow):
         self.folder_list.setItemWidget(tag_item, tag_widget)
         tag_item.setSizeHint(QSize(200, 40))
 
-    def _restore_selection(self, current_row: int, restore_from_settings: bool = False):
+    def _restore_selection(self, current_row: int, restore_last_state: bool = False):
         """恢复选中状态
         
         Args:
             current_row: 之前选中的行号（非初始化场景使用）
-            restore_from_settings: 是否从 QSettings 恢复完整状态（初始化场景使用）
+            restore_last_state: 是否从数据库恢复完整状态（初始化场景使用）
         """
-        if restore_from_settings:
-            # 初始化场景：从 QSettings 恢复完整状态
-            self._restore_from_settings()
+        if restore_last_state:
+            # 初始化场景：从数据库恢复完整状态
+            self._restore_last_state()
         else:
             # 非初始化场景：保持当前选中行
             if current_row >= 0 and current_row < self.folder_list.count():
@@ -2828,14 +2838,30 @@ class MainWindow(QMainWindow):
             else:
                 self.folder_list.setCurrentRow(1)  # 默认选中"所有笔记"
     
-    def _restore_from_settings(self):
-        """从 QSettings 恢复完整状态（文件夹/标签、笔记、光标位置）"""
+    def _restore_last_note_per_view(self):
+        """从数据库恢复所有视图的笔记映射"""
         try:
-            settings = QSettings("encnotes", "encnotes")
+            import json
+            last_note_per_view_str = self.note_manager.get_app_state("last_note_per_view")
+            if last_note_per_view_str:
+                try:
+                    last_note_per_view = json.loads(last_note_per_view_str)
+                    if isinstance(last_note_per_view, dict):
+                        self._last_note_per_view = last_note_per_view
+                except Exception as e:
+                    print(f"解析 last_note_per_view 失败: {e}")
+        except Exception as e:
+            print(f"恢复 last_note_per_view 失败: {e}")
+    
+    def _restore_last_state(self):
+        """从数据库恢复完整状态（文件夹/标签、笔记、光标位置）"""
+        try:
+            # 0. 首先恢复所有视图的笔记映射
+            self._restore_last_note_per_view()
             
             # 1. 恢复文件夹/标签选中状态
-            last_folder_type = settings.value("last_folder_type")
-            last_folder_value = settings.value("last_folder_value")
+            last_folder_type = self.note_manager.get_app_state("last_folder_type")
+            last_folder_value = self.note_manager.get_app_state("last_folder_value")
             
             # 尝试恢复上次选中的文件夹/标签
             folder_restored = self._find_and_select_folder(last_folder_type, last_folder_value)
@@ -2843,10 +2869,6 @@ class MainWindow(QMainWindow):
             # 2. 如果没有恢复成功，使用默认值（"所有笔记"）
             if not folder_restored:
                 self._select_default_folder()
-            
-            # 3. 等待笔记列表加载完成后恢复笔记选中状态
-            # 使用 QTimer.singleShot 延迟执行，确保 load_notes 已完成
-            QTimer.singleShot(100, self._restore_note_and_cursor)
             
         except Exception as e:
             print(f"恢复状态失败: {e}")
@@ -2890,32 +2912,6 @@ class MainWindow(QMainWindow):
         # 如果找不到"所有笔记"，选中第一个可用项
         if self.folder_list.count() > 0:
             self.folder_list.setCurrentRow(0)
-    
-    def _restore_note_and_cursor(self):
-        """恢复笔记选中状态（延迟执行）
-        
-        注意：光标位置现在在 _load_and_display_note 中自动恢复，
-        因为每个笔记都有自己保存的光标位置
-        """
-        try:
-            settings = QSettings("encnotes", "encnotes")
-            last_note_id = settings.value("last_note_id")
-            
-            if not last_note_id:
-                return
-            
-            # 查找并选中笔记
-            note_index = self._find_note_by_id(last_note_id)
-            if note_index is None:
-                return
-            
-            # 选中笔记（光标位置会在 _load_and_display_note 中自动恢复）
-            self.note_list.setCurrentRow(note_index)
-                
-        except Exception as e:
-            print(f"恢复笔记失败: {e}")
-            import traceback
-            traceback.print_exc()
     
     def _find_note_by_id(self, note_id):
         """根据笔记ID查找笔记在列表中的索引
@@ -4195,8 +4191,8 @@ class MainWindow(QMainWindow):
                 pass
             
             # 如果删除的包含当前笔记，清空编辑器
-            if self.current_note_id in note_ids:
-                self.current_note_id = None
+            if self._get_current_note_id() in note_ids:
+                self._set_current_note_id(None)
                 self.editor.clear()
             
             status_message = f"已永久删除 {count} 条笔记" if self.is_viewing_deleted else f"已删除 {count} 条笔记"
@@ -4323,16 +4319,16 @@ class MainWindow(QMainWindow):
                 pass
             
             # 如果删除的是当前笔记，清空编辑器
-            if note_id == self.current_note_id:
-                self.current_note_id = None
+            if note_id == self._get_current_note_id():
+                self._set_current_note_id(None)
                 self.editor.clear()
     
     def delete_note(self):
         """删除当前笔记（保留用于快捷键）"""
-        if self.current_note_id is None:
+        if self._get_current_note_id() is None:
             return
         
-        self.delete_note_by_id(self.current_note_id)
+        self.delete_note_by_id(self._get_current_note_id())
             
     def _set_row_widget_selected(self, row_widget: QWidget | None, selected: bool):
         """设置行 widget 的选中状态"""
@@ -4357,6 +4353,52 @@ class MainWindow(QMainWindow):
                 if payload[0] == item_type and payload[1] == item_id:
                     return self.folder_list.itemWidget(item)
         return None
+
+    def _get_current_view_key(self):
+        """获取当前视图的唯一标识
+        
+        Returns:
+            str: 视图key，格式如 "system:all_notes", "folder:123", "tag:456"
+        """
+        if self.is_viewing_deleted:
+            return "system:deleted"
+        elif self.current_tag_id is not None:
+            return f"tag:{self.current_tag_id}"
+        elif self.current_folder_id is not None:
+            return f"folder:{self.current_folder_id}"
+        else:
+            # 默认是"所有笔记"
+            return "system:all_notes"
+    
+    def _get_current_note_id(self):
+        """获取当前视图的笔记ID
+        
+        Returns:
+            int or None: 当前笔记ID
+        """
+        view_key = self._get_current_view_key()
+        return self._last_note_per_view.get(view_key)
+    
+    def _set_current_note_id(self, note_id):
+        """设置当前视图的笔记ID
+        
+        Args:
+            note_id: 笔记ID，可以为None
+        """
+        view_key = self._get_current_view_key()
+        if note_id is None:
+            # 删除该视图的记录
+            self._last_note_per_view.pop(view_key, None)
+        else:
+            self._last_note_per_view[view_key] = note_id
+        
+        # 如果是文件夹视图，同时保存到数据库
+        if view_key.startswith("folder:"):
+            folder_id = view_key.split(":", 1)[1]
+            try:
+                self.note_manager.set_folder_last_note_id(folder_id, note_id)
+            except Exception as e:
+                print(f"保存文件夹上次笔记失败: {e}")
 
     def _get_current_item_info(self, index):
         """获取当前选中项的信息
@@ -4437,13 +4479,18 @@ class MainWindow(QMainWindow):
     def on_folder_changed(self, index):
         """文件夹切换：选中行变化时，更新高亮状态并加载笔记"""
         try:
-            # 获取当前选中项的信息
+            # 1. 保存当前视图的笔记（在切换视图之前）
+            current_note_id = self._get_current_note_id()
+            if current_note_id:
+                self.save_current_note()
+            
+            # 2. 获取当前选中项的信息
             item_type, folder_id, system_key, tag_id, cur_item = self._get_current_item_info(index)
             
             if not item_type:
                 return
             
-            # 根据类型处理选中逻辑
+            # 3. 根据类型处理选中逻辑（这会更新 current_folder_id/current_tag_id/is_viewing_deleted）
             if item_type == "tag":
                 self._handle_tag_selection(cur_item, tag_id)
             else:
@@ -4451,7 +4498,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         
-        self.load_notes()
+        # 4. 加载新视图的笔记，并尝试恢复该视图上次编辑的笔记
+        new_view_key = self._get_current_view_key()
+        last_note_id = self._last_note_per_view.get(new_view_key)
+        self.load_notes(select_note_id=last_note_id)
 
     def on_folder_item_double_clicked(self, item: QListWidgetItem):
         """左侧文件夹列表：双击文件夹行时展开/折叠（仅对有子文件夹的自定义文件夹生效）"""
@@ -4567,7 +4617,7 @@ class MainWindow(QMainWindow):
         self._update_item_widget_selection(previous_item, False)
         
         # 保存之前的笔记（包括光标位置）
-        prev_note_id = self.current_note_id
+        prev_note_id = self._get_current_note_id()
         self.save_current_note()  # 保存笔记内容（包括光标位置）
         
         # 切换笔记时：清理"已删除但可撤销"的附件（此时用户已离开该笔记）
@@ -4631,12 +4681,13 @@ class MainWindow(QMainWindow):
             self._set_editor_cursor_to_title_end()
         
         # 设置焦点到编辑器
-        self.editor.text_edit.setFocus()
+        # 使用延迟确保窗口已经完全显示（特别是在应用启动时）
+        # from PyQt6.QtCore import QTimer
+        # QTimer.singleShot(0, lambda: self.editor.text_edit.setFocus())
     
     def _clear_editor(self):
         """清空编辑器"""
-        self.current_note_id = None
-        self.editor.current_note_id = None
+        self._set_current_note_id(None)
         self.editor.clear()
         try:
             self.editor.text_edit.clearFocus()
@@ -4661,8 +4712,7 @@ class MainWindow(QMainWindow):
             
             # 设置当前笔记ID
             note_id = current.data(Qt.ItemDataRole.UserRole)
-            self.current_note_id = note_id
-            self.editor.current_note_id = note_id
+            self._set_current_note_id(note_id)
             
             # 加载并显示笔记
             self._load_and_display_note(note_id)
@@ -4686,7 +4736,7 @@ class MainWindow(QMainWindow):
         item = self.note_list.item(row)
         if item:
             # 保存之前的笔记（包括光标位置）
-            if self.current_note_id:
+            if self._get_current_note_id():
                 self.save_current_note()  # 保存笔记内容（包括光标位置）
             
             # 阻止信号，避免触发on_note_selected，如果不阻塞，此操作会触发currentItemChanged 信号，导致调用on_note_selected
@@ -4696,8 +4746,7 @@ class MainWindow(QMainWindow):
             
             # 加载新笔记
             note_id = item.data(Qt.ItemDataRole.UserRole)
-            self.current_note_id = note_id
-            self.editor.current_note_id = note_id
+            self._set_current_note_id(note_id)
             self._load_and_display_note(note_id)
     
     def toggle_note_selection(self, row):
@@ -4707,15 +4756,14 @@ class MainWindow(QMainWindow):
             self.selected_note_rows.discard(row)
             if not self.selected_note_rows:
             # 如果没有选中项了，保存当前笔记，然后清空编辑器
-                if self.current_note_id:
+                if self._get_current_note_id():
                     self.save_current_note()
-                self.current_note_id = None
-                self.editor.current_note_id = None
+                self._set_current_note_id(None)
                 self.editor.clear()
         else:
             # 如果未选中，则添加到选中集合
             # 先保存当前笔记
-            if self.current_note_id:
+            if self._get_current_note_id():
                 self.save_current_note()
             
             self.selected_note_rows.add(row)
@@ -4727,8 +4775,7 @@ class MainWindow(QMainWindow):
                 self.note_list.blockSignals(False)
                 # 加载这个笔记到编辑器
                 note_id = item.data(Qt.ItemDataRole.UserRole)
-                self.current_note_id = note_id
-                self.editor.current_note_id = note_id
+                self._set_current_note_id(note_id)
                 self._load_and_display_note(note_id)
         
         self._update_visual_selection()
@@ -4757,8 +4804,7 @@ class MainWindow(QMainWindow):
                 self.note_list.blockSignals(False)
                 # 加载这个笔记到编辑器
                 note_id = item.data(Qt.ItemDataRole.UserRole)
-                self.current_note_id = note_id
-                self.editor.current_note_id = note_id
+                self._set_current_note_id(note_id)
                 note = self.note_manager.get_note(note_id)
                 if note:
                     self.editor.blockSignals(True)
@@ -4795,7 +4841,7 @@ class MainWindow(QMainWindow):
 
     def on_text_changed(self):
         """文本变化事件"""
-        if self.current_note_id:
+        if self._get_current_note_id():
             # 自动保存
             self.save_current_note()
 
@@ -4926,7 +4972,7 @@ class MainWindow(QMainWindow):
         """
         try:
             preview_text = self._extract_preview_text(plain_text, title)
-            time_str = self._get_note_time_string(self.current_note_id)
+            time_str = self._get_note_time_string(self._get_current_note_id())
             info_text = f"{time_str}    {preview_text}"
 
             if layout.count() > 1:
@@ -4961,7 +5007,7 @@ class MainWindow(QMainWindow):
             title: 笔记标题
             plain_text: 笔记的纯文本内容
         """
-        item, widget, layout = self._find_note_list_item_by_id(self.current_note_id)
+        item, widget, layout = self._find_note_list_item_by_id(self._get_current_note_id())
         if layout:
             # 更新标题
             self._update_note_list_item_title(layout, title)
@@ -4970,7 +5016,7 @@ class MainWindow(QMainWindow):
     
     def save_current_note(self):
         """保存当前笔记"""
-        if not self.current_note_id:
+        if not self._get_current_note_id():
             return
         
         # 1. 获取编辑器内容
@@ -4989,7 +5035,7 @@ class MainWindow(QMainWindow):
         
         # 4. 更新笔记到数据库（包括光标位置）
         self.note_manager.update_note(
-            self.current_note_id,
+            self._get_current_note_id(),
             title=title,
             content=content,
             cursor_position=cursor_position
@@ -5000,7 +5046,7 @@ class MainWindow(QMainWindow):
 
     def insert_image(self):
         """插入图片"""
-        if not self.current_note_id:
+        if not self._get_current_note_id():
             QMessageBox.warning(self, "提示", "请先选择或创建一个笔记")
             return
         
@@ -5023,7 +5069,7 @@ class MainWindow(QMainWindow):
     
     def insert_attachment(self):
         """插入附件"""
-        if not self.current_note_id:
+        if not self._get_current_note_id():
             QMessageBox.warning(self, "提示", "请先选择或创建一个笔记")
             return
         
@@ -5041,11 +5087,11 @@ class MainWindow(QMainWindow):
                 
     def export_to_pdf(self):
         """导出当前笔记为PDF"""
-        if not self.current_note_id:
+        if not self._get_current_note_id():
             QMessageBox.warning(self, "提示", "请先选择要导出的笔记")
             return
             
-        note = self.note_manager.get_note(self.current_note_id)
+        note = self.note_manager.get_note(self._get_current_note_id())
         if not note:
             return
             
@@ -5065,11 +5111,11 @@ class MainWindow(QMainWindow):
             
     def export_to_word(self):
         """导出当前笔记为Word"""
-        if not self.current_note_id:
+        if not self._get_current_note_id():
             QMessageBox.warning(self, "提示", "请先选择要导出的笔记")
             return
             
-        note = self.note_manager.get_note(self.current_note_id)
+        note = self.note_manager.get_note(self._get_current_note_id())
         if not note:
             return
             
@@ -5089,11 +5135,11 @@ class MainWindow(QMainWindow):
             
     def export_to_markdown(self):
         """导出当前笔记为Markdown"""
-        if not self.current_note_id:
+        if not self._get_current_note_id():
             QMessageBox.warning(self, "提示", "请先选择要导出的笔记")
             return
             
-        note = self.note_manager.get_note(self.current_note_id)
+        note = self.note_manager.get_note(self._get_current_note_id())
         if not note:
             return
             
@@ -5113,11 +5159,11 @@ class MainWindow(QMainWindow):
             
     def export_to_html(self):
         """导出当前笔记为HTML"""
-        if not self.current_note_id:
+        if not self._get_current_note_id():
             QMessageBox.warning(self, "提示", "请先选择要导出的笔记")
             return
             
-        note = self.note_manager.get_note(self.current_note_id)
+        note = self.note_manager.get_note(self._get_current_note_id())
         if not note:
             return
             
@@ -5342,7 +5388,7 @@ class MainWindow(QMainWindow):
             
             # 清空编辑器
             self.editor.clear()
-            self.current_note_id = None
+            self._set_current_note_id(None)
             
             # 清空笔记列表
             self.note_list.clear()
@@ -5353,79 +5399,72 @@ class MainWindow(QMainWindow):
             self.close()
     
     def _get_settings(self):
-        """获取QSettings实例
+        """获取设置（已废弃，保留用于兼容性）
         
         Returns:
-            QSettings: 设置对象
+            None: 现在使用数据库存储，不再返回QSettings对象
         """
-        settings = getattr(self, "_settings", None)
-        if settings is None:
-            settings = QSettings("encnotes", "encnotes")
-        return settings
+        return None
     
-    def _save_window_geometry(self, settings):
-        """保存窗口几何信息（位置和大小）
-        
-        Args:
-            settings: QSettings 设置对象
-        """
+    def _save_window_geometry(self):
+        """保存窗口几何信息（位置和大小）"""
         try:
-            settings.setValue("main_window/geometry", self.saveGeometry())
-            settings.setValue("main_window/state", self.saveState())
+            import base64
+            geo = self.saveGeometry()
+            geo_str = base64.b64encode(geo).decode()
+            self.note_manager.set_app_state("main_window/geometry", geo_str)
+            
+            state = self.saveState()
+            state_str = base64.b64encode(state).decode()
+            self.note_manager.set_app_state("main_window/state", state_str)
         except Exception:
             pass
     
-    def _save_current_folder_state(self, settings):
-        """保存当前选中的文件夹状态
-        
-        Args:
-            settings: QSettings 设置对象
-        """
+    def _save_current_folder_state(self):
+        """保存当前选中的文件夹状态"""
         try:
             current_folder_row = self.folder_list.currentRow()
             
             # 如果没有选中任何文件夹，清除保存的状态
             if current_folder_row < 0:
-                settings.remove("last_folder_type")
-                settings.remove("last_folder_value")
+                self.note_manager.remove_app_state("last_folder_type")
+                self.note_manager.remove_app_state("last_folder_value")
                 return
             
             # 获取当前选中的文件夹项
             current_item = self.folder_list.item(current_folder_row)
             if not current_item:
-                settings.remove("last_folder_type")
-                settings.remove("last_folder_value")
+                self.note_manager.remove_app_state("last_folder_type")
+                self.note_manager.remove_app_state("last_folder_value")
                 return
             
             # 获取文件夹数据并保存
             payload = current_item.data(Qt.ItemDataRole.UserRole)
             if isinstance(payload, tuple) and len(payload) == 2:
                 folder_type, folder_value = payload
-                settings.setValue("last_folder_type", folder_type)
-                settings.setValue("last_folder_value", folder_value)
+                self.note_manager.set_app_state("last_folder_type", folder_type)
+                self.note_manager.set_app_state("last_folder_value", folder_value)
             else:
-                settings.remove("last_folder_type")
-                settings.remove("last_folder_value")
+                self.note_manager.remove_app_state("last_folder_type")
+                self.note_manager.remove_app_state("last_folder_value")
         except Exception:
             pass
     
-    def _save_current_note_state(self, settings):
-        """保存当前笔记状态
-        
-        Args:
-            settings: QSettings 设置对象
-        
-        注意：光标位置现在保存在每个笔记的数据库记录中，不再保存到 QSettings
-        """
+    def _save_last_note_per_view(self):
+        """保存所有视图的笔记映射到数据库"""
         try:
-            if self.current_note_id:
-                # 保存笔记ID
-                settings.setValue("last_note_id", self.current_note_id)
+            import json
+            if self._last_note_per_view:
+                last_note_per_view_str = json.dumps(self._last_note_per_view)
+                self.note_manager.set_app_state("last_note_per_view", last_note_per_view_str)
             else:
-                # 如果没有打开笔记，清除保存的状态
-                settings.remove("last_note_id")
-        except Exception:
-            pass
+                self.note_manager.remove_app_state("last_note_per_view")
+        except Exception as e:
+            print(f"保存 last_note_per_view 失败: {e}")
+    
+    def _save_current_note_state(self):
+        """保存所有视图的笔记状态"""
+        self._save_last_note_per_view()
     
     def _cleanup_on_close(self):
         """关闭前的清理工作"""
@@ -5434,8 +5473,8 @@ class MainWindow(QMainWindow):
         
         # 清理当前笔记"已删除但可撤销"的附件
         try:
-            if self.current_note_id and getattr(self.note_manager, 'attachment_manager', None):
-                self.note_manager.attachment_manager.cleanup_note_attachment_trash(self.current_note_id)
+            if self._get_current_note_id() and getattr(self.note_manager, 'attachment_manager', None):
+                self.note_manager.attachment_manager.cleanup_note_attachment_trash(self._get_current_note_id())
         except Exception:
             pass
     
@@ -5453,30 +5492,27 @@ class MainWindow(QMainWindow):
         Args:
             event: QCloseEvent 关闭事件对象
         """
-        # 1. 获取设置对象
-        settings = self._get_settings()
+        # 1. 保存窗口状态
+        self._save_window_geometry()
         
-        # 2. 保存窗口状态
-        self._save_window_geometry(settings)
+        # 2. 保存当前文件夹状态
+        self._save_current_folder_state()
         
-        # 3. 保存当前文件夹状态
-        self._save_current_folder_state(settings)
-        
-        # 4. 保存当前笔记和状态
+        # 3. 保存当前笔记和状态
         self.save_current_note()  # 保存笔记内容和光标位置到数据库
-        self._save_current_note_state(settings)  # 保存笔记ID到QSettings
+        self._save_current_note_state()  # 保存笔记ID到数据库
         
-        # 5. 执行清理工作
+        # 4. 执行清理工作
         self._cleanup_on_close()
         
-        # 6. 同步笔记（如果启用）
+        # 5. 同步笔记（如果启用）
         self._sync_before_close()
         
-        # 7. 关闭数据库连接
+        # 6. 关闭数据库连接
         try:
             self.note_manager.close()
         except Exception:
             pass
         
-        # 8. 接受关闭事件
+        # 7. 接受关闭事件
         event.accept()
