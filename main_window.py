@@ -994,7 +994,7 @@ class NoteListWidget(QListWidget):
         new_note_action.triggered.connect(lambda: self.main_window.create_note_in_current_folder())
         
         # 在"所有笔记"和"最近删除"视图中禁用
-        if self.main_window.current_folder_id is None or self.main_window.is_viewing_deleted:
+        if self.main_window.current_folder_id is None or self.main_window.current_system_key == "deleted":
             new_note_action.setEnabled(False)
         
         menu.addAction(new_note_action)
@@ -1049,7 +1049,7 @@ class NoteListWidget(QListWidget):
         new_note_action.triggered.connect(lambda: self.main_window.create_new_note())
         
         # 在"所有笔记"和"最近删除"视图中禁用
-        if self.main_window.current_folder_id is None or self.main_window.is_viewing_deleted:
+        if self.main_window.current_folder_id is None or self.main_window.current_system_key == "deleted":
             new_note_action.setEnabled(False)
         
         menu.addAction(new_note_action)
@@ -1401,8 +1401,8 @@ class MainWindow(QMainWindow):
         
         # 视图状态
         self.current_folder_id = None  # 当前选中的文件夹ID
+        self.current_system_key = None  # 当前选中的系统视图键（"all_notes" 或 "deleted"）
         self.current_tag_id = None  # 当前选中的标签ID
-        self.is_viewing_deleted = False  # 是否正在查看最近删除
         self.custom_folders = []  # 自定义文件夹列表
         self.tags = []  # 标签列表
         
@@ -2123,12 +2123,12 @@ class MainWindow(QMainWindow):
             notes = self.note_manager.get_all_notes()
             self.current_folder_id = None
             self.current_tag_id = None
-            self.is_viewing_deleted = False
+            self.current_system_key = "all_notes"
         elif current_row == deleted_row:  # 最近删除
             notes = self.note_manager.get_deleted_notes()
             self.current_folder_id = None
             self.current_tag_id = None
-            self.is_viewing_deleted = True
+            self.current_system_key = "deleted"
         elif 2 <= current_row < deleted_row:  # 自定义文件夹
             notes = self._load_notes_from_folder(current_row)
         elif current_row >= first_tag_row:  # 标签
@@ -2153,7 +2153,7 @@ class MainWindow(QMainWindow):
             notes = self.note_manager.get_notes_by_folder(folder_id)
             self.current_folder_id = folder_id
             self.current_tag_id = None
-            self.is_viewing_deleted = False
+            self.current_system_key = None
         else:
             notes = []
         return notes
@@ -2179,8 +2179,8 @@ class MainWindow(QMainWindow):
                 notes = []
                 # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
                 self.current_tag_id = tag_id
-                self.is_viewing_deleted = False
-
+                self.current_system_key = None
+                # 新建的标签还没有笔记，所以清空当前的笔记，避免命名完之后显示之前的笔记
                 self._set_current_note_id(None)
                 self.editor.clear()
                 try:
@@ -2191,7 +2191,7 @@ class MainWindow(QMainWindow):
                 notes = self.note_manager.get_notes_by_tag(tag_id)
                 # 不清空current_folder_id，保持之前选中的文件夹ID，以便在标签视图下新建笔记
                 self.current_tag_id = tag_id
-                self.is_viewing_deleted = False
+                self.current_system_key = None
         else:
             notes = []
         return notes
@@ -2566,7 +2566,7 @@ class MainWindow(QMainWindow):
             tag_names = [tag['name'] for tag in note_tags]
             tags_text = f"  🏷️ {', '.join(tag_names)}"
         
-        if self.current_folder_id is None and not self.is_viewing_deleted:
+        if self.current_folder_id is None and self.current_system_key != "deleted":
             # 在"所有笔记"视图中显示：文件夹 + 标签
             folder_id = note.get('folder_id')
             folder_name = "所有笔记"  # 默认值
@@ -2625,7 +2625,7 @@ class MainWindow(QMainWindow):
         
         # 设置widget固定高度
         # 如果显示文件夹信息或标签信息，高度增加约16px（文字12px + 间距4px）
-        if self.current_folder_id is None and not self.is_viewing_deleted:
+        if self.current_folder_id is None and self.current_system_key != "deleted":
             widget.setFixedHeight(77)  # 原61 + 16（文件夹+标签行）
         elif note_tags:
             widget.setFixedHeight(77)  # 原61 + 16（标签行）
@@ -2637,7 +2637,7 @@ class MainWindow(QMainWindow):
 
         
         # 设置 item 的 sizeHint，注意这里的宽度同时受group设置的宽度影响
-        if self.current_folder_id is None and not self.is_viewing_deleted:
+        if self.current_folder_id is None and self.current_system_key != "deleted":
             item.setSizeHint(QSize(200, 77))
         elif note_tags:
             item.setSizeHint(QSize(200, 77))
@@ -3944,7 +3944,7 @@ class MainWindow(QMainWindow):
             # 新建笔记（在"所有笔记"和"最近删除"视图中禁用）
             new_note_action = QAction("新建笔记", self)
             new_note_action.triggered.connect(self.create_new_note)
-            if self.current_folder_id is None or self.is_viewing_deleted:
+            if self.current_folder_id is None or self.current_system_key == "deleted":
                 new_note_action.setEnabled(False)
             menu.addAction(new_note_action)
 
@@ -3978,7 +3978,7 @@ class MainWindow(QMainWindow):
             # 点击在空白区域（在"所有笔记"和"最近删除"视图中禁用）
             new_note_action = QAction("新建笔记", self)
             new_note_action.triggered.connect(self.create_new_note)
-            if self.current_folder_id is None or self.is_viewing_deleted:
+            if self.current_folder_id is None or self.current_system_key == "deleted":
                 new_note_action.setEnabled(False)
             menu.addAction(new_note_action)
 
@@ -4173,7 +4173,7 @@ class MainWindow(QMainWindow):
         count = len(note_ids)
         
         # 根据当前视图决定删除方式和提示信息
-        if self.is_viewing_deleted:
+        if self.current_system_key == "deleted":
             # 在"最近删除"视图中，执行永久删除
             title = "确认永久删除"
             message = f"确定要永久删除这 {count} 条笔记吗？此操作不可恢复！"
@@ -4189,7 +4189,7 @@ class MainWindow(QMainWindow):
         
         if reply == QMessageBox.StandardButton.Yes:
             for note_id in note_ids:
-                if self.is_viewing_deleted:
+                if self.current_system_key == "deleted":
                     # 永久删除
                     self.note_manager.permanently_delete_note(note_id)
                 else:
@@ -4216,7 +4216,7 @@ class MainWindow(QMainWindow):
                 self._set_current_note_id(None)
                 self.editor.clear()
             
-            status_message = f"已永久删除 {count} 条笔记" if self.is_viewing_deleted else f"已删除 {count} 条笔记"
+            status_message = f"已永久删除 {count} 条笔记" if self.current_system_key == "deleted" else f"已删除 {count} 条笔记"
             self.statusBar().showMessage(status_message, 2000)
     
     def batch_move_notes(self, note_ids: list, target_folder_id: str):
@@ -4306,7 +4306,7 @@ class MainWindow(QMainWindow):
     def delete_note_by_id(self, note_id: str):
         """根据ID删除笔记"""
         # 根据当前视图决定删除方式和提示信息
-        if self.is_viewing_deleted:
+        if self.current_system_key == "deleted":
             # 在"最近删除"视图中，执行永久删除
             title = "确认永久删除"
             message = "确定要永久删除这条笔记吗？此操作不可恢复！"
@@ -4321,7 +4321,7 @@ class MainWindow(QMainWindow):
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            if self.is_viewing_deleted:
+            if self.current_system_key == "deleted":
                 # 永久删除
                 self.note_manager.permanently_delete_note(note_id)
             else:
@@ -4381,8 +4381,8 @@ class MainWindow(QMainWindow):
         Returns:
             str: 视图key，格式如 "system:all_notes", "folder:123", "tag:456"
         """
-        if self.is_viewing_deleted:
-            return "system:deleted"
+        if self.current_system_key:
+            return f"system:{self.current_system_key}"
         elif self.current_tag_id is not None:
             return f"tag:{self.current_tag_id}"
         elif self.current_folder_id is not None:
@@ -4425,77 +4425,86 @@ class MainWindow(QMainWindow):
         """获取当前选中项的信息
         
         Returns:
-            tuple: (item_type, folder_id, system_key, tag_id, cur_item)
+            tuple: (item_type, item_id, cur_item)
+                - item_type: 'folder', 'system', 'tag' 等
+                - item_id: 对应的ID（folder_id/system_key/tag_id），system_key包含all_notes和deleted
+                - cur_item: QListWidgetItem对象
         """
         if index is None or not (0 <= index < self.folder_list.count()):
-            return None, None, None, None, None
+            return None, None, None
         
         cur_item = self.folder_list.item(index)
         if not cur_item:
-            return None, None, None, None, None
+            return None, None, None
         
         payload = cur_item.data(Qt.ItemDataRole.UserRole)
         if not (isinstance(payload, tuple) and len(payload) == 2):
-            return None, None, None, None, None
+            return None, None, None
         
         item_type = payload[0]
         item_id = payload[1]
         
-        # 根据类型返回对应的信息
-        if item_type == "folder":
-            return item_type, item_id, None, None, cur_item
-        elif item_type == "system":
-            return item_type, None, item_id, None, cur_item
-        elif item_type == "tag":
-            return item_type, None, None, item_id, cur_item
-        
-        return item_type, None, None, None, cur_item
+        return item_type, item_id, cur_item
 
-    def _handle_tag_selection(self, cur_item, cur_tag_id: str):
-        """处理标签选中逻辑"""
-        # 取消之前选中标签的高亮
-        prev_tag_id = getattr(self, "_prev_selected_tag_id", None)
-        if prev_tag_id:
-            prev_tag_widget = self._find_row_widget_by_payload("tag", prev_tag_id)
-            self._set_row_widget_selected(prev_tag_widget, False)
+    def _handle_item_selection(self, cur_item, item_type: str, item_id: str):
+        """统一处理标签、文件夹或系统项的选中逻辑
         
-        # 设置当前标签高亮
-        cur_tag_widget = self.folder_list.itemWidget(cur_item) if cur_item else None
-        self._set_row_widget_selected(cur_tag_widget, True)
-        
-        # 记录当前选中的标签（保持文件夹的选中状态，实现双选中）
-        self.current_tag_id = cur_tag_id
-        self._prev_selected_tag_id = cur_tag_id
-
-    def _handle_folder_or_system_selection(self, cur_item, cur_folder_id: str, cur_system_key: str):
-        """处理文件夹或系统项选中逻辑"""
-        # 取消之前的标签高亮
-        prev_tag_id = getattr(self, "_prev_selected_tag_id", None)
-        if prev_tag_id:
-            prev_tag_widget = self._find_row_widget_by_payload("tag", prev_tag_id)
-            self._set_row_widget_selected(prev_tag_widget, False)
-            self._prev_selected_tag_id = None
-        
-        # 取消之前的文件夹/系统项高亮
-        prev_folder_id = getattr(self, "_prev_selected_folder_id", None)
-        prev_system_key = getattr(self, "_prev_selected_system_key", None)
-        
-        prev_widget = None
-        if prev_folder_id:
-            prev_widget = self._find_row_widget_by_payload("folder", prev_folder_id)
-        elif prev_system_key:
-            prev_widget = self._find_row_widget_by_payload("system", prev_system_key)
-        if prev_widget:
-            self._set_row_widget_selected(prev_widget, False)
-        
-        # 设置当前行选中
-        cur_widget = self.folder_list.itemWidget(cur_item) if cur_item else None
-        self._set_row_widget_selected(cur_widget, True)
-        
-        # 记录当前选中的语义ID
-        self._prev_selected_folder_id = cur_folder_id
-        self._prev_selected_system_key = cur_system_key
-        self.current_tag_id = None
+        Args:
+            cur_item: 当前选中的 QListWidgetItem
+            item_type: 项目类型 ("tag", "folder", "system")
+            item_id: 项目ID (根据 item_type 可能是 tag_id, folder_id 或 system_key)
+        """
+        if item_type == "tag":
+            # 处理标签选中
+            # 检查是否真的发生了变化
+            if self.current_tag_id == item_id:
+                return  # 没有变化，无需处理
+            
+            # 取消之前选中标签的高亮
+            if self.current_tag_id:
+                prev_tag_widget = self._find_row_widget_by_payload("tag", self.current_tag_id)
+                self._set_row_widget_selected(prev_tag_widget, False)
+            
+            # 设置当前标签高亮
+            cur_tag_widget = self.folder_list.itemWidget(cur_item) if cur_item else None
+            self._set_row_widget_selected(cur_tag_widget, True)
+            
+            # 更新当前选中的标签（保持文件夹的选中状态，实现双选中）
+            self.current_tag_id = item_id
+        else:
+            # 处理文件夹或系统项选中
+            # 检查是否真的发生了变化
+            if item_type == "folder" and self.current_folder_id == item_id:
+                return  # 没有变化，无需处理
+            if item_type == "system" and self.current_system_key == item_id:
+                return  # 没有变化，无需处理
+            
+            # 取消之前的标签高亮（如果有）
+            if self.current_tag_id:
+                prev_tag_widget = self._find_row_widget_by_payload("tag", self.current_tag_id)
+                self._set_row_widget_selected(prev_tag_widget, False)
+            
+            # 取消之前的文件夹/系统项高亮
+            prev_widget = None
+            if self.current_folder_id:
+                prev_widget = self._find_row_widget_by_payload("folder", self.current_folder_id)
+            elif self.current_system_key:
+                prev_widget = self._find_row_widget_by_payload("system", self.current_system_key)
+            if prev_widget:
+                self._set_row_widget_selected(prev_widget, False)
+            
+            # 设置当前行选中
+            cur_widget = self.folder_list.itemWidget(cur_item) if cur_item else None
+            self._set_row_widget_selected(cur_widget, True)
+            
+            # 根据类型更新对应的当前选中ID
+            if item_type == "folder":
+                self.current_folder_id = item_id
+                self.current_system_key = None
+            else:  # system
+                self.current_folder_id = None
+                self.current_system_key = item_id
+            self.current_tag_id = None
 
     def on_folder_changed(self, index):
         """文件夹切换：选中行变化时，更新高亮状态并加载笔记"""
@@ -4506,23 +4515,20 @@ class MainWindow(QMainWindow):
                 self.save_current_note()
             
             # 2. 获取当前选中项的信息
-            item_type, folder_id, system_key, tag_id, cur_item = self._get_current_item_info(index)
+            item_type, item_id, cur_item = self._get_current_item_info(index)
             
             if not item_type:
                 return
             
-            # 3. 根据类型处理选中逻辑（这会更新 current_folder_id/current_tag_id/is_viewing_deleted）
-            if item_type == "tag":
-                self._handle_tag_selection(cur_item, tag_id)
-            else:
-                self._handle_folder_or_system_selection(cur_item, folder_id, system_key)
+            # 3. 根据类型处理选中逻辑（这会更新 current_folder_id/current_tag_id/current_system_key）
+            self._handle_item_selection(cur_item, item_type, item_id)
         except Exception:
             pass
         
         # 4. 加载新视图的笔记，并尝试恢复该视图上次编辑的笔记
         new_view_key = self._get_current_view_key()
         last_note_id = self._last_note_per_view.get(new_view_key)
-        self.load_notes(select_note_id=last_note_id)
+        self.load_notes(last_note_id)
 
     def on_folder_item_double_clicked(self, item: QListWidgetItem):
         """左侧文件夹列表：双击文件夹行时展开/折叠（仅对有子文件夹的自定义文件夹生效）"""
@@ -5539,6 +5545,7 @@ class MainWindow(QMainWindow):
             import json
             if self._last_note_per_view:
                 last_note_per_view_str = json.dumps(self._last_note_per_view)
+                print(f"保存 last_note_per_view: {last_note_per_view_str}")
                 self.note_manager.set_app_state("last_note_per_view", last_note_per_view_str)
             else:
                 self.note_manager.remove_app_state("last_note_per_view")
@@ -5577,13 +5584,16 @@ class MainWindow(QMainWindow):
         # 1. 保存窗口状态
         self._save_window_geometry()
         
-        # 2. 保存当前文件夹状态
+        # 2. 保存当前文件夹选中状态，last_folder_type:last_folder_value
         self._save_current_folder_state()
         
         # 3. 保存当前笔记和状态
         logger.info(f"[closeEvent] 保存当前笔记: note_id={self._get_current_note_id()}")
-        self.save_current_note()  # 保存笔记内容和光标位置到数据库
-        self._save_current_note_state()  # 保存笔记ID到数据库
+        # 保存当前笔记内容和光标位置到数据库
+        self.save_current_note()
+        # 保存文件夹和选中笔记的映射到数据库（包括(folder:folder_id note_id)
+        # (system:all_notes note_id)(system:deleted note_id)(tag:tag_id note_id)）
+        self._save_current_note_state()
         logger.info(f"[closeEvent] 当前笔记保存完成")
         
         # 4. 清理附件垃圾箱
