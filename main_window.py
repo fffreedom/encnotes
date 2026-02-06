@@ -4669,15 +4669,17 @@ class MainWindow(QMainWindow):
         """
         note_id = note.get('id', 'unknown')
         try:
-            cursor_position = note.get('cursor_position', 0)
-            if cursor_position is not None and cursor_position > 0:
-                # 恢复到上次保存的光标位置
-                self._set_editor_cursor_to_position(cursor_position, note_id)
-            else:
-                # 如果没有保存的光标位置，设置到标题末尾
-                logger.debug(f"[restore_cursor_position] 没有保存的光标位置或者光标位置为0，设置到标题末尾: note_id={note_id}, "
-                             f"cursor_position={cursor_position}")
+            cursor_position = note.get('cursor_position')
+            if cursor_position is None:
                 self._set_editor_cursor_to_title_end()
+                logger.debug(
+                    f"[restore_cursor_position] 没有保存的光标位置，设置到标题末尾: note_id={note_id}, "
+                    f"cursor_position={cursor_position}")
+                return
+            # 恢复到上次保存的光标位置
+            self._set_editor_cursor_to_position(cursor_position, note_id)
+            logger.debug(f"[restore_cursor_position] 恢复到上次保存的光标位置: note_id={note_id}, "
+                         f"cursor_position={cursor_position}")
         except Exception as e:
             # 出错时设置到标题末尾
             logger.debug(f"[restore_cursor_position] 恢复光标位置出错，设置到标题末尾: note_id={note_id}, error={e}")
@@ -4691,14 +4693,20 @@ class MainWindow(QMainWindow):
             note_id: str 笔记ID，用于日志记录
 
         功能：
-            使用封装的 setCursorPosition 方法设置光标位置
-            这会触发 cursorPositionChanged 信号，从而调用 update_title_and_input_format 进行标题格式设置
+            使用封装的 setCursorPosition 方法设置光标位置，在cursor位置变化的情况下
+            会触发 cursorPositionChanged 信号，从而调用 update_title_and_input_format 进行标题格式设置
         """
-        logger.debug(f"[_set_editor_cursor_to_position] 设置光标位置: note_id={note_id}, "
-                     f"cursor_position={cursor_position}")
-        # 使用封装的 setCursorPosition 方法设置光标位置
-        # 这会触发 cursorPositionChanged 信号，从而调用 update_title_and_input_format 进行标题格式设置
+        # 使用封装的 setCursorPosition 方法设置光标位置，在cursor位置变化的情况下
+        # 会触发 cursorPositionChanged 信号，从而调用 update_title_and_input_format 进行标题格式设置
+        cursor = self.editor.text_edit.textCursor()
+        initial_position = cursor.position()
+        # 这儿必须要设置光标位置，否则光标会不闪烁
         self.editor.text_edit.setCursorPosition(cursor_position)
+        logger.debug(f"[_set_editor_cursor_to_position] 初始光标位置: {initial_position}, 最终光标位置: {cursor_position}")
+        # 如果cursor位置没有变化（文档为空时），需要手动触发标题格式设置，因为前面的setCursorPosition在position位置
+        # 相同的情况下不会触发cursorPositionChanged信号
+        if initial_position == cursor_position:
+            self.editor.text_edit.update_title_and_input_format()
 
     def _set_editor_cursor_to_title_end(self):
         """将编辑器光标移动到标题末尾，标题格式通过cursorPositionChanged信号处理"""
@@ -4708,13 +4716,12 @@ class MainWindow(QMainWindow):
         cursor.movePosition(QTextCursor.MoveOperation.Start)  # 移动到第一行末尾
         cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)  # 移动到第一行末尾
         final_position = cursor.position()
-        # 如果光标位置有变化，设置光标，会触发cursorPositionChanged信号，进而调用update_title_and_input_format设置标题格式
-        if final_position != initial_position:
-            self.editor.text_edit.setCursorPosition(final_position)
+        # 这儿为了简单起见，直接设置光标位置，如果title为空，不设置也是可以的（在后面设置标题格式的时候会插入零宽度空格来变相设置光标位置）
+        self.editor.text_edit.setCursorPosition(final_position)
         logger.debug(f"[_set_editor_cursor_to_title_end] 初始光标位置: {initial_position}, 最终光标位置: {final_position}")
 
-        # 如果cursor位置没有变化（文档为空时），手动触发标题格式设置，因为前面的setTextCursor在position位置
-        # 相同的情况下不会调用setTextCursor（实际上即便调用了，因为position相同也不会触发cursorPositionChanged信号）
+        # 如果cursor位置没有变化（文档为空时），需要手动触发标题格式设置，因为前面的setCursorPosition在position位置
+        # 相同的情况下不会触发cursorPositionChanged信号
         if initial_position == final_position:
             self.editor.text_edit.update_title_and_input_format()
 

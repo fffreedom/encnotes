@@ -318,64 +318,83 @@ class PasteImageTextEdit(QTextEdit):
         body_fmt.setFontWeight(QFont.Weight.Normal)
         return body_fmt
     
-    def _initialize_empty_document(self):
-        """初始化空文档，插入零宽度空格并设置标题格式，插入零宽度字符的目的是使光标大小符合标题格式"""
-        title_fmt = self._create_title_format()
-        cursor = self.textCursor()
-        # insertText会触发cursorPositionChanged信号，从而调用update_title_and_input_format方法
-        cursor.insertText('\u200B', title_fmt)
-    
-    def _is_first_line_title_formatted(self, first_block):
-        """检查第一行是否已经是标题格式（28号字体）"""
-        first_cursor = QTextCursor(first_block)
-        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        char_fmt = first_cursor.charFormat()
-        return char_fmt.fontPointSize() == 28
-    
-    def _apply_title_format_to_first_line(self, first_block):
-        """应用标题格式到第一行"""
-        first_line_text = first_block.text()
-        
-        # 如果第一行为空或只有零宽度空格，不需要应用格式，只需要后面根据光标位置设置相应的光标格式即可
-        if first_line_text in ("", "\u200B"):
+    # def _initialize_empty_document(self):
+    #     """初始化空文档，插入零宽度空格并设置标题格式，插入零宽度字符的目的是使光标大小符合标题格式"""
+    #     title_fmt = self._create_title_format()
+    #     cursor = self.textCursor()
+    #     # 添加零宽度空格不需要再触发cursorPositionChanged事件
+    #     self.blockSignals(True)
+    #     cursor.insertText('\u200B', title_fmt)
+    #     self.blockSignals(False)
+    # #
+    # def _is_first_line_title_formatted(self, first_block):
+    #     """检查第一行是否已经是标题格式（28号字体）"""
+    #     # 检查光标位置是否在标题行，如果在标题行，如果标题行内容为空，就插入一个零宽度空格并设置标题格式，如果标题行内容不为空就直接设置标题格式
+    #     # 如果光标不在标题行，不进行任何处理
+    #     first_line_text = first_block.text()
+    #     # 如果第一行只有零宽度空格，不需要应用格式，只需要后面根据光标位置设置相应的光标格式即可
+    #     if first_line_text == "\u200B":
+    #         return True
+    #
+    #     first_cursor = QTextCursor(first_block)
+    #     first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+    #     char_fmt = first_cursor.charFormat()
+    #     return char_fmt.fontPointSize() == 28
+    # #
+    # def _apply_title_format_to_first_line(self, title_format, first_block):
+    #     """应用标题格式到第一行"""
+    #     # 应用格式到第一行已有文本
+    #     first_cursor = QTextCursor(first_block)
+    #     first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+    #
+    #     self.blockSignals(True)
+    #     first_cursor.mergeCharFormat(title_format)
+    #     self.blockSignals(False)
+    # #
+    def _set_title_input_format(self):
+        """设置标题输入格式（保留当前格式的其他属性）"""
+        document = self.document()
+        first_block = document.firstBlock()
+        if not first_block.isValid():
+            logger.debug("[update_title_and_input_format] 第一行无效，返回")
             return
-        
-        # 应用格式到第一行已有文本
+
+        first_line_text = first_block.text()
         title_fmt = self._create_title_format()
+        # 如果第一行为空，插入零宽度空格并使用标题格式
+        if first_line_text == "":
+            cursor = self.textCursor()
+            # 添加零宽度空格不需要再触发cursorPositionChanged事件
+            self.blockSignals(True)
+            cursor.insertText('\u200B', title_fmt)
+            self.blockSignals(False)
+            logger.debug("[update_title_and_input_format] 标题行为空，插入零宽度空格")
+            return
+
+        # 应用格式到第一行已有文本（包括只有零宽度空格的情况）
         first_cursor = QTextCursor(first_block)
         first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        
         self.blockSignals(True)
         first_cursor.mergeCharFormat(title_fmt)
         self.blockSignals(False)
-    
-    def _set_title_input_format(self):
-        """设置标题输入格式（保留当前格式的其他属性）"""
-        current_fmt = self.currentCharFormat()
-        old_font_size = current_fmt.fontPointSize()
-        old_font_weight = current_fmt.fontWeight()
-        
-        current_fmt.setFontPointSize(28)
-        current_fmt.setFontWeight(QFont.Weight.Bold)
-        self.setCurrentCharFormat(current_fmt)
-        
-        logger.debug(f"[_set_title_input_format] 设置标题格式: old_size={old_font_size}, new_size=28, "
-                     f"old_weight={old_font_weight}, new_weight=Bold")
+        logger.debug("[update_title_and_input_format] 标题行有内容，应用标题格式到第一行")
+
     
     def _set_body_input_format(self, current_cursor, current_block):
         """设置正文输入格式，如果当前行为空则插入零宽度空格"""
         body_fmt = self._create_body_format()
         block_text = current_block.text()
-        is_empty_block = (block_text == "" or block_text == "\u200B")
+        is_empty_block = (block_text == "")
         
         logger.debug(f"[_set_body_input_format] 设置正文格式: block_number={current_block.blockNumber()}, "
-                     f"is_empty={is_empty_block}, block_text_length={len(block_text)}")
+                     f"is_empty={is_empty_block}, block_text_length={len(block_text)}, 内容不为空，不需要真正设置!")
         
         # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
         if is_empty_block:
             logger.debug("[_set_body_input_format] 当前行为空，插入零宽度空格")
             self.blockSignals(True)
             current_cursor.setCharFormat(body_fmt)
+            # 从标题行换到正文行，需要插入零宽度空格，否则光标会显示为标题格式
             current_cursor.insertText("\u200B")
             current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
             self.setTextCursor(current_cursor)
@@ -408,7 +427,8 @@ class PasteImageTextEdit(QTextEdit):
         
         # 应用光标并设置焦点，不设置焦点光标不会闪烁
         self.setFocus()
-    
+    # 1. cursorPositionChanged事件处理函数，设置光位位置或者键盘、鼠标输入事件触发
+    # 2. 在新加载note时，如果文档是空的光标默认设置到标题行结尾（位置0）时需要手工触发（因为这时候不会触发cursorPositionChanged事件）
     def update_title_and_input_format(self):
         """更新第一行标题格式并设置当前光标的输入格式
         
@@ -421,13 +441,14 @@ class PasteImageTextEdit(QTextEdit):
         logger.debug("=== update_title_and_input_format called ===")
         logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
         
-        document = self.document()
+        # document = self.document()
         
-        # 处理空文档
-        if document.isEmpty():
-            logger.debug("[update_title_and_input_format] 文档为空，初始化空文档")
-            self._initialize_empty_document()
-            return
+        # 处理空文档，给标题头添加零宽度空格以设置标题格式，插入零宽度空格后会再次调用此函数
+        # 这个步骤是必须的，因为后面判断第一行为空时可能光标不在标题行，不能设置标题格式
+        # if document.isEmpty():
+        #     logger.debug("[update_title_and_input_format] 文档为空，初始化空文档")
+        #     self._initialize_empty_document()
+        #     return
         
         # 获取当前光标
         current_cursor = self.textCursor()
@@ -448,18 +469,18 @@ class PasteImageTextEdit(QTextEdit):
                      f"block_number={current_block_number}, block_text='{current_block_text[:50]}...' (前50字符)")
         
         # 获取并验证第一行
-        first_block = document.firstBlock()
-        if not first_block.isValid():
-            logger.debug("[update_title_and_input_format] 第一行无效，返回")
-            return
-        
-        # 格式化第一行为标题格式（如果需要），防御因历史数据、粘贴内容、用户错误操作、程序bug等导致的标题没有格式化的相关问题
-        first_line_formatted = self._is_first_line_title_formatted(first_block)
-        logger.debug(f"[update_title_and_input_format] 第一行格式检查: is_formatted={first_line_formatted}")
-        
-        if not first_line_formatted:
-            logger.debug("[update_title_and_input_format] 第一行未格式化，应用标题格式")
-            self._apply_title_format_to_first_line(first_block)
+        # first_block = document.firstBlock()
+        # if not first_block.isValid():
+        #     logger.debug("[update_title_and_input_format] 第一行无效，返回")
+        #     return
+        #
+        # # 格式化第一行为标题格式（如果需要），防御因历史数据、粘贴内容、用户错误操作、程序bug等导致的标题没有格式化的相关问题
+        # first_line_formatted = self._is_first_line_title_formatted()
+        # logger.debug(f"[update_title_and_input_format] 第一行格式检查: is_formatted={first_line_formatted}")
+        #
+        # if not first_line_formatted:
+        #     logger.debug("[update_title_and_input_format] 第一行未格式化，应用标题格式")
+        #     self._apply_title_format_to_first_line(first_block)
         
         # 根据光标位置设置当前输入格式
         if current_block_number == 0:
