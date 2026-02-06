@@ -851,17 +851,26 @@ class NoteListWidget(QListWidget):
             clicked_row: int 点击的行号
             event_pos: QPoint 点击位置
         """
+        logger.debug(f"🔵 [DEBUG] _handle_normal_click called - clicked_row: {clicked_row}, event_pos: ({event_pos.x()}, {event_pos.y()})")
+        
         if not self.main_window:
+            logger.debug(f"🔵 [DEBUG] _handle_normal_click - main_window is None, returning")
             return
         
         # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动）
-        if self._is_item_in_multi_select(clicked_row):
+        is_in_multi_select = self._is_item_in_multi_select(clicked_row)
+        logger.debug(f"🔵 [DEBUG] _handle_normal_click - is_in_multi_select: {is_in_multi_select}")
+        
+        if is_in_multi_select:
+            logger.debug(f"🔵 [DEBUG] _handle_normal_click - Item already in multi-select, keeping multi-select for drag")
             self._keep_multi_select_for_drag(clicked_row, event_pos)
         else:
             # 点击的是未选中的笔记，执行单选
+            logger.debug(f"🔵 [DEBUG] _handle_normal_click - Item not in multi-select, selecting single note at row: {clicked_row}")
             self.main_window.select_single_note(clicked_row)
         
         self.last_selected_row = clicked_row
+        logger.debug(f"🔵 [DEBUG] _handle_normal_click completed - last_selected_row set to: {clicked_row}")
     
     def mousePressEvent(self, event):
         """处理鼠标按下事件，支持多选
@@ -2065,14 +2074,21 @@ class MainWindow(QMainWindow):
         
         必须在clear()之前删除所有widget，避免重叠。
         """
+        logger.debug(f"[_clear_note_list_widgets] 🧹 开始清除笔记列表widgets")
+        
         # 清除多选状态
+        logger.debug(f"[_clear_note_list_widgets] 📋 清除多选状态 - 当前选中行数: {len(self.selected_note_rows)}")
         self.selected_note_rows.clear()
         if hasattr(self, 'note_list') and self.note_list:
+            logger.debug(f"[_clear_note_list_widgets] 🔄 重置 last_selected_row")
             self.note_list.last_selected_row = None
         
         # 手动删除所有自定义widget
+        item_count = self.note_list.count()
+        logger.debug(f"[_clear_note_list_widgets] 📊 笔记列表项数量: {item_count}")
+        
         widgets_to_delete = []
-        for i in range(self.note_list.count()):
+        for i in range(item_count):
             item = self.note_list.item(i)
             widget = self.note_list.itemWidget(item)
             if widget:
@@ -2081,17 +2097,25 @@ class MainWindow(QMainWindow):
                 # 收集需要删除的widget
                 widgets_to_delete.append(widget)
         
+        logger.debug(f"[_clear_note_list_widgets] 🗑️ 收集到 {len(widgets_to_delete)} 个widget需要删除")
+        
         # 删除所有widget
-        for widget in widgets_to_delete:
+        for idx, widget in enumerate(widgets_to_delete):
             widget.setParent(None)
             widget.deleteLater()
         
+        logger.debug(f"[_clear_note_list_widgets] ✅ 已标记所有widget为待删除")
+        
         # 强制处理待删除的事件，确保widget立即删除
         from PyQt6.QtWidgets import QApplication
+        logger.debug(f"[_clear_note_list_widgets] ⚙️ 处理待删除事件...")
         QApplication.processEvents()
+        logger.debug(f"[_clear_note_list_widgets] ✅ 待删除事件处理完成")
         
-        # 清空列表
+        # 清空列表，会触发on_note_selected事件
+        logger.debug(f"[_clear_note_list_widgets] 🧽 清空笔记列表")
         self.note_list.clear()
+        logger.debug(f"[_clear_note_list_widgets] 🏁 笔记列表widgets清除完成")
     
     def _calculate_folder_indices(self):
         """计算文件夹列表中各个区域的行索引。
@@ -4426,6 +4450,48 @@ class MainWindow(QMainWindow):
             # 默认是"所有笔记"
             return "system:all_notes"
     
+    def _will_target_view_have_notes(self):
+        """预判目标视图是否会有笔记
+        
+        这个函数用于在切换视图前判断目标视图是否会加载出笔记。
+        如果目标视图为空，则不会触发 on_note_selected 事件。
+        
+        Returns:
+            bool: True 表示目标视图会有笔记，False 表示目标视图为空
+        """
+        try:
+            # 根据当前的 current_system_key/current_folder_id/current_tag_id 判断
+            if self.current_system_key == "all_notes":
+                # 所有笔记
+                notes = self.note_manager.get_all_notes()
+                return len(notes) > 0
+            elif self.current_system_key == "deleted":
+                # 最近删除
+                notes = self.note_manager.get_deleted_notes()
+                return len(notes) > 0
+            elif self.current_folder_id is not None:
+                # 自定义文件夹
+                notes = self.note_manager.get_notes_by_folder(self.current_folder_id)
+                return len(notes) > 0
+            elif self.current_tag_id is not None:
+                # 标签
+                # 先检查标签名是否为空
+                tag = next((t for t in self.tags if t['id'] == self.current_tag_id), None)
+                if tag:
+                    tag_name = str(tag.get('name', '') or '').strip()
+                    if not tag_name:
+                        # 空标签名，不会有笔记
+                        return False
+                notes = self.note_manager.get_notes_by_tag(self.current_tag_id)
+                return len(notes) > 0
+            else:
+                # 默认情况，假设有笔记
+                return False
+        except Exception as e:
+            logger.error(f"[_will_target_view_have_notes] 预判失败: {e}", exc_info=True)
+            # 出错时保守处理，假设有笔记（这样会让 on_note_selected 处理保存）
+            return False
+    
     def _get_current_note_id(self):
         """获取当前视图的笔记ID
         
@@ -4543,45 +4609,57 @@ class MainWindow(QMainWindow):
 
     def on_folder_changed(self, index):
         """文件夹切换：选中行变化时，更新高亮状态并加载笔记"""
+        logger.debug(f"[on_folder_changed] 🔄 开始处理文件夹切换 - 索引: {index}")
         try:
-            # 1. 保存当前视图的笔记（在切换视图之前）
-            current_note_id = self._get_current_note_id()
-            if current_note_id:
-                self.save_current_note()
-            
-            # 2. 获取当前选中项的信息
+            # 1. 获取当前选中项的信息
+            logger.debug(f"[on_folder_changed] 🔍 开始获取选中项信息...")
             item_type, item_id, cur_item = self._get_current_item_info(index)
+            logger.debug(f"[on_folder_changed] 📋 获取到选中项 - 类型: {item_type}, ID: {item_id}")
             
             if not item_type:
+                logger.debug(f"[on_folder_changed] ⚠️ 未获取到有效的选中项类型，退出")
                 return
             
-            # Debug: 记录选中的文件夹信息
-            logger.debug(f"[on_folder_changed] 选中项 - 类型: {item_type}, ID: {item_id}, 索引: {index}")
-            
-            # 3. 根据类型处理选中逻辑（这会更新 current_folder_id/current_tag_id/current_system_key）
+            # 2. 根据类型处理选中逻辑（这会更新 current_folder_id/current_tag_id/current_system_key）
+            logger.debug(f"[on_folder_changed] 🎯 开始处理选中逻辑 - 类型: {item_type}, ID: {item_id}")
             self._handle_item_selection(cur_item, item_type, item_id)
-        except Exception:
+            logger.debug(f"[on_folder_changed] ✅ 选中逻辑处理完成")
+        except Exception as e:
+            logger.error(f"[on_folder_changed] ❌ 处理选中项时发生异常: {e}", exc_info=True)
             pass
         
+        # 3. 预判目标视图是否会有笔记，决定是否需要在此保存当前笔记
+        current_note_id = self._get_current_note_id()
+        logger.debug(f"[on_folder_changed] 📝 当前笔记ID: {current_note_id}")
+        
+        if current_note_id:
+            # 预判目标视图是否会有笔记
+            will_have_notes = self._will_target_view_have_notes()
+            logger.debug(f"[on_folder_changed] 🔮 预判目标视图是否有笔记: {will_have_notes}")
+            
+            if will_have_notes:
+                # 目标视图有笔记，会触发 on_note_selected，由它来保存
+                logger.debug(f"[on_folder_changed] ⏭️ 目标视图有笔记，由 on_note_selected 处理保存")
+            else:
+                # 目标视图为空，不会触发 on_note_selected，需要在此保存
+                logger.debug(f"[on_folder_changed] 💾 目标视图为空，在此保存当前笔记: {current_note_id}")
+                self.save_current_note()
+                logger.debug(f"[on_folder_changed] ✅ 当前笔记已保存")
+        else:
+            logger.debug(f"[on_folder_changed] ℹ️ 无当前笔记，跳过保存")
+        
         # 4. 加载新视图的笔记，并尝试恢复该视图上次编辑的笔记
+        logger.debug(f"[on_folder_changed] 🔑 获取当前视图键...")
         new_view_key = self._get_current_view_key()
         last_note_id = self._last_note_per_view.get(new_view_key)
         
         # Debug: 记录视图信息和要恢复的笔记ID
-        logger.debug(f"[on_folder_changed] 视图键: {new_view_key}, 上次笔记ID: {last_note_id}")
+        logger.debug(f"[on_folder_changed] 📊 视图键: {new_view_key}, 上次笔记ID: {last_note_id}")
+        logger.debug(f"[on_folder_changed] 📂 开始加载笔记列表，目标笔记ID: {last_note_id}")
         
         self.load_notes(last_note_id)
-        
-        # Debug: 记录加载后的笔记列表信息
-        note_count = self.note_list.count()
-        note_ids = []
-        for i in range(note_count):
-            item = self.note_list.item(i)
-            if item and item.data(Qt.ItemDataRole.UserRole):
-                note_id = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(note_id, int):  # 排除分组标题
-                    note_ids.append(note_id)
-        logger.debug(f"[on_folder_changed] 加载完成 - 笔记总数: {len(note_ids)}, 笔记ID列表: {note_ids}")
+        logger.debug(f"[on_folder_changed] ✅ 笔记列表加载完成")
+        logger.debug(f"[on_folder_changed] 🏁 文件夹切换处理完成")
 
     def on_folder_item_double_clicked(self, item: QListWidgetItem):
         """左侧文件夹列表：双击文件夹行时展开/折叠（仅对有子文件夹的自定义文件夹生效）"""
@@ -4690,18 +4768,41 @@ class MainWindow(QMainWindow):
         Args:
             previous_item: QListWidgetItem 之前选中的列表项
         """
+        logger.debug(f"[_handle_previous_note_cleanup] 🧹 开始清理之前的笔记 - previous_item: {previous_item}")
+        
         if not previous_item:
+            logger.debug(f"[_handle_previous_note_cleanup] ℹ️ 没有之前的笔记项，跳过清理")
             return
         
+        # 从 previous_item 获取之前的笔记ID（而不是从 self._get_current_note_id()）
+        prev_note_id = previous_item.data(Qt.ItemDataRole.UserRole)
+        logger.debug(f"[_handle_previous_note_cleanup] 📋 从 previous_item 获取笔记ID: {prev_note_id}")
+        
         # 取消之前项的选中状态
+        logger.debug(f"[_handle_previous_note_cleanup] 🔄 取消之前项的选中状态")
         self._update_item_widget_selection(previous_item, False)
+        logger.debug(f"[_handle_previous_note_cleanup] ✅ 已取消选中状态")
         
         # 保存之前的笔记（包括光标位置）
-        prev_note_id = self._get_current_note_id()
-        self.save_current_note()  # 保存笔记内容（包括光标位置）
+        # 注意：此时编辑器内容应该还是之前笔记的内容
+        # 直接传递 prev_note_id 给 save_current_note，而不是依赖 _get_current_note_id()
+        # 因为在文件夹切换时，_get_current_note_id() 可能已经返回新文件夹的笔记ID了
+        current_note_id = self._get_current_note_id()
+        logger.debug(f"[_handle_previous_note_cleanup] 📝 准备保存之前的笔记 - prev_note_id: {prev_note_id}, current_note_id: {current_note_id}")
+        
+        # 确保 current_note_id 和 prev_note_id 一致，否则说明时序有问题
+        if current_note_id != prev_note_id:
+            logger.warning(f"[_handle_previous_note_cleanup] ⚠️ 警告：current_note_id ({current_note_id}) != prev_note_id ({prev_note_id})，使用 prev_note_id 保存以避免覆盖错误")
+        
+        # 直接传递 prev_note_id，避免使用 _get_current_note_id() 导致的时序问题
+        self.save_current_note(note_id=prev_note_id)
+        logger.debug(f"[_handle_previous_note_cleanup] ✅ 之前的笔记已保存")
         
         # 切换笔记时：清理"已删除但可撤销"的附件（此时用户已离开该笔记）
+        logger.debug(f"[_handle_previous_note_cleanup] 🗑️ 开始清理附件垃圾 - note_id: {prev_note_id}")
         self._cleanup_note_attachment_trash(prev_note_id)
+        logger.debug(f"[_handle_previous_note_cleanup] ✅ 附件垃圾清理完成")
+        logger.debug(f"[_handle_previous_note_cleanup] 🏁 之前笔记清理完成")
     
     def _cleanup_note_attachment_trash(self, note_id):
         """清理笔记的附件垃圾
@@ -4827,7 +4928,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    # note_list.clear()会触发这个事件，需要解决
+    # note_list.clear()会触发这个事件
     def on_note_selected(self, current, previous):
         """笔记选中事件
         
@@ -4835,26 +4936,42 @@ class MainWindow(QMainWindow):
             current: QListWidgetItem 当前选中的列表项
             previous: QListWidgetItem 之前选中的列表项
         """
+        # 获取笔记ID用于日志
+        current_note_id = current.data(Qt.ItemDataRole.UserRole) if current else None
+        previous_note_id = previous.data(Qt.ItemDataRole.UserRole) if previous else None
+        
+        logger.debug(f"🔵 [DEBUG] on_note_selected called - current_note_id: {current_note_id}, previous_note_id: {previous_note_id}")
+        
         # 1. 处理之前笔记的清理工作
+        logger.debug(f"🔵 [DEBUG] on_note_selected - Step 1: Handling previous note cleanup (previous_note_id: {previous_note_id})")
         self._handle_previous_note_cleanup(previous)
         
         # 2. 处理当前选中的笔记
         if current:
+            logger.debug(f"🔵 [DEBUG] on_note_selected - Step 2: Processing current note (note_id: {current_note_id})")
+            
             # 更新选中状态
+            logger.debug(f"🔵 [DEBUG] on_note_selected - Updating item widget selection for note_id: {current_note_id}")
             self._update_item_widget_selection(current, True)
             
             # 设置当前笔记ID
+            logger.debug(f"🔵 [DEBUG] on_note_selected - Setting current note ID to: {current_note_id}")
             note_id = current.data(Qt.ItemDataRole.UserRole)
             self._set_current_note_id(note_id)
             
             # 加载并显示笔记
+            logger.debug(f"🔵 [DEBUG] on_note_selected - Loading and displaying note: {note_id}")
             self._load_and_display_note(note_id)
         else:
             # 没有选中任何笔记，清空编辑器
+            logger.debug(f"🔵 [DEBUG] on_note_selected - No note selected, clearing editor")
             self._clear_editor()
         
         # 3. 刷新"新建笔记"按钮的可用状态
+        logger.debug(f"🔵 [DEBUG] on_note_selected - Step 3: Updating new note action enabled state")
         self._update_new_note_action_enabled()
+        
+        logger.debug(f"🔵 [DEBUG] on_note_selected completed - final current_note_id: {self._get_current_note_id()}")
 
     def select_single_note(self, row):
         """单选笔记"""
@@ -5142,15 +5259,29 @@ class MainWindow(QMainWindow):
             # 更新预览
             self._update_note_list_item_preview(layout, plain_text, title)
     
-    def save_current_note(self):
-        """保存当前笔记"""
+    def save_current_note(self, note_id=None):
+        """保存当前笔记
+        
+        Args:
+            note_id: 要保存的笔记ID，如果为None则使用 _get_current_note_id()
+                    这个参数用于解决时序问题，例如在切换笔记时需要保存之前的笔记
+        """
+        # 记录调用栈，用于排查调用源
+        # import traceback
+        # stack_trace = ''.join(traceback.format_stack()[:-1])  # 排除当前函数
+        # logger.debug(f"[save_current_note] 🔍 调用栈追踪:\n{stack_trace}")
+        
         # 如果编辑器还未初始化（启动阶段），不保存
         if not self._editor_initialized:
             logger.debug("[save_current_note] 编辑器未初始化，跳过保存")
             return
         
-        if not self._get_current_note_id():
-            logger.debug("[save_current_note] 没有当前笔记ID，跳过保存")
+        # 如果没有传入 note_id，则使用当前笔记ID
+        if note_id is None:
+            note_id = self._get_current_note_id()
+        
+        if not note_id:
+            logger.debug("[save_current_note] 没有笔记ID，跳过保存")
             return
         
         # 1. 获取编辑器内容
@@ -5168,20 +5299,20 @@ class MainWindow(QMainWindow):
             cursor_position = 0
         
         # 记录保存信息
-        logger.info(f"[save_current_note] 开始保存笔记: note_id={self._get_current_note_id()}, title={title}, "
+        logger.info(f"[save_current_note] 开始保存笔记: note_id={note_id}, title={title}, "
                     f"content_length={len(content)}, plain_text_length={len(plain_text)}, "
                     f"cursor_position={cursor_position}")
         logger.debug(f"[save_current_note] 内容前100字符: {plain_text[:len(plain_text)] if plain_text else '(空)'}")
         
         # 4. 更新笔记到数据库（包括光标位置）
         self.note_manager.update_note(
-            self._get_current_note_id(),
+            note_id,
             title=title,
             content=content,
             cursor_position=cursor_position
         )
         
-        logger.info(f"[save_current_note] 笔记保存完成: note_id={self._get_current_note_id()}")
+        logger.info(f"[save_current_note] 笔记保存完成: note_id={note_id}")
         
         # 5. 更新列表中的显示
         self._update_note_list_display(title, plain_text)

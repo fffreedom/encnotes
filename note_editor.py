@@ -422,9 +422,11 @@ class PasteImageTextEdit(QTextEdit):
         # 创建新光标并设置位置
         cursor = self.textCursor()
         cursor.setPosition(safe_position)
+
+        # 这儿设置光标，如果位置发生变化，会触发cursorPositionChanged事件，调用update_title_and_input_format函数
         self.setTextCursor(cursor)
         
-        # 应用光标并设置焦点，不设置焦点光标不会闪烁
+        # 应用光标并设置焦点，不设置焦点光标不会闪烁，会触发focusInEvent事件，调用update_title_and_input_format函数
         self.setFocus()
     # 1. cursorPositionChanged事件处理函数，设置光位位置或者键盘、鼠标输入事件触发
     # 2. 在新加载note时，如果文档是空的光标默认设置到标题行结尾（位置0）时需要手工触发（因为这时候不会触发cursorPositionChanged事件）
@@ -1011,7 +1013,7 @@ class PasteImageTextEdit(QTextEdit):
         super().focusInEvent(event)
         
         # 如果光标在空的第一行，恢复标题格式
-        self._restore_title_format_if_needed()
+        self.update_title_and_input_format()
         logger.debug("[focusInEvent] 焦点处理完成")
     
     def _can_accept_focus(self) -> bool:
@@ -1025,39 +1027,39 @@ class PasteImageTextEdit(QTextEdit):
         
         return bool(self._get_current_note_id())
     
-    def _restore_title_format_if_needed(self):
-        """如果光标在空的第一行，恢复标题格式"""
-        cursor = self.textCursor()
-        
-        # 只处理第一行
-        if cursor.block().blockNumber() != 0:
-            return
-        
-        # 检查第一行是否为空（包括零宽字符）
-        block_text = cursor.block().text()
-        if not self._is_empty_title_line(block_text):
-            return
-        
-        # 应用标题格式
-        self._apply_title_format()
+    # def _restore_title_format_if_needed(self):
+    #     """如果光标在空的第一行，恢复标题格式"""
+    #     cursor = self.textCursor()
+    #
+    #     # 只处理第一行
+    #     if cursor.block().blockNumber() != 0:
+    #         return
+    #
+    #     # 检查第一行是否为空（包括零宽字符）
+    #     block_text = cursor.block().text()
+    #     if not self._is_empty_title_line(block_text):
+    #         return
+    #
+    #     # 应用标题格式
+    #     self._apply_title_format()
     
-    def _is_empty_title_line(self, text: str) -> bool:
-        """判断是否为空的标题行
-        
-        Args:
-            text: 行文本内容
-            
-        Returns:
-            如果是空行或只包含零宽字符返回True
-        """
-        return text == "" or text == "\u200B"
+    # def _is_empty_title_line(self, text: str) -> bool:
+    #     """判断是否为空的标题行
+    #
+    #     Args:
+    #         text: 行文本内容
+    #
+    #     Returns:
+    #         如果是空行或只包含零宽字符返回True
+    #     """
+    #     return text == "" or text == "\u200B"
     
-    def _apply_title_format(self):
-        """应用标题格式（28pt + 粗体）"""
-        char_fmt = QTextCharFormat()
-        char_fmt.setFontPointSize(28)  # 标题字号
-        char_fmt.setFontWeight(QFont.Weight.Bold)  # 粗体
-        self.setCurrentCharFormat(char_fmt)
+    # def _apply_title_format(self):
+    #     """应用标题格式（28pt + 粗体）"""
+    #     char_fmt = QTextCharFormat()
+    #     char_fmt.setFontPointSize(28)  # 标题字号
+    #     char_fmt.setFontWeight(QFont.Weight.Bold)  # 粗体
+    #     self.setCurrentCharFormat(char_fmt)
 
     def _handle_anchor_click(self, event) -> bool:
         """处理附件链接点击
@@ -3009,7 +3011,10 @@ class NoteEditor(QWidget):
         return tagged_chars
     
     def clear(self):
+        # 清空编辑器会触发cursorPositionChanged事件，从而调用update_title_and_input_format方法，没有必要，所以屏蔽信息
+        self.blockSignals(True)
         self.text_edit.clear()
+        self.blockSignals(True)
         self.attachments.clear()
         
         # 获取光标
