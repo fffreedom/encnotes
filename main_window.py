@@ -2364,30 +2364,65 @@ class MainWindow(QMainWindow):
         Args:
             select_note_id: 要选中的笔记ID，如果为None则选中第一个笔记
         """
+        # Debug: 记录函数调用信息
+        logger.debug(f"[load_notes] 开始加载笔记 - 要选中的笔记ID: {select_note_id}")
+        
         # 1. 清除widget和多选状态
         self._clear_note_list_widgets()
         
         # 2. 根据当前选中的文件夹/标签加载笔记
         current_row = self.folder_list.currentRow()
         deleted_row, tag_header_row, first_tag_row = self._calculate_folder_indices()
+        
+        # Debug: 记录当前选中的文件夹/标签信息
+        logger.debug(f"[load_notes] 当前选中行: {current_row}, 文件夹ID: {self.current_folder_id}, "
+                    f"标签ID: {self.current_tag_id}, 系统键: {self.current_system_key}")
+        
         notes = self._load_notes_by_current_selection(current_row, deleted_row, first_tag_row)
+        
+        # Debug: 记录加载的笔记信息
+        note_ids = [note['id'] for note in notes]
+        note_titles = [(note['id'], note.get('title', '无标题')[:20]) for note in notes[:10]]  # 只显示前10个标题
+        logger.debug(f"[load_notes] 加载完成 - 笔记总数: {len(notes)}, 笔记ID列表: {note_ids}")
+        if note_titles:
+            logger.debug(f"[load_notes] 前10个笔记标题: {note_titles}")
         
         # 3. 将笔记分为置顶和普通笔记
         pinned_notes, normal_notes = self._categorize_notes(notes)
+        
+        # Debug: 记录分类结果
+        pinned_ids = [note['id'] for note in pinned_notes]
+        normal_ids = [note['id'] for note in normal_notes]
+        logger.debug(f"[load_notes] 分类完成 - 置顶笔记数: {len(pinned_notes)}, ID: {pinned_ids}, "
+                    f"普通笔记数: {len(normal_notes)}, ID: {normal_ids}")
         
         # 4. 按时间分组普通笔记
         time_groups = self._group_notes_by_time(normal_notes)
         group_order = self._get_group_order(time_groups)
         
+        # Debug: 记录分组结果
+        group_info = {group: len(time_groups[group]) for group in group_order if group in time_groups}
+        logger.debug(f"[load_notes] 分组完成 - 分组数: {len(group_order)}, 实际分组数: {len(time_groups)}, 各组笔记数: {group_info}")
+        
         # 5. 显示置顶笔记和分组的普通笔记
         self._display_pinned_notes(pinned_notes)
         self._display_grouped_notes(time_groups, group_order)
         
+        # Debug: 记录显示结果
+        displayed_count = self.note_list.count()
+        logger.debug(f"[load_notes] 显示完成 - 列表项总数(含分组标题): {displayed_count}")
+        
         # 6. 选中指定的笔记或第一个笔记
         if notes:
             self._select_or_default_note_in_list(select_note_id)
+            # Debug: 记录选中结果
+            selected_row = self.note_list.currentRow()
+            selected_item = self.note_list.currentItem()
+            selected_note_id = selected_item.data(Qt.ItemDataRole.UserRole) if selected_item else None
+            logger.debug(f"[load_notes] 选中完成 - 选中行: {selected_row}, 选中笔记ID: {selected_note_id}")
         else:
             self._clear_editor_for_empty_list()
+            logger.debug(f"[load_notes] 无笔记 - 已清空编辑器")
         
         # 7. 更新新建笔记菜单的可用状态
         self._update_new_note_action_enabled()
@@ -4520,6 +4555,9 @@ class MainWindow(QMainWindow):
             if not item_type:
                 return
             
+            # Debug: 记录选中的文件夹信息
+            logger.debug(f"[on_folder_changed] 选中项 - 类型: {item_type}, ID: {item_id}, 索引: {index}")
+            
             # 3. 根据类型处理选中逻辑（这会更新 current_folder_id/current_tag_id/current_system_key）
             self._handle_item_selection(cur_item, item_type, item_id)
         except Exception:
@@ -4528,7 +4566,22 @@ class MainWindow(QMainWindow):
         # 4. 加载新视图的笔记，并尝试恢复该视图上次编辑的笔记
         new_view_key = self._get_current_view_key()
         last_note_id = self._last_note_per_view.get(new_view_key)
+        
+        # Debug: 记录视图信息和要恢复的笔记ID
+        logger.debug(f"[on_folder_changed] 视图键: {new_view_key}, 上次笔记ID: {last_note_id}")
+        
         self.load_notes(last_note_id)
+        
+        # Debug: 记录加载后的笔记列表信息
+        note_count = self.note_list.count()
+        note_ids = []
+        for i in range(note_count):
+            item = self.note_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole):
+                note_id = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(note_id, int):  # 排除分组标题
+                    note_ids.append(note_id)
+        logger.debug(f"[on_folder_changed] 加载完成 - 笔记总数: {len(note_ids)}, 笔记ID列表: {note_ids}")
 
     def on_folder_item_double_clicked(self, item: QListWidgetItem):
         """左侧文件夹列表：双击文件夹行时展开/折叠（仅对有子文件夹的自定义文件夹生效）"""

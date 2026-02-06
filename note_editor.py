@@ -385,13 +385,9 @@ class PasteImageTextEdit(QTextEdit):
         body_fmt = self._create_body_format()
         block_text = current_block.text()
         is_empty_block = (block_text == "")
-        
-        logger.debug(f"[_set_body_input_format] 设置正文格式: block_number={current_block.blockNumber()}, "
-                     f"is_empty={is_empty_block}, block_text_length={len(block_text)}, 内容不为空，不需要真正设置!")
-        
+
         # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
         if is_empty_block:
-            logger.debug("[_set_body_input_format] 当前行为空，插入零宽度空格")
             self.blockSignals(True)
             current_cursor.setCharFormat(body_fmt)
             # 从标题行换到正文行，需要插入零宽度空格，否则光标会显示为标题格式
@@ -399,8 +395,11 @@ class PasteImageTextEdit(QTextEdit):
             current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
             self.setTextCursor(current_cursor)
             self.blockSignals(False)
-            logger.debug(f"[_set_body_input_format] 正文格式已设置: font_size={body_fmt.fontPointSize()}, "
-                         f"font_weight={body_fmt.fontWeight()}")
+            logger.debug(f"[_set_body_input_format] 设置正文格式: font_size={body_fmt.fontPointSize()}, "
+                         f"font_weight={body_fmt.fontWeight()}，空行，插入了零宽度空格！")
+        else:
+            logger.debug(f"[_set_body_input_format] 设置正文格式: block_number={current_block.blockNumber()}, "
+                         f"is_empty={is_empty_block}, block_text_length={len(block_text)}, 内容不为空，不需要真正设置!")
 
     def setCursorPosition(self, position):
         """设置光标位置的封装方法
