@@ -2323,7 +2323,8 @@ class MainWindow(QMainWindow):
                                 it.setData(Qt.ItemDataRole.UserRole + 1, False)
                         except Exception:
                             pass
-    
+
+    # 启动时on_folder_changed->load_notes中会调用这个函数设置选中的笔记，会触发currentItemChanged信号从而调用on_note_selected函数
     def _select_or_default_note_in_list(self, select_note_id):
         """在笔记列表中选中指定的笔记或第一个笔记。
         

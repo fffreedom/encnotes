@@ -272,8 +272,10 @@ class PasteImageTextEdit(QTextEdit):
         # 监听滚动事件
         self.verticalScrollBar().valueChanged.connect(self.on_scroll)
         self.horizontalScrollBar().valueChanged.connect(self.on_scroll)
-        
-        # 监听光标位置变化，自动格式化第一行
+
+        # 监听光标位置变化信号，自动格式化第一行
+        # Qt中信号通过emit发出，通过connect连接到槽函数，可以被blockSignals()阻止
+        # Qt中事件由Qt事件系统直接调用，通过重写事件处理函数来处理，如focusInEvent等，不受blockSignals()影响
         self.cursorPositionChanged.connect(self.update_title_and_input_format)
 
     def _init_attachment_tag_style(self):
@@ -409,8 +411,8 @@ class PasteImageTextEdit(QTextEdit):
         
         功能：
             1. 确保位置不超过文档长度
-            2. 设置光标到指定位置
-            3. 触发 cursorPositionChanged 信号（如果位置发生变化）
+            2. 设置光标到指定位置，触发 cursorPositionChanged 信号（如果位置发生变化）
+            3. 设置光标焦点，触发focusInEvent事件
         """
         # 确保位置不超过文档长度
         max_position = len(self.toPlainText())
@@ -424,9 +426,13 @@ class PasteImageTextEdit(QTextEdit):
         cursor.setPosition(safe_position)
 
         # 这儿设置光标，如果位置发生变化，会触发cursorPositionChanged事件，调用update_title_and_input_format函数
+
+        self.blockSignals(True)
         self.setTextCursor(cursor)
+        self.blockSignals(False)
         
         # 应用光标并设置焦点，不设置焦点光标不会闪烁，会触发focusInEvent事件，调用update_title_and_input_format函数
+        logger.debug(f"[setCursorPosition] 设置光标焦点")
         self.setFocus()
     # 1. cursorPositionChanged事件处理函数，设置光位位置或者键盘、鼠标输入事件触发
     # 2. 在新加载note时，如果文档是空的光标默认设置到标题行结尾（位置0）时需要手工触发（因为这时候不会触发cursorPositionChanged事件）
@@ -1322,7 +1328,7 @@ class PasteImageTextEdit(QTextEdit):
         super().mousePressEvent(event)
         
         # 如果点击的是第一行且第一行为空，恢复标题格式
-        self._restore_title_format_if_needed()
+        # self._restore_title_format_if_needed()
         logger.debug("[mousePressEvent] 鼠标按下事件处理完成")
     
     def _handle_image_resizing(self, event) -> bool:
