@@ -374,12 +374,12 @@ class PasteImageTextEdit(QTextEdit):
             return
 
         # 应用格式到第一行已有文本（包括只有零宽度空格的情况）
-        first_cursor = QTextCursor(first_block)
-        first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        self.blockSignals(True)
-        first_cursor.mergeCharFormat(title_fmt)
-        self.blockSignals(False)
-        logger.debug("[update_title_and_input_format] 标题行有内容，应用标题格式到第一行")
+        # first_cursor = QTextCursor(first_block)
+        # first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        # self.blockSignals(True)
+        # first_cursor.mergeCharFormat(title_fmt)
+        # self.blockSignals(False)
+        # logger.debug("[update_title_and_input_format] 标题行有内容，应用标题格式到第一行")
 
     
     def _set_body_input_format(self, current_cursor, current_block):
@@ -437,12 +437,19 @@ class PasteImageTextEdit(QTextEdit):
     # 1. cursorPositionChanged事件处理函数，设置光位位置或者键盘、鼠标输入事件触发
     # 2. 在新加载note时，如果文档是空的光标默认设置到标题行结尾（位置0）时需要手工触发（因为这时候不会触发cursorPositionChanged事件）
     def update_title_and_input_format(self):
-        """更新第一行标题格式并设置当前光标的输入格式
+        """根据光标位置设置输入格式
         
-        功能包括：
-        1. 初始化空文档（插入零宽度字符）
-        2. 确保第一行为标题格式（28pt 粗体）
-        3. 根据光标位置设置输入格式（标题或正文）
+        触发时机：
+        1. cursorPositionChanged 事件触发时（光标位置改变、键盘/鼠标输入）
+        2. 新加载 note 时，如果文档为空且光标在标题行结尾时需手动触发
+        
+        功能说明：
+        - 如果光标有选区，跳过格式设置（避免影响选区内容）
+        - 如果光标在标题行（第0行）并且标题行为空，设置标题输入格式（28pt 粗体）
+        - 如果光标在正文第一行（第1行）并且内容为空，设置正文输入格式（继承当前块格式）
+        - 如果光标在正文其他行（第2行及以后），跳过格式设置（不做任何操作）
+        
+        注意：此函数仅设置输入格式，不修改已有文本的格式
         """
         # Debug: 打印调用栈
         logger.debug("=== update_title_and_input_format called ===")
@@ -468,11 +475,13 @@ class PasteImageTextEdit(QTextEdit):
 
         # 根据光标位置设置当前输入格式
         if current_block_number == 0:
-            logger.debug("[update_title_and_input_format] 光标在第一行，设置标题输入格式")
+            logger.debug("[update_title_and_input_format] 光标在第一行，尝试设置标题输入格式")
             self._set_title_input_format()
-        else:
-            logger.debug(f"[update_title_and_input_format] 光标在正文区域（第{current_block_number}行），设置正文输入格式")
+        elif current_block_number == 1:
+            logger.debug(f"[update_title_and_input_format] 光标在正文第一行（第{current_block_number}行），尝试设置正文输入格式")
             self._set_body_input_format(current_cursor, current_block)
+        else:
+            logger.debug(f"[update_title_and_input_format] 光标在正文其他行（第{current_block_number}行），跳过格式设置")
 
     def _cursor_is_in_attachment_block(self, cursor: QTextCursor) -> bool:
         """判断光标是否位于附件块的字符范围内（通过 charFormat 的 anchor 属性不可靠，所以用自定义 property 标识）"""
