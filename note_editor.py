@@ -447,16 +447,7 @@ class PasteImageTextEdit(QTextEdit):
         # Debug: 打印调用栈
         logger.debug("=== update_title_and_input_format called ===")
         logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
-        
-        # document = self.document()
-        
-        # 处理空文档，给标题头添加零宽度空格以设置标题格式，插入零宽度空格后会再次调用此函数
-        # 这个步骤是必须的，因为后面判断第一行为空时可能光标不在标题行，不能设置标题格式
-        # if document.isEmpty():
-        #     logger.debug("[update_title_and_input_format] 文档为空，初始化空文档")
-        #     self._initialize_empty_document()
-        #     return
-        
+
         # 获取当前光标
         current_cursor = self.textCursor()
         cursor_position = current_cursor.position()
@@ -474,21 +465,7 @@ class PasteImageTextEdit(QTextEdit):
         
         logger.debug(f"[update_title_and_input_format] 光标信息: position={cursor_position}, "
                      f"block_number={current_block_number}, block_text='{current_block_text[:50]}...' (前50字符)")
-        
-        # 获取并验证第一行
-        # first_block = document.firstBlock()
-        # if not first_block.isValid():
-        #     logger.debug("[update_title_and_input_format] 第一行无效，返回")
-        #     return
-        #
-        # # 格式化第一行为标题格式（如果需要），防御因历史数据、粘贴内容、用户错误操作、程序bug等导致的标题没有格式化的相关问题
-        # first_line_formatted = self._is_first_line_title_formatted()
-        # logger.debug(f"[update_title_and_input_format] 第一行格式检查: is_formatted={first_line_formatted}")
-        #
-        # if not first_line_formatted:
-        #     logger.debug("[update_title_and_input_format] 第一行未格式化，应用标题格式")
-        #     self._apply_title_format_to_first_line(first_block)
-        
+
         # 根据光标位置设置当前输入格式
         if current_block_number == 0:
             logger.debug("[update_title_and_input_format] 光标在第一行，设置标题输入格式")
@@ -1324,11 +1301,10 @@ class PasteImageTextEdit(QTextEdit):
             # 取消图片选中
             self._clear_image_selection()
             logger.debug("[mousePressEvent] 点击了普通文本区域")
-
+        # QTextEdit 默认处理，如果光标位置发生了变化会触发cursorPositionChanged事件，
+        # 从而调用update_title_and_input_format设置格式
         super().mousePressEvent(event)
-        
-        # 如果点击的是第一行且第一行为空，恢复标题格式
-        # self._restore_title_format_if_needed()
+
         logger.debug("[mousePressEvent] 鼠标按下事件处理完成")
     
     def _handle_image_resizing(self, event) -> bool:
@@ -2168,14 +2144,12 @@ class PasteImageTextEdit(QTextEdit):
                 logger.debug("[keyPressEvent] 表格已选中，返回")
                 return
         
-        # 使用默认行为
+        # QTextEditor 默认处理，如果光标位置发生了变化，会触发cursorPositionChanged事件，
+        # 从而调用update_title_and_input_format进行格式化处理
         logger.debug("[keyPressEvent] 调用父类方法处理按键事件")
         super().keyPressEvent(event)
         logger.debug("[keyPressEvent] 按键事件处理完成")
-        
-        # 恢复格式
-        # if need_restore_format and saved_format:
-        #     self.setCurrentCharFormat(saved_format)
+
     # 使用非英文输入法（中文等）时，会触发inputMethodEvent，每次输入一个字母都会触发此事件，
     # 通过event.preeditString()来获取所有输入的字母，最后确认后（空格或者手动选择）可以通过commitString来获取输入法输入的值
     def inputMethodEvent(self, event):
