@@ -319,40 +319,7 @@ class PasteImageTextEdit(QTextEdit):
         body_fmt.setFontPointSize(14)
         body_fmt.setFontWeight(QFont.Weight.Normal)
         return body_fmt
-    
-    # def _initialize_empty_document(self):
-    #     """初始化空文档，插入零宽度空格并设置标题格式，插入零宽度字符的目的是使光标大小符合标题格式"""
-    #     title_fmt = self._create_title_format()
-    #     cursor = self.textCursor()
-    #     # 添加零宽度空格不需要再触发cursorPositionChanged事件
-    #     self.blockSignals(True)
-    #     cursor.insertText('\u200B', title_fmt)
-    #     self.blockSignals(False)
-    # #
-    # def _is_first_line_title_formatted(self, first_block):
-    #     """检查第一行是否已经是标题格式（28号字体）"""
-    #     # 检查光标位置是否在标题行，如果在标题行，如果标题行内容为空，就插入一个零宽度空格并设置标题格式，如果标题行内容不为空就直接设置标题格式
-    #     # 如果光标不在标题行，不进行任何处理
-    #     first_line_text = first_block.text()
-    #     # 如果第一行只有零宽度空格，不需要应用格式，只需要后面根据光标位置设置相应的光标格式即可
-    #     if first_line_text == "\u200B":
-    #         return True
-    #
-    #     first_cursor = QTextCursor(first_block)
-    #     first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-    #     char_fmt = first_cursor.charFormat()
-    #     return char_fmt.fontPointSize() == 28
-    # #
-    # def _apply_title_format_to_first_line(self, title_format, first_block):
-    #     """应用标题格式到第一行"""
-    #     # 应用格式到第一行已有文本
-    #     first_cursor = QTextCursor(first_block)
-    #     first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-    #
-    #     self.blockSignals(True)
-    #     first_cursor.mergeCharFormat(title_format)
-    #     self.blockSignals(False)
-    # #
+
     def _set_title_input_format(self):
         """设置标题输入格式（保留当前格式的其他属性）"""
         document = self.document()
@@ -370,26 +337,18 @@ class PasteImageTextEdit(QTextEdit):
             self.blockSignals(True)
             cursor.insertText('\u200B', title_fmt)
             self.blockSignals(False)
-            logger.debug("[update_title_and_input_format] 标题行为空，插入零宽度空格")
-            return
-
-        # 应用格式到第一行已有文本（包括只有零宽度空格的情况）
-        # first_cursor = QTextCursor(first_block)
-        # first_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        # self.blockSignals(True)
-        # first_cursor.mergeCharFormat(title_fmt)
-        # self.blockSignals(False)
-        # logger.debug("[update_title_and_input_format] 标题行有内容，应用标题格式到第一行")
-
+            logger.debug("[update_title_and_input_format] 标题行为空，插入零宽度空格并给光标应用标题格式")
+        else:
+            logger.debug("[update_title_and_input_format] 标题行不为空，跳过光标应用标题格式设置，允许用户自定义标题格式")
     
     def _set_body_input_format(self, current_cursor, current_block):
         """设置正文输入格式，如果当前行为空则插入零宽度空格"""
         body_fmt = self._create_body_format()
+        # 获取当前行文本内容，包含零宽度空格等不可见字符
         block_text = current_block.text()
-        is_empty_block = (block_text == "")
 
         # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
-        if is_empty_block:
+        if block_text == "":
             self.blockSignals(True)
             current_cursor.setCharFormat(body_fmt)
             # 从标题行换到正文行，需要插入零宽度空格，否则光标会显示为标题格式
@@ -398,10 +357,11 @@ class PasteImageTextEdit(QTextEdit):
             self.setTextCursor(current_cursor)
             self.blockSignals(False)
             logger.debug(f"[_set_body_input_format] 设置正文格式: font_size={body_fmt.fontPointSize()}, "
-                         f"font_weight={body_fmt.fontWeight()}，空行，插入了零宽度空格！")
+                         f"font_weight={body_fmt.fontWeight()}，"
+                         f"block_text={repr(block_text[:50])}...，空行，插入了零宽度空格！")
         else:
-            logger.debug(f"[_set_body_input_format] 设置正文格式: block_number={current_block.blockNumber()}, "
-                         f"is_empty={is_empty_block}, block_text_length={len(block_text)}, 内容不为空，不需要真正设置!")
+            logger.debug(f"[_set_body_input_format] 设置正文格式: block_text_length={len(block_text)}, "
+                         f"block_text={repr(block_text[:50])}... 内容不为空，不需要真正设置!")
 
     def setCursorPosition(self, position):
         """设置光标位置的封装方法
@@ -453,7 +413,7 @@ class PasteImageTextEdit(QTextEdit):
         """
         # Debug: 打印调用栈
         logger.debug("=== update_title_and_input_format called ===")
-        logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
+        # logger.debug("Backtrace:\n%s", ''.join(traceback.format_stack()))
 
         # 获取当前光标
         current_cursor = self.textCursor()
@@ -471,7 +431,7 @@ class PasteImageTextEdit(QTextEdit):
         current_block_text = current_block.text()
         
         logger.debug(f"[update_title_and_input_format] 光标信息: position={cursor_position}, "
-                     f"block_number={current_block_number}, block_text='{current_block_text[:50]}...' (前50字符)")
+                     f"block_number={current_block_number}, block_text='{repr(current_block_text[:50])}...' (前50字符)")
 
         # 根据光标位置设置当前输入格式
         if current_block_number == 0:
@@ -481,7 +441,8 @@ class PasteImageTextEdit(QTextEdit):
             logger.debug(f"[update_title_and_input_format] 光标在正文第一行（第{current_block_number}行），尝试设置正文输入格式")
             self._set_body_input_format(current_cursor, current_block)
         else:
-            logger.debug(f"[update_title_and_input_format] 光标在正文其他行（第{current_block_number}行），跳过格式设置")
+            logger.debug(f"[update_title_and_input_format] 光标在正文其他行（第{current_block_number}行），跳过格式设置, "
+                         f"block_text={repr(current_block_text[:50])}...")
 
     def _cursor_is_in_attachment_block(self, cursor: QTextCursor) -> bool:
         """判断光标是否位于附件块的字符范围内（通过 charFormat 的 anchor 属性不可靠，所以用自定义 property 标识）"""
