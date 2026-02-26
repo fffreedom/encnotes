@@ -349,6 +349,11 @@ class PasteImageTextEdit(QTextEdit):
 
         # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
         if block_text == "":
+            # 检查是否正在删除零宽度空格，如果是则不插入新的零宽度空格
+            if hasattr(self, '_deleting_zero_width_space') and self._deleting_zero_width_space:
+                logger.debug(f"[_set_body_input_format] 正在删除零宽度空格，跳过插入新的零宽度空格")
+                return
+            
             self.blockSignals(True)
             current_cursor.setCharFormat(body_fmt)
             # 从标题行换到正文行，需要插入零宽度空格，否则光标会显示为标题格式
@@ -1767,67 +1772,15 @@ class PasteImageTextEdit(QTextEdit):
             
             _select_range(cursor, table_start, table_end + 1)
             cursor.removeSelectedText()
-    #
-    # def _handle_first_line_title_format(self, event):
-    #     """处理第一行标题格式设置
-    #
-    #     返回：(need_restore_format, saved_format) 元组
-    #     """
-    #     need_restore_format = False
-    #     saved_format = None
-    #     # 如果按键没有文本输出（如 Ctrl、Shift 等功能键）或者是空白字符（空格、Tab等），则不处理
-    #     if not event.text() or event.text().isspace():
-    #         return need_restore_format, saved_format
-    #
-    #     # 如果光标不在第一行（标题行），不处理
-    #     cursor = self.textCursor()
-    #     block = cursor.block()
-    #
-    #     if block.blockNumber() != 0:
-    #         return need_restore_format, saved_format
-    #
-    #     block_text = block.text()
-    #     current_fmt = self.currentCharFormat()
-    #     current_size = current_fmt.fontPointSize()
-    #
-    #     # 检查是否需要设置标题格式
-    #     need_title_format = False
-    #     # 第一行为空行或只有零宽空格或当前字体大小异常（大于0小于1），需要设置标题格式
-    #     if block_text == "" or block_text == "\u200B":
-    #         # 如果标题行只有零宽空格，删除它，并移动光标到行首
-    #         if block_text == "\u200B":
-    #             # 选中整个block（整行）
-    #             cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-    #             # 删除选中的文本
-    #             cursor.removeSelectedText()
-    #             # 删除后，光标会被定位到删除位置的起点（这儿是移动光标到行首），所以这儿相当于设置光标到行首位置
-    #             self.setTextCursor(cursor)
-    #         need_title_format = True
-    #     elif current_size == 0.0 or current_size < 1.0:
-    #         need_title_format = True
-    #     # 设置标题格式
-    #     if need_title_format:
-    #         title_fmt = QTextCharFormat()
-    #         title_fmt.setFontPointSize(28)
-    #         title_fmt.setFontWeight(QFont.Weight.Bold)
-    #         self.setCurrentCharFormat(title_fmt)
-    #
-    #     # 记录是否需要在插入后恢复格式
-    #     if block_text == "" or block_text == "\u200B":
-    #         need_restore_format = True
-    #         saved_format = self.currentCharFormat()
-    #
-    #     return need_restore_format, saved_format
-    
+
     def _restore_cursor_and_clear_table_selection(self, event):
         """恢复光标显示并清除表格选中状态"""
-        if event.key() not in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            if self.cursorWidth() == 0:
-                self.setCursorWidth(1)
-            if self.selected_table:
-                self.selected_table = None
-                self.selected_table_cursor = None
-                self.viewport().update()
+        if self.cursorWidth() == 0:
+            self.setCursorWidth(1)
+        if self.selected_table:
+            self.selected_table = None
+            self.selected_table_cursor = None
+            self.viewport().update()
     
     def _log_attachment_delete_before(self, doc, del_key, current_cursor, attachment_sel, marked_span):
         """记录附件删除前的调试信息"""
@@ -1838,7 +1791,7 @@ class PasteImageTextEdit(QTextEdit):
             _sel_e = attachment_sel.selectionEnd()
             _win_s = min(_cur_pos, _sel_s) - 40
             _win_e = max(_cur_pos, _sel_e) + 40
-            
+
             logger.debug(
                 "[attachment-delete] key=%s doc_len=%s cursor_pos=%s sel=(%s,%s)",
                 del_key,
@@ -1847,7 +1800,7 @@ class PasteImageTextEdit(QTextEdit):
                 _sel_s,
                 _sel_e,
             )
-            
+
             if marked_span is not None:
                 _ms, _me = marked_span
                 logger.debug(
@@ -1859,7 +1812,7 @@ class PasteImageTextEdit(QTextEdit):
                 )
             else:
                 logger.debug("[attachment-delete][before] marked_span=<none>")
-            
+
             logger.debug(
                 "[attachment-delete][before] window=(%s,%s) chars=%s",
                 max(0, _win_s),
@@ -1872,25 +1825,25 @@ class PasteImageTextEdit(QTextEdit):
             )
         except Exception:
             pass
-    
+
     def _extract_and_defer_delete_attachments(self, attachment_sel):
         """提取附件ID并延迟删除"""
         try:
             selected_html = attachment_sel.selection().toHtml()
             attachment_ids = []
-            
+
             # 从 attachment://xxx 提取附件ID
             try:
                 import re
                 attachment_ids.extend(re.findall(r"attachment://([a-fA-F0-9\-]{16,})", selected_html))
             except Exception:
                 pass
-            
+
             # 去重
             attachment_ids = list(dict.fromkeys([x for x in attachment_ids if x]))
-            
+
             logger.debug("[attachment-delete] extracted_attachment_ids=%s", attachment_ids)
-            
+
             if attachment_ids and self.parent_editor and getattr(self.parent_editor, "note_manager", None):
                 note_id = self._get_current_note_id()
                 am = getattr(self.parent_editor.note_manager, "attachment_manager", None)
@@ -1900,20 +1853,20 @@ class PasteImageTextEdit(QTextEdit):
                         logger.debug("[attachment-delete] defer_delete_attachment id=%s ok=%s msg=%s", aid, ok, msg)
         except Exception as e:
             logger.exception("[attachment-delete] delete_attachment pre-clean failed: %s", e)
-    
+
     def _log_attachment_delete_after(self, doc, safe_pos):
         """记录附件删除后的调试信息"""
         try:
             _after_len = doc.characterCount()
         except Exception:
             _after_len = -1
-        
+
         logger.debug(
             "[attachment-delete] after_delete safe_pos=%s doc_len=%s",
             safe_pos,
             _after_len,
         )
-        
+
         # 检查是否仍残留被标记范围
         try:
             _marked_span_after = _find_marked_span(
@@ -1922,7 +1875,7 @@ class PasteImageTextEdit(QTextEdit):
                 self.ATTACHMENT_TAG_PROP,
                 getattr(self, "_attachment_tag_name", ""),
             )
-            
+
             if _marked_span_after is not None:
                 _ms2, _me2 = _marked_span_after
                 logger.debug(
@@ -1936,7 +1889,7 @@ class PasteImageTextEdit(QTextEdit):
                 logger.debug("[attachment-delete][after] marked_span=<none>")
         except Exception:
             pass
-        
+
         try:
             _after_win_s = safe_pos - 40
             _after_win_e = safe_pos + 80
@@ -1948,19 +1901,19 @@ class PasteImageTextEdit(QTextEdit):
             )
         except Exception:
             pass
-    
+
     def _handle_attachment_deletion(self, event, current_cursor):
         """处理附件删除
-        
+
         返回：True 表示已处理，False 表示未处理
         """
         attachment_sel = self._select_whole_attachment_span(current_cursor)
         if attachment_sel is None:
             return False
-        
+
         doc = self.document()
         del_key = "Delete" if event.key() == Qt.Key.Key_Delete else "Backspace"
-        
+
         # 获取标记范围
         _sel_s = attachment_sel.selectionStart()
         _marked_span = _find_marked_span(
@@ -1969,24 +1922,24 @@ class PasteImageTextEdit(QTextEdit):
             self.ATTACHMENT_TAG_PROP,
             getattr(self, "_attachment_tag_name", ""),
         )
-        
+
         # 记录删除前信息
         self._log_attachment_delete_before(doc, del_key, current_cursor, attachment_sel, _marked_span)
-        
+
         # 延迟删除附件文件
         self._extract_and_defer_delete_attachments(attachment_sel)
-        
+
         # 删除文本块
         pre_start = attachment_sel.selectionStart()
         attachment_sel.beginEditBlock()
         attachment_sel.removeSelectedText()
         attachment_sel.endEditBlock()
-        
+
         safe_pos = pre_start
-        
+
         # 记录删除后信息
         self._log_attachment_delete_after(doc, safe_pos)
-        
+
         # 恢复光标位置
         try:
             attachment_sel.clearSelection()
@@ -1994,43 +1947,43 @@ class PasteImageTextEdit(QTextEdit):
             self.setTextCursor(attachment_sel)
         except Exception:
             self.setTextCursor(attachment_sel)
-        
+
         event.accept()
         return True
-    
+
     def _handle_selected_table_deletion(self, event, current_table):
         """处理已选中表格的删除
-        
+
         返回：True 表示已处理，False 表示未处理
         """
         if not self.selected_table or not self.selected_table_cursor:
             return False
-        
+
         # 如果当前光标在表格内，说明用户正在编辑单元格内容
         if current_table == self.selected_table:
             super().keyPressEvent(event)
             return True
-        
+
         # 删除整个表格（第二次按删除键）
         cursor = QTextCursor(self.document())
         table_start = self.selected_table.firstPosition()
         table_end = self.selected_table.lastPosition()
-        
+
         _select_range(cursor, table_start, table_end + 1)
         cursor.removeSelectedText()
-        
+
         # 清除选中状态
         self.selected_table = None
         self.selected_table_cursor = None
         self.setCursorWidth(1)
         self.viewport().update()
-        
+
         event.accept()
         return True
-    
+
     def _handle_table_selection(self, event, cursor_pos):
         """处理表格选中（第一次按删除键）
-        
+
         返回：True 表示已处理，False 表示未处理
         """
         frame = self.document().rootFrame()
@@ -2038,22 +1991,22 @@ class PasteImageTextEdit(QTextEdit):
             table = child_frame
             if not hasattr(table, 'firstPosition'):
                 continue
-            
+
             table_start = table.firstPosition()
             table_end = table.lastPosition()
-            
+
             # 检查光标是否紧邻表格
-            is_before_table = (event.key() == Qt.Key.Key_Delete and 
+            is_before_table = (event.key() == Qt.Key.Key_Delete and
                               cursor_pos <= table_start and cursor_pos >= table_start - 2)
-            is_after_table = (event.key() == Qt.Key.Key_Backspace and 
+            is_after_table = (event.key() == Qt.Key.Key_Backspace and
                              cursor_pos >= table_end + 1 and cursor_pos <= table_end + 3)
-            
+
             if is_before_table or is_after_table:
                 # 选中表格
                 self.selected_table = table
                 self.selected_table_cursor = QTextCursor(self.document())
                 self.selected_table_cursor.setPosition(table_start)
-                
+
                 # 移动光标到表格外部
                 clear_cursor = QTextCursor(self.document())
                 if is_before_table:
@@ -2062,15 +2015,101 @@ class PasteImageTextEdit(QTextEdit):
                     clear_cursor.setPosition(table_end + 1)
                 clear_cursor.clearSelection()
                 self.setTextCursor(clear_cursor)
-                
+
                 # 隐藏光标
                 self.setCursorWidth(0)
                 self.viewport().update()
-                
+
                 event.accept()
                 return True
-        
+
         return False
+
+    def _handle_delete_key_press(self, event):
+        """处理删除键按下事件
+
+        Args:
+            event: 键盘事件对象
+
+        Returns:
+            bool: 如果事件已被处理返回True，否则返回False
+        """
+        logger.debug(f"[_handle_delete_key_press] 检测到删除键: {'Delete' if event.key() == Qt.Key.Key_Delete else 'Backspace'}")
+        current_cursor = self.textCursor()
+
+        # 检测并删除不可见空格（空格、制表符、零宽空格）
+        doc = self.document()
+        is_delete_key = event.key() == Qt.Key.Key_Delete
+        check_position = current_cursor.position() if is_delete_key else current_cursor.position() - 1
+
+        # 检查要删除的字符是否是不可见空格
+        if check_position >= 0 and check_position < doc.characterCount():
+            try:
+                # 使用全局函数获取指定位置的字符
+                char_to_delete = _get_char_at(doc, check_position)
+                if char_to_delete == "\u200b":
+                    logger.debug(f"[_handle_delete_key_press] 检测到零宽度空格: {repr(char_to_delete)}, 先删除")
+                    
+                    # 判断是否需要设置标志
+                    should_set_flag = True
+                    if not is_delete_key:
+                        # Backspace键：检查零宽度空格前面是否还有其他字符
+                        # 如果零宽度空格前面还有字符，删除后行不为空，不需要设置标志
+                        block = current_cursor.block()
+                        block_text = block.text()
+                        # 获取零宽度空格在当前行中的位置
+                        block_start = block.position()
+                        zero_width_pos_in_block = check_position - block_start
+                        
+                        # 如果零宽度空格前面还有其他字符（不只是零宽度空格本身）
+                        if zero_width_pos_in_block > 0:
+                            # 检查前面的字符
+                            text_before = block_text[:zero_width_pos_in_block]
+                            if text_before and text_before != "\u200b":
+                                should_set_flag = False
+                                logger.debug(f"[_handle_delete_key_press] Backspace删除零宽度空格，但前面还有字符: {repr(text_before)}，不设置标志")
+                    
+                    # 删除零宽度空格
+                    delete_cursor = QTextCursor(current_cursor)
+                    # 只有在需要时才设置标志，阻止cursorPositionChanged事件处理时重新插入零宽度空格
+                    if should_set_flag:
+                        self._deleting_zero_width_space = True
+                        logger.debug(f"[_handle_delete_key_press] 设置_deleting_zero_width_space标志，阻止重新插入零宽度空格")
+                    
+                    if is_delete_key:
+                        # Delete键：删除光标后的字符
+                        delete_cursor.deleteChar()
+                    else:
+                        # Backspace键：删除光标前的字符
+                        delete_cursor.deletePreviousChar()
+
+                    # 不返回，继续后面的处理，让默认的keyPressEvent继续删除换行符
+            except Exception as e:
+                logger.debug(f"[_handle_delete_key_press] 检测不可见空格时出错: {e}")
+
+        # 先处理附件删除
+        logger.debug("[_handle_delete_key_press] 检查是否需要删除附件")
+        if self._handle_attachment_deletion(event, current_cursor):
+            logger.debug("[_handle_delete_key_press] 附件删除已处理，返回")
+            return True
+
+        current_table = current_cursor.currentTable()
+
+        # 处理已选中表格的删除
+        logger.debug("[_handle_delete_key_press] 检查是否需要删除已选中的表格")
+        if self._handle_selected_table_deletion(event, current_table):
+            logger.debug("[_handle_delete_key_press] 已选中表格删除已处理，返回")
+            return True
+
+        # 处理表格选中（第一次按删除键）
+        cursor_pos = current_cursor.position()
+        logger.debug(f"[_handle_delete_key_press] 检查是否需要选中表格 - cursor_pos: {cursor_pos}")
+        if self._handle_table_selection(event, cursor_pos):
+            logger.debug("[_handle_delete_key_press] 表格已选中，返回")
+            return True
+
+        return False
+
     # 英文输入法或功能键（Ctrl、Alt、Shift等+具体键）会触发此事件。
     # 使用功能键+其他键时，此事件触发时只能获取到功能键，+上的那个键值获取不到。
     # 其他输入法触发inputMethodEvent事件
@@ -2080,162 +2119,143 @@ class PasteImageTextEdit(QTextEdit):
         key_text = event.text()
         modifiers = event.modifiers()
         logger.debug(f"[keyPressEvent] 按键事件触发 - key: {key}, text: '{key_text}', modifiers: {modifiers}")
-        
-        # 处理第一行标题格式
-        # need_restore_format, saved_format = self._handle_first_line_title_format(event)
-        
-        # 恢复光标显示并清除表格选中状态
-        logger.debug("[keyPressEvent] 恢复光标显示并清除表格选中状态")
-        self._restore_cursor_and_clear_table_selection(event)
-        
+
         # 处理删除键
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            logger.debug(f"[keyPressEvent] 检测到删除键: {'Delete' if key == Qt.Key.Key_Delete else 'Backspace'}")
-            current_cursor = self.textCursor()
-            
-            # 先处理附件删除
-            logger.debug("[keyPressEvent] 检查是否需要删除附件")
-            if self._handle_attachment_deletion(event, current_cursor):
-                logger.debug("[keyPressEvent] 附件删除已处理，返回")
+            if self._handle_delete_key_press(event):
                 return
-            
-            current_table = current_cursor.currentTable()
-            
-            # 处理已选中表格的删除
-            logger.debug("[keyPressEvent] 检查是否需要删除已选中的表格")
-            if self._handle_selected_table_deletion(event, current_table):
-                logger.debug("[keyPressEvent] 已选中表格删除已处理，返回")
-                return
-            
-            # 处理表格选中（第一次按删除键）
-            cursor_pos = current_cursor.position()
-            logger.debug(f"[keyPressEvent] 检查是否需要选中表格 - cursor_pos: {cursor_pos}")
-            if self._handle_table_selection(event, cursor_pos):
-                logger.debug("[keyPressEvent] 表格已选中，返回")
-                return
-        
+        else :
+            # 恢复光标显示并清除表格选中状态
+            logger.debug("[keyPressEvent] 恢复光标显示并清除表格选中状态")
+            self._restore_cursor_and_clear_table_selection(event)
+
         # QTextEditor 默认处理，如果光标位置发生了变化，会触发cursorPositionChanged事件，
         # 从而调用update_title_and_input_format进行格式化处理
         logger.debug("[keyPressEvent] 调用父类方法处理按键事件")
         super().keyPressEvent(event)
         logger.debug("[keyPressEvent] 按键事件处理完成")
 
+        # 清除删除零宽度空格的标志
+        if hasattr(self, '_deleting_zero_width_space'):
+            self._deleting_zero_width_space = False
+            logger.debug("[keyPressEvent] 清除_deleting_zero_width_space标志")
+
     # 使用非英文输入法（中文等）时，会触发inputMethodEvent，每次输入一个字母都会触发此事件，
     # 通过event.preeditString()来获取所有输入的字母，最后确认后（空格或者手动选择）可以通过commitString来获取输入法输入的值
     def inputMethodEvent(self, event):
         """处理输入法事件（如中文输入）
-        
+
         输入法输入完成后，会自动触发格式更新，确保标题格式正确。
         """
         commit_string = event.commitString()
         preedit_string = event.preeditString()
         logger.debug(f"[inputMethodEvent] 输入法事件触发 - commitString: '{commit_string}', preeditString: '{preedit_string}'")
-        
+
         # 在输入前预设置标题格式（如果需要）
         if commit_string and self._should_apply_title_format_before_input():
             logger.debug("[inputMethodEvent] 需要在输入前预设置标题格式")
             self._apply_title_format_to_cursor()
         elif commit_string:
             logger.debug("[inputMethodEvent] 有提交文本但不需要预设置格式")
-        
+
         # 调用父类方法处理输入法事件
         super().inputMethodEvent(event)
-        
+
         # 输入完成后，触发格式检查和更新
         if commit_string:
             logger.debug("[inputMethodEvent] 输入完成，触发格式更新")
             self._trigger_format_update()
         else:
             logger.debug("[inputMethodEvent] 无提交文本（预编辑阶段），跳过格式更新")
-    
+
     def _should_apply_title_format_before_input(self) -> bool:
         """判断是否需要在输入前应用标题格式
-        
+
         Returns:
             bool: 如果光标在第一行且该行为空，返回 True
         """
         cursor = self.textCursor()
         block = cursor.block()
-        
+
         # 只在第一行且为空时才需要预设置格式
         if block.blockNumber() != 0:
             return False
-        
+
         block_text = block.text()
         return block_text == "" or block_text == "\u200B"
-    
+
     def _apply_title_format_to_cursor(self):
         """为当前光标应用标题格式"""
         title_fmt = self.currentCharFormat()
         title_fmt.setFontPointSize(28)
         title_fmt.setFontWeight(QFont.Weight.Bold)
         self.setCurrentCharFormat(title_fmt)
-    
+
     def _trigger_format_update(self):
         """触发格式更新
-        
+
         确保第一行格式正确，并根据光标位置设置输入格式。
         """
         self.update_title_and_input_format()
-    
+
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
         if not self.selected_image or not self.selected_image_cursor:
             return
-        
+
         # 保存原位置
         old_pos = self.selected_image_cursor.position()
-        
+
         # 创建光标对象
         cursor = QTextCursor(self.document())
-        
+
         # 使用编辑块确保删除和插入是原子操作
         cursor.beginEditBlock()
-        
+
         # **关键修复**：查找真正的图片字符位置（U+FFFC）
         # 从 old_pos 开始，向右查找最多2个字符，找到真正的图片字符
         real_image_pos = None
         has_paragraph_separator = False
-        
+
         for offset in range(2):  # 检查当前位置和下一个位置
             check_pos = old_pos + offset
             cursor.setPosition(check_pos)
-            
+
             # 向右移动一个字符并选中
             if _select_char_at(cursor, check_pos):
                 selected_text = cursor.selectedText()
                 char_format = cursor.charFormat()
-                
+
                 # 检查是否是真正的图片字符
                 if char_format.isImageFormat() and selected_text == '\ufffc':
                     real_image_pos = check_pos
-                    
+
                     # 检查图片字符前面是否有段落分隔符
                     if real_image_pos > 0:
                         _select_char_at(cursor, real_image_pos - 1)
                         prev_text = cursor.selectedText()
                         prev_format = cursor.charFormat()
-                        
+
                         if prev_format.isImageFormat() and prev_text == '\u2029':
                             has_paragraph_separator = True
-                    
+
                     break
-            
+
             # 清除选区，继续查找
             cursor.clearSelection()
-        
+
         if real_image_pos is None:
             cursor.endEditBlock()
             return
-        
+
         # **关键修复**：检查图片是否是公式（通过检查图片名称中的元数据）
         # 新格式：data:image/png;base64,...|||MATH:type:code
         image_name = self.selected_image.name()
-        
+
         is_formula = False
         formula_metadata = None
         image_base_name = image_name
-        
+
         # 检查是否包含公式元数据（使用 ||| 分隔符）
         if '|||MATH:' in image_name:
             parts = image_name.split('|||', 1)
@@ -2243,17 +2263,17 @@ class PasteImageTextEdit(QTextEdit):
                 is_formula = True
                 image_base_name = parts[0]  # data:image/png;base64,...
                 formula_metadata = parts[1]  # MATH:type:code
-        
+
         # **优化**：只删除图片字符本身，保留段落分隔符（如果有）
         # 移动到图片字符位置
         cursor.setPosition(real_image_pos)
-        
+
         # 向右选中图片字符（只删除1个字符）
         _select_char_at(cursor, cursor.position())
-        
+
         # 删除选中的图片字符
         cursor.removeSelectedText()
-        
+
         # 在删除位置插入新图片
         new_format = QTextImageFormat()
         if is_formula and formula_metadata:
@@ -2262,19 +2282,19 @@ class PasteImageTextEdit(QTextEdit):
         else:
             # 普通图片
             new_format.setName(image_name)
-        
+
         new_format.setWidth(new_width)
         new_format.setHeight(new_height)
         # 设置垂直对齐方式为AlignBaseline，使图片底部与文本基线对齐
         new_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
         cursor.insertImage(new_format)
-        
+
         # 结束编辑块
         cursor.endEditBlock()
-        
+
         # 更新选中状态（光标现在在图片之后，需要向左移动一个位置）
         cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
-        
+
         # 重新获取图片格式（因为可能已经改变）
         _select_char_at(cursor, cursor.position())
         new_char_format = cursor.charFormat()
@@ -2282,108 +2302,108 @@ class PasteImageTextEdit(QTextEdit):
             self.selected_image = new_char_format.toImageFormat()
         cursor.clearSelection()
         cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
-        
+
         self.selected_image_cursor = cursor
         self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
-        
+
         # 刷新显示
         self.viewport().update()
-    
+
     def move_image_to_cursor(self, target_cursor):
         """移动图片到新的光标位置"""
         if not self.selected_image or not self.selected_image_cursor:
             return
-        
+
         # 获取目标位置
         target_pos = target_cursor.position()
         current_pos = self.selected_image_cursor.position()
-        
+
         # 如果位置相同，不需要移动
         if target_pos == current_pos or target_pos == current_pos + 1:
             return
-        
+
         # 保存图片格式和原位置
         image_format = QTextImageFormat(self.selected_image)
         old_pos = self.selected_image_cursor.position()
-        
+
         # **关键修复**：使用同一个光标对象执行所有操作，确保在编辑块中
         cursor = QTextCursor(self.document())
-        
+
         # 开始编辑块
         cursor.beginEditBlock()
-        
+
         # 1. 删除原位置的图片
         # **关键修复**：查找真正的图片字符位置（U+FFFC）
         # 从 old_pos 开始，向右查找最多2个字符，找到真正的图片字符
         real_image_pos = None
         has_paragraph_separator = False
-        
+
         for offset in range(2):  # 检查当前位置和下一个位置
             check_pos = old_pos + offset
             cursor.setPosition(check_pos)
-            
+
             # 向右移动一个字符并选中
             if _select_char_at(cursor, check_pos):
                 selected_text = cursor.selectedText()
                 char_format = cursor.charFormat()
-                
+
                 # 检查是否是真正的图片字符
                 if char_format.isImageFormat() and selected_text == '\ufffc':
                     real_image_pos = check_pos
-                    
+
                     # 检查图片字符前面是否有段落分隔符
                     if real_image_pos > 0:
                         _select_char_at(cursor, real_image_pos - 1)
                         prev_text = cursor.selectedText()
                         prev_format = cursor.charFormat()
-                        
+
                         if prev_format.isImageFormat() and prev_text == '\u2029':
                             has_paragraph_separator = True
-                    
+
                     break
-            
+
             # 清除选区，继续查找
             cursor.clearSelection()
-        
+
         if real_image_pos is None:
             cursor.endEditBlock()
             return
-        
+
         # **关键修复**：如果有段落分隔符，从段落分隔符位置开始删除
         delete_start_pos = real_image_pos - 1 if has_paragraph_separator else real_image_pos
         delete_count = 2 if has_paragraph_separator else 1
-        
+
         # 选中需要删除的字符范围（段落分隔符 + 图片字符，或只有图片字符）
         _select_range(cursor, delete_start_pos, delete_start_pos + delete_count)
-        
+
         # 删除选中的内容
         cursor.removeSelectedText()
-        
+
         # 调整目标位置（如果删除位置在目标位置之前）
         adjusted_target_pos = target_pos
         if old_pos < target_pos:
             adjusted_target_pos = target_pos - 1
-        
+
         # 2. 在新位置插入图片
         cursor.setPosition(adjusted_target_pos)
         cursor.insertImage(image_format)
-        
+
         # 结束编辑块
         cursor.endEditBlock()
-        
+
         # 更新选中状态
         cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, 1)
         self.selected_image = image_format
         self.selected_image_cursor = cursor
         self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
-        
+
         # 刷新显示
         self.viewport().update()
-    
+
     # 注释掉此函数以提升性能，需要调试时可以重新启用
     # def count_all_images(self):
     #     """统计文档中的所有图片数量和位置
-    #     
+    #
     #     Returns:
     #         tuple: (图片数量, 图片位置列表)
     #     """
@@ -2391,57 +2411,57 @@ class PasteImageTextEdit(QTextEdit):
     #     positions = []
     #     cursor = QTextCursor(self.document())
     #     cursor.movePosition(QTextCursor.MoveOperation.Start)
-    #     
+    #
     #     doc_length = self.document().characterCount()
-    #     
+    #
     #     iteration = 0
     #     while not cursor.atEnd():
     #         iteration += 1
     #         # 保存当前位置
     #         current_pos = cursor.position()
-    #         
+    #
     #         # 向右移动一个字符并选中
     #         move_success = cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor)
-    #         
+    #
     #         if not move_success:
     #             break
-    #         
+    #
     #         # 检查选中的字符格式
     #         char_format = cursor.charFormat()
     #         is_image = char_format.isImageFormat()
-    #         
+    #
     #         # 获取选中的文本（图片字符）
     #         selected_text = cursor.selectedText()
     #         selected_text_repr = repr(selected_text)
-    #         
+    #
     #         # **关键修复**：只统计真正的图片字符（U+FFFC），忽略段落分隔符（U+2029）
     #         # Qt在空行行首插入图片时，会插入两个字符：段落分隔符和图片字符
     #         # 我们只需要统计图片字符
     #         is_real_image = is_image and selected_text == '\ufffc'
-    #         
+    #
     #         if is_real_image:
     #             count += 1
     #             positions.append(current_pos)
-    #         
+    #
     #         # 清除选区后，光标会移动到选区的末尾（即 current_pos + 1）
     #         cursor.clearSelection()
-    #         
+    #
     #         # 防止无限循环
     #         if iteration > doc_length + 100:
     #             break
-    #     
+    #
     #     return count, positions
-    
+
 
     def canInsertFromMimeData(self, source):
         """检查是否可以从MIME数据插入"""
         if source.hasImage() or source.hasUrls():
             return True
         return super().canInsertFromMimeData(source)
-    
+
     def insertFromMimeData(self, source):
         """从MIME数据插入（支持截图粘贴）"""
-        
+
         # 处理图片
         if source.hasImage():
             image = QImage(source.imageData())
@@ -2449,7 +2469,7 @@ class PasteImageTextEdit(QTextEdit):
                 if self.parent_editor:
                     self.parent_editor.insert_image_to_editor(image)
                 return
-        
+
         # 处理文件URL
         if source.hasUrls():
             for url in source.urls():
@@ -2461,10 +2481,10 @@ class PasteImageTextEdit(QTextEdit):
                             if self.parent_editor:
                                 self.parent_editor.insert_image_to_editor(image)
                             return
-        
+
         # 默认处理
         super().insertFromMimeData(source)
-    
+
     def is_image_file(self, file_path):
         """检查是否是图片文件"""
         image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg']
@@ -2481,30 +2501,30 @@ class NoteEditor(QWidget):
         self.main_window = main_window  # 保存 MainWindow 引用
         self.attachments = {}  # 存储附件 {filename: filepath}
         self.init_ui()
-    
+
     def _get_current_note_id(self):
         """从main window获取当前笔记ID
-        
+
         Returns:
             int or None: 当前笔记ID
         """
         if self.main_window and hasattr(self.main_window, '_get_current_note_id'):
             return self.main_window._get_current_note_id()
         return None
-        
+
     def init_ui(self):
         """初始化界面"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
+
         # 创建格式工具栏
         self.toolbar = self.create_format_toolbar()
         layout.addWidget(self.toolbar)
-        
+
         # 创建文本编辑器（支持粘贴图片）
         self.text_edit = PasteImageTextEdit(self)
-        
+
         # 设置字体：优先使用系统默认字体，避免缺失字体导致Qt在启动时耗时做字体别名填充
         font = self.font()
         try:
@@ -2512,7 +2532,7 @@ class NoteEditor(QWidget):
         except Exception:
             pass
         self.text_edit.setFont(font)
-        
+
         # 设置样式
         self.text_edit.setStyleSheet("""
             QTextEdit {
@@ -2521,12 +2541,12 @@ class NoteEditor(QWidget):
                 background-color: #ffffff;
             }
         """)
-        
+
         # 启用富文本
         self.text_edit.setAcceptRichText(True)
-        
+
         layout.addWidget(self.text_edit)
-        
+
     def create_format_toolbar(self):
         """创建格式工具栏（模仿Mac备忘录）"""
         # 创建容器widget来实现居中
@@ -2537,13 +2557,13 @@ class NoteEditor(QWidget):
                 border-bottom: 1px solid #d0d0d0;
             }
         """)
-        
+
         container_layout = QHBoxLayout(toolbar_container)
         container_layout.setContentsMargins(0, 4, 0, 4)
-        
+
         # 添加左侧弹簧
         container_layout.addStretch()
-        
+
         # 创建工具栏
         toolbar = QToolBar()
         toolbar.setMovable(False)
@@ -2580,150 +2600,150 @@ class NoteEditor(QWidget):
                 background-color: #d0d0d0;
             }
         """)
-        
+
         # 格式菜单
         format_menu = QMenu("格式", self)
-        
+
         # 保存格式菜单的引用，用于更新状态
         self.format_menu = format_menu
-        
+
         # 标题样式（平铺在格式菜单下）
         self.title_action = QAction("标题", self)
         self.title_action.setCheckable(True)
         self.title_action.triggered.connect(lambda: self.apply_heading(1))
         format_menu.addAction(self.title_action)
-        
+
         self.heading_action = QAction("小标题", self)
         self.heading_action.setCheckable(True)
         self.heading_action.triggered.connect(lambda: self.apply_heading(2))
         format_menu.addAction(self.heading_action)
-        
+
         self.subheading_action = QAction("副标题", self)
         self.subheading_action.setCheckable(True)
         self.subheading_action.triggered.connect(lambda: self.apply_heading(3))
         format_menu.addAction(self.subheading_action)
-        
+
         format_menu.addSeparator()
-        
+
         # 文本样式
         self.bold_action = QAction("粗体", self)
         self.bold_action.setCheckable(True)
         self.bold_action.setShortcut("Ctrl+B")
         self.bold_action.triggered.connect(self.toggle_bold)
         format_menu.addAction(self.bold_action)
-        
+
         self.italic_action = QAction("斜体", self)
         self.italic_action.setCheckable(True)
         self.italic_action.setShortcut("Ctrl+I")
         self.italic_action.triggered.connect(self.toggle_italic)
         format_menu.addAction(self.italic_action)
-        
+
         self.underline_action = QAction("下划线", self)
         self.underline_action.setCheckable(True)
         self.underline_action.setShortcut("Ctrl+U")
         self.underline_action.triggered.connect(self.toggle_underline)
         format_menu.addAction(self.underline_action)
-        
+
         self.strikethrough_action = QAction("删除线", self)
         self.strikethrough_action.setCheckable(True)
         self.strikethrough_action.triggered.connect(self.toggle_strikethrough)
         format_menu.addAction(self.strikethrough_action)
-        
+
         format_menu.addSeparator()
-        
+
         # 字体颜色
         text_color_action = QAction("字体颜色...", self)
         text_color_action.triggered.connect(self.choose_text_color)
         format_menu.addAction(text_color_action)
-        
+
         # 背景色
         bg_color_action = QAction("背景色...", self)
         bg_color_action.triggered.connect(self.choose_background_color)
         format_menu.addAction(bg_color_action)
-        
+
         format_menu.addSeparator()
-        
+
         # 正文
         body_action = QAction("正文", self)
         body_action.triggered.connect(self.apply_body_text)
         format_menu.addAction(body_action)
-        
+
         format_menu.addSeparator()
-        
+
         # 列表子菜单（移到格式菜单下）
         list_menu = format_menu.addMenu("列表")
-        
+
         self.bullet_action = QAction("• 项目符号列表", self)
         self.bullet_action.setCheckable(True)
         self.bullet_action.triggered.connect(self.toggle_bullet_list)
         list_menu.addAction(self.bullet_action)
-        
+
         self.number_action = QAction("1. 编号列表", self)
         self.number_action.setCheckable(True)
         self.number_action.triggered.connect(self.toggle_numbered_list)
         list_menu.addAction(self.number_action)
-        
+
         # 连接格式菜单的aboutToShow信号，在显示前更新状态
         format_menu.aboutToShow.connect(self.update_format_menu_state)
-        
+
         # 格式按钮
         format_button = QPushButton("格式")
         format_button.setMenu(format_menu)
         toolbar.addWidget(format_button)
-        
+
         # 表格按钮
         table_button = QPushButton("⊞")
         table_button.setToolTip("表格")
         table_button.clicked.connect(self.insert_table)
         toolbar.addWidget(table_button)
-        
+
         # 附件按钮
         attachment_button = QPushButton("📎")
         attachment_button.setToolTip("附件")
         attachment_button.clicked.connect(self.insert_attachment)
         toolbar.addWidget(attachment_button)
-        
+
         toolbar.addSeparator()
-        
+
         # 超链接按钮
         link_button = QPushButton("🔗")
         link_button.setToolTip("添加链接")
         link_button.setShortcut("Ctrl+K")
         link_button.clicked.connect(self.insert_link)
         toolbar.addWidget(link_button)
-        
+
         # LaTeX按钮
         latex_button = QPushButton("LaTeX")
         latex_button.setToolTip("LaTeX公式")
         latex_button.clicked.connect(self.insert_latex)
         toolbar.addWidget(latex_button)
-        
+
         # MathML按钮
         mathml_button = QPushButton("MathML")
         mathml_button.setToolTip("MathML公式")
         mathml_button.clicked.connect(self.insert_mathml)
         toolbar.addWidget(mathml_button)
-        
+
         # 将工具栏添加到容器
         container_layout.addWidget(toolbar)
-        
+
         # 添加右侧弹簧
         container_layout.addStretch()
-        
+
         return toolbar_container
-    
+
     # 代理属性和方法，使NoteEditor表现得像QTextEdit
     @property
     def textChanged(self):
         """返回文本编辑器的textChanged信号"""
         return self.text_edit.textChanged
-    
+
     def toHtml(self):
         return self.text_edit.toHtml()
-    
+
     def toPlainText(self):
         return self.text_edit.toPlainText()
-    
+
     def setHtml(self, html_content):
         """设置HTML内容，并重新渲染数学公式"""
         # 先设置HTML
@@ -2748,7 +2768,7 @@ class NoteEditor(QWidget):
             self._remark_attachment_blocks_after_load()
         except Exception as e:
             logger.exception("[attachment-remark] remark failed: %s", e)
-        
+
         # 重新渲染所有数学公式
         self.rerender_formulas()
 
@@ -2760,24 +2780,24 @@ class NoteEditor(QWidget):
           否则会把 block 内的 ZWSP/PSEP 或用户后续输入内容一并标记，导致删除范围漂移、误删换行。
         """
         doc = self.text_edit.document()
-        
+
         total_blocks = 0
         matched_blocks = 0
         marked_chars = 0
-        
+
         block = doc.firstBlock()
         while block.isValid():
             total_blocks += 1
-            
+
             if self._block_has_attachment(block, doc):
                 matched_blocks += 1
                 marked_chars += self._mark_attachment_segments_in_block(block, doc)
-            
+
             block = block.next()
-        
+
         # 验证标记结果
         tagged_chars = self._verify_tagged_chars(doc)
-        
+
         logger.debug(
             "[attachment-remark] done blocks_total=%s blocks_matched=%s marked_chars=%s "
             "tagged_chars=%s",
@@ -2786,10 +2806,10 @@ class NoteEditor(QWidget):
             marked_chars,
             tagged_chars,
         )
-    
+
     def _is_attachment_anchor_at(self, doc, position: int) -> bool:
         """检查指定位置是否是附件anchor。
-        
+
         采用选中字符再检查格式的方式，避免丢失第一个字符。
         """
         try:
@@ -2799,10 +2819,10 @@ class NoteEditor(QWidget):
             cf = _selected_char_format(doc, position)
             if cf is None or not cf.isAnchor():
                 return False
-            
+
             href = cf.anchorHref() or ""
             is_attachment = href.startswith("attachment://")
-            
+
             if is_attachment:
                 # 获取该位置的字符
                 char = self._char_at(doc, position)
@@ -2815,14 +2835,14 @@ class NoteEditor(QWidget):
             return is_attachment
         except Exception:
             return False
-    
+
     def _char_at(self, doc, position: int) -> str:
         """获取指定位置的字符。"""
         return _get_char_at(doc, position)
-    
+
     def _is_trailing_separator(self, doc, position: int) -> bool:
         """检查指定位置是否是尾随分隔符（空格、制表符、零宽空格）。
-        
+
         只允许把"附件展示片段"右侧紧邻的少量空白纳入标记范围（用于 Backspace/Delete 整块删除）。
         禁止把段落边界（\\u2029 / \\n / \\r）纳入标记范围。
         """
@@ -2831,7 +2851,7 @@ class NoteEditor(QWidget):
             return t in (" ", "\t", "\u200b")
         except Exception:
             return False
-    
+
     def _block_has_attachment(self, block, doc) -> bool:
         """检查block是否包含附件。
         扫描 block 的 fragment HTML 是否包含 `attachment://`
@@ -2842,31 +2862,31 @@ class NoteEditor(QWidget):
             block_html = block_cursor.selection().toHtml() or ""
         except Exception:
             block_html = ""
-        
+
         return "attachment://" in block_html
-    
+
     def _mark_attachment_segments_in_block(self, block, doc) -> int:
         """在block内找出所有附件anchor的连续片段，并对每个片段单独打标。
-        
+
         返回：标记的字符数
         """
         marked_chars = 0
-        
+
         try:
             block_start = block.position()
             block_inclusive = min(max(0, doc.characterCount() - 1), max(0, block_start + block.length() - 1))
-            
+
             i = block_start
             while i <= block_inclusive:
                 if not self._is_attachment_anchor_at(doc, i):
                     i += 1
                     continue
-                
+
                 # 直接使用_find_attachment_segment_bounds查找附件的完整范围
                 # 这个函数会找到：anchor文本 + size文本 + 尾随分隔空格
                 # 不依赖已有的标记，适用于重启后的重新标记场景
                 seg_start, seg_end = self._find_attachment_segment_bounds(doc, i, block_start, block_inclusive)
-                
+
                 # 日志：输出找到的附件范围
                 logger.debug(
                     "[attachment-remark] found attachment segment: start=%s end=%s (length=%s)",
@@ -2874,15 +2894,15 @@ class NoteEditor(QWidget):
                     seg_end,
                     seg_end - seg_start + 1,
                 )
-                
+
                 # 对完整范围打标记
                 self._apply_attachment_mark(doc, seg_start, seg_end)
-                
+
                 marked_chars += max(0, (seg_end + 1) - seg_start)
-                
+
                 # 跳过该片段，继续查找下一个附件
                 i = seg_end + 1
-            
+
             # 获取block_html用于日志
             block_cursor = QTextCursor(block)
             block_cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
@@ -2890,7 +2910,7 @@ class NoteEditor(QWidget):
                 block_html = block_cursor.selection().toHtml() or ""
             except Exception:
                 block_html = ""
-            
+
             logger.debug(
                 "[attachment-remark] marked block=%s marked_start_pos=%s len=%s html_has_attachment=%s marked_chars=%s",
                 block.blockNumber(),
@@ -2899,34 +2919,34 @@ class NoteEditor(QWidget):
                 ("attachment://" in block_html),
                 marked_chars,
             )
-        
+
         except Exception as e:
             logger.debug("[attachment-remark] mark block failed: %s", e)
-        
+
         return marked_chars
-    
+
     def _find_attachment_segment_bounds(self, doc, start_pos: int, block_start: int, block_end: int) -> tuple:
         """找到附件片段的起始和结束位置。
-        
+
         包括：anchor文本 + size文本 + 尾随分隔空格
-        
+
         返回：(seg_start, seg_end) inclusive
         """
         # anchor 起点（向左扩展同 href 的连续范围）
         seg_start = start_pos
         while seg_start > block_start and self._is_attachment_anchor_at(doc, seg_start - 1):
             seg_start -= 1
-        
+
         # anchor 终点（向右扩展同 href 的连续范围）
         seg_end = start_pos
         while seg_end < block_end and self._is_attachment_anchor_at(doc, seg_end + 1):
             seg_end += 1
 
         return seg_start, seg_end
-    
+
     def _apply_attachment_mark(self, doc, seg_start: int, seg_end: int):
         """对指定范围应用附件标记。
-        
+
         参数：
             seg_start: 起始位置（inclusive）
             seg_end: 结束位置（inclusive）
@@ -2939,10 +2959,10 @@ class NoteEditor(QWidget):
         mark_cursor = QTextCursor(doc)
         _select_range(mark_cursor, seg_start, seg_end + 1)
         mark_cursor.mergeCharFormat(mark_format)
-    
+
     def _verify_tagged_chars(self, doc) -> int:
         """验证：扫描全文，看最终有多少字符真的带上了标记。
-        
+
         返回：带标记的字符数
         """
         tagged_chars = 0
@@ -2957,56 +2977,56 @@ class NoteEditor(QWidget):
                     tagged_chars += 1
         except Exception as e:
             logger.debug("[attachment-remark] verify scan failed: %s", e)
-        
+
         return tagged_chars
-    
+
     def clear(self):
         # 清空编辑器会触发cursorPositionChanged事件，从而调用update_title_and_input_format方法，没有必要，所以屏蔽信息
         self.blockSignals(True)
         self.text_edit.clear()
         self.blockSignals(True)
         self.attachments.clear()
-        
+
         # 获取光标
         cursor = self.text_edit.textCursor()
-        
+
         # 创建标题字符格式
         title_char_fmt = QTextCharFormat()
         title_char_fmt.setFontPointSize(28)
         title_char_fmt.setFontWeight(QFont.Weight.Bold)
-        
+
         # 关键：插入一个零宽度空格，这样块格式才能生效
         # 零宽度空格 (U+200B) 不可见但能撑起光标高度
         cursor.insertText('\u200B', title_char_fmt)
-        
+
         # 将光标移回开头
         cursor.movePosition(cursor.MoveOperation.Start)
-        
+
         # 应用光标
         self.text_edit.setTextCursor(cursor)
-        
+
         # 设置当前输入格式
         self.text_edit.setCurrentCharFormat(title_char_fmt)
-    
+
     def blockSignals(self, block):
         return self.text_edit.blockSignals(block)
-    
+
     def textCursor(self):
         return self.text_edit.textCursor()
-    
+
     def setTextCursor(self, cursor):
         self.text_edit.setTextCursor(cursor)
-    
+
     # 格式化方法
     def apply_heading(self, level):
         """应用标题格式，如果已经是该格式则取消"""
         cursor = self.text_edit.textCursor()
-        
+
         # 获取当前字符格式
         current_fmt = cursor.charFormat()
         current_size = current_fmt.fontPointSize()
         current_weight = current_fmt.fontWeight()
-        
+
         # 判断当前是否已经是该标题格式
         is_current_format = False
         if level == 1 and current_size == 28 and current_weight == QFont.Weight.Bold:
@@ -3015,136 +3035,136 @@ class NoteEditor(QWidget):
             is_current_format = True
         elif level == 3 and current_size == 18 and current_weight == QFont.Weight.Bold:
             is_current_format = True
-        
+
         cursor.beginEditBlock()
-        
+
         if is_current_format:
             # 如果已经是该格式，则恢复为正文格式
             self.apply_body_text()
         else:
             # 设置块格式
             block_fmt = QTextBlockFormat()
-            
+
             # 设置字符格式
             char_fmt = QTextCharFormat()
             char_fmt.setFontWeight(QFont.Weight.Bold)
-            
+
             if level == 1:  # 标题（首行标题格式）
                 char_fmt.setFontPointSize(28)
             elif level == 2:  # 小标题
                 char_fmt.setFontPointSize(22)
             elif level == 3:  # 副标题
                 char_fmt.setFontPointSize(18)
-            
+
             cursor.mergeBlockFormat(block_fmt)
             cursor.mergeCharFormat(char_fmt)
-        
+
         cursor.endEditBlock()
-    
+
     def apply_body_text(self):
         """应用正文格式"""
         cursor = self.text_edit.textCursor()
-        
+
         char_fmt = QTextCharFormat()
         char_fmt.setFontPointSize(14)
         char_fmt.setFontWeight(QFont.Weight.Normal)
-        
+
         cursor.mergeCharFormat(char_fmt)
-    
+
     def toggle_bold(self):
         """切换粗体"""
         cursor = self.text_edit.textCursor()
         fmt = cursor.charFormat()
-        
+
         if fmt.fontWeight() == QFont.Weight.Bold:
             fmt.setFontWeight(QFont.Weight.Normal)
         else:
             fmt.setFontWeight(QFont.Weight.Bold)
-        
+
         cursor.mergeCharFormat(fmt)
-    
+
     def toggle_italic(self):
         """切换斜体"""
         cursor = self.text_edit.textCursor()
         fmt = cursor.charFormat()
         fmt.setFontItalic(not fmt.fontItalic())
         cursor.mergeCharFormat(fmt)
-    
+
     def toggle_underline(self):
         """切换下划线"""
         cursor = self.text_edit.textCursor()
         fmt = cursor.charFormat()
         fmt.setFontUnderline(not fmt.fontUnderline())
         cursor.mergeCharFormat(fmt)
-    
+
     def toggle_strikethrough(self):
         """切换删除线"""
         cursor = self.text_edit.textCursor()
         fmt = cursor.charFormat()
         fmt.setFontStrikeOut(not fmt.fontStrikeOut())
         cursor.mergeCharFormat(fmt)
-    
+
     def choose_text_color(self):
         """选择字体颜色"""
         cursor = self.text_edit.textCursor()
-        
+
         # 获取当前字体颜色作为初始颜色
         current_format = cursor.charFormat()
         current_color = current_format.foreground().color()
-        
+
         # 打开颜色选择对话框
         color = QColorDialog.getColor(current_color, self, "选择字体颜色")
-        
+
         if color.isValid():
             # 应用选择的颜色
             fmt = QTextCharFormat()
             fmt.setForeground(color)
-            
+
             # 如果有选中文本，应用到选中文本
             if cursor.hasSelection():
                 cursor.mergeCharFormat(fmt)
             else:
                 # 如果没有选中文本，设置当前格式（影响后续输入）
                 self.text_edit.setCurrentCharFormat(fmt)
-    
+
     def choose_background_color(self):
         """选择背景色"""
         cursor = self.text_edit.textCursor()
-        
+
         # 获取当前背景色作为初始颜色
         current_format = cursor.charFormat()
         current_color = current_format.background().color()
-        
+
         # 打开颜色选择对话框
         color = QColorDialog.getColor(current_color, self, "选择背景色")
-        
+
         if color.isValid():
             # 应用选择的颜色
             fmt = QTextCharFormat()
             fmt.setBackground(color)
-            
+
             # 如果有选中文本，应用到选中文本
             if cursor.hasSelection():
                 cursor.mergeCharFormat(fmt)
             else:
                 # 如果没有选中文本，设置当前格式（影响后续输入）
                 self.text_edit.setCurrentCharFormat(fmt)
-    
+
     def insert_bullet_list(self):
         """插入项目符号列表"""
         cursor = self.text_edit.textCursor()
         cursor.insertList(QTextListFormat.Style.ListDisc)
-    
+
     def insert_numbered_list(self):
         """插入编号列表"""
         cursor = self.text_edit.textCursor()
         cursor.insertList(QTextListFormat.Style.ListDecimal)
-    
+
     def toggle_bullet_list(self):
         """切换项目符号列表"""
         cursor = self.text_edit.textCursor()
         current_list = cursor.currentList()
-        
+
         if current_list and current_list.format().style() == QTextListFormat.Style.ListDisc:
             # 如果已经是项目符号列表，则移除列表
             block_fmt = cursor.blockFormat()
@@ -3159,12 +3179,12 @@ class NoteEditor(QWidget):
                 cursor.insertText(selected_text)
             else:
                 cursor.insertList(QTextListFormat.Style.ListDisc)
-    
+
     def toggle_numbered_list(self):
         """切换编号列表"""
         cursor = self.text_edit.textCursor()
         current_list = cursor.currentList()
-        
+
         if current_list and current_list.format().style() == QTextListFormat.Style.ListDecimal:
             # 如果已经是编号列表，则移除列表
             block_fmt = cursor.blockFormat()
@@ -3179,27 +3199,27 @@ class NoteEditor(QWidget):
                 cursor.insertText(selected_text)
             else:
                 cursor.insertList(QTextListFormat.Style.ListDecimal)
-    
+
     def update_format_menu_state(self):
         """更新格式菜单的状态（显示当前格式）"""
         cursor = self.text_edit.textCursor()
         fmt = cursor.charFormat()
-        
+
         # 获取当前字体大小和粗细
         font_size = fmt.fontPointSize()
         font_weight = fmt.fontWeight()
-        
+
         # 更新标题状态
         self.title_action.setChecked(font_size == 28 and font_weight == QFont.Weight.Bold)
         self.heading_action.setChecked(font_size == 22 and font_weight == QFont.Weight.Bold)
         self.subheading_action.setChecked(font_size == 18 and font_weight == QFont.Weight.Bold)
-        
+
         # 更新文本样式状态
         self.bold_action.setChecked(font_weight == QFont.Weight.Bold)
         self.italic_action.setChecked(fmt.fontItalic())
         self.underline_action.setChecked(fmt.fontUnderline())
         self.strikethrough_action.setChecked(fmt.fontStrikeOut())
-        
+
         # 更新列表状态
         current_list = cursor.currentList()
         if current_list:
@@ -3209,7 +3229,7 @@ class NoteEditor(QWidget):
         else:
             self.bullet_action.setChecked(False)
             self.number_action.setChecked(False)
-    
+
     def insert_table(self):
         """插入表格（默认 3x3，不弹出对话框）"""
         rows, cols = 3, 3
@@ -3226,16 +3246,16 @@ class NoteEditor(QWidget):
         # 插入表格
         cursor.insertTable(rows, cols, table_format)
 
-    
+
     def insert_link(self):
         """插入超链接"""
         cursor = self.text_edit.textCursor()
         selected_text = cursor.selectedText()
-        
+
         dialog = LinkInsertDialog(self, selected_text)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             text, url = dialog.get_link()
-            
+
             if text and url:
                 # 创建超链接格式
                 fmt = QTextCharFormat()
@@ -3243,55 +3263,55 @@ class NoteEditor(QWidget):
                 fmt.setAnchorHref(url)
                 fmt.setForeground(QColor("#007AFF"))  # Mac蓝色
                 fmt.setFontUnderline(True)
-                
+
                 # 插入或替换文本
                 if cursor.hasSelection():
                     cursor.removeSelectedText()
-                
+
                 cursor.insertText(text, fmt)
-    
+
     def insert_attachment(self):
         """插入附件 - 弹出文件选择对话框"""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "选择附件", "", "所有文件 (*.*)"
         )
-        
+
         if file_path:
             # 调用内部方法处理附件
             self._insert_attachment_with_path(file_path)
-    
+
     def rerender_formulas(self):
         """重新渲染文档中的所有数学公式"""
         # **关键修复**：现在公式是通过 insertImage() 插入的真正图片字符（U+FFFC）
         # 元数据存储在图片名称中（格式：data:image/png;base64,...|||MATH:type:code）
         # 需要遍历文档中的所有图片字符，找到公式并重新渲染
-        
+
         cursor = QTextCursor(self.text_edit.document())
         cursor.movePosition(QTextCursor.MoveOperation.Start)
-        
+
         # 收集所有需要重新渲染的公式
         formulas_to_rerender = []  # [(position, formula_type, code, width, height), ...]
-        
+
         while not cursor.atEnd():
             # 保存当前位置
             current_pos = cursor.position()
-            
+
             # 向右移动一个字符并选中
             _select_char_at(cursor, cursor.position())
             char_format = cursor.charFormat()
             selected_text = cursor.selectedText()
-            
+
             # 检查是否是真正的图片字符
             if char_format.isImageFormat() and selected_text == '\ufffc':
                 img_format = char_format.toImageFormat()
                 image_name = img_format.name()
-                
+
                 # 检查是否是公式（包含 |||MATH: 分隔符）
                 if '|||MATH:' in image_name:
                     parts = image_name.split('|||', 1)
                     if len(parts) == 2:
                         metadata = parts[1]  # MATH:type:code
-                        
+
                         # 解析元数据
                         if metadata.startswith('MATH:'):
                             metadata_parts = metadata[5:].split(':', 1)  # 去掉 'MATH:' 前缀
@@ -3300,7 +3320,7 @@ class NoteEditor(QWidget):
                                 escaped_code = metadata_parts[1]
                                 # 反转义HTML实体
                                 code = html.unescape(escaped_code)
-                                
+
                                 # 保存公式信息
                                 formulas_to_rerender.append((
                                     current_pos,
@@ -3309,57 +3329,57 @@ class NoteEditor(QWidget):
                                     img_format.width(),
                                     img_format.height()
                                 ))
-            
+
             # 清除选区
             cursor.clearSelection()
-        
+
         # 如果没有公式需要重新渲染，直接返回
         if not formulas_to_rerender:
             return
-        
+
         # 开始编辑块
         edit_cursor = QTextCursor(self.text_edit.document())
         edit_cursor.beginEditBlock()
-        
+
         # 从后往前处理，避免位置偏移
         for pos, formula_type, code, width, height in reversed(formulas_to_rerender):
             # 重新渲染公式
             image_data = self.math_renderer.render(code, formula_type)
-            
+
             if image_data and not image_data.isNull():
                 try:
                     from PIL import Image as PILImage
                     import io
-                    
+
                     # 将 QImage 转换为 PIL Image
                     new_width = image_data.width()
                     new_height = image_data.height()
-                    
+
                     image_data = image_data.convertToFormat(QImage.Format.Format_RGBA8888)
                     ptr = image_data.constBits()
                     ptr.setsize(image_data.sizeInBytes())
-                    
+
                     pil_image = PILImage.frombytes('RGBA', (new_width, new_height), bytes(ptr), 'raw', 'RGBA', 0, 1)
-                    
+
                     if pil_image.mode == 'RGBA':
                         background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
                         background.paste(pil_image, mask=pil_image.split()[3])
                         pil_image = background
-                    
+
                     buffer = io.BytesIO()
                     pil_image.save(buffer, format='PNG', optimize=True)
                     image_bytes = buffer.getvalue()
-                    
+
                     image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-                    
+
                     # 重新组合图片名称（保留元数据）
                     escaped_code = html.escape(code)
                     new_image_name = f"data:image/png;base64,{image_base64}|||MATH:{formula_type}:{escaped_code}"
-                    
+
                     # 删除旧图片
                     _select_char_at(edit_cursor, pos)
                     edit_cursor.removeSelectedText()
-                    
+
                     # 插入新图片（保持原尺寸）
                     new_format = QTextImageFormat()
                     new_format.setName(new_image_name)
@@ -3368,73 +3388,73 @@ class NoteEditor(QWidget):
                     # 设置垂直对齐方式为AlignBaseline，使图片底部与文本基线对齐
                     new_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
                     edit_cursor.insertImage(new_format)
-                    
+
                 except Exception as e:
                     print(f"重新渲染公式失败: {e}")
                     import traceback
                     traceback.print_exc()
-        
+
         # 结束编辑块
         edit_cursor.endEditBlock()
-    
+
     def insert_image_to_editor(self, image):
         """插入图片到编辑器"""
         # 检查图片是否有效
         if image is None or image.isNull():
             print("错误：图片无效")
             return
-        
+
         # 限制图片大小
         max_width = 800
-        
+
         if image.width() > max_width:
             image = image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
-        
+
         # 再次检查缩放后的图片
         if image.isNull():
             print("错误：图片缩放后无效")
             return
-        
+
         try:
             from PIL import Image as PILImage
             import io
-            
+
             # 将 QImage 转换为 PIL Image，完全避免使用 Qt 的 save 方法
             # 获取图片的宽度、高度和格式
             width = image.width()
             height = image.height()
-            
+
             # 转换为 RGBA8888 格式（PIL 兼容）
             image = image.convertToFormat(QImage.Format.Format_RGBA8888)
-            
+
             # 获取图片的原始字节数据
             ptr = image.constBits()
             ptr.setsize(image.sizeInBytes())
-            
+
             # 使用 PIL 从原始字节创建图片
             pil_image = PILImage.frombytes('RGBA', (width, height), bytes(ptr), 'raw', 'RGBA', 0, 1)
-            
+
             # 转换为 RGB（去除 alpha 通道，PNG 更小）
             if pil_image.mode == 'RGBA':
                 # 创建白色背景
                 background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
                 background.paste(pil_image, mask=pil_image.split()[3])  # 使用 alpha 通道作为 mask
                 pil_image = background
-            
+
             # 使用 PIL 保存为 PNG 格式到内存
             buffer = io.BytesIO()
             pil_image.save(buffer, format='PNG', optimize=True)
             image_bytes = buffer.getvalue()
-            
+
             # 转换为 base64
             image_data = base64.b64encode(image_bytes).decode('utf-8')
-            
+
             # 生成唯一的图片名称
             image_name = f"image_{uuid.uuid4().hex[:8]}.png"
-            
+
             # 获取光标
             cursor = self.text_edit.textCursor()
-            
+
             # 使用QTextImageFormat插入图片（更可靠的方式）
             image_format = QTextImageFormat()
             image_format.setName(f"data:image/png;base64,{image_data}")
@@ -3442,15 +3462,15 @@ class NoteEditor(QWidget):
             image_format.setHeight(height)
             # 设置垂直对齐方式为AlignBaseline，使图片底部与文本基线对齐
             image_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
-            
+
             # 插入图片
             cursor.insertImage(image_format)
-            
+
         except Exception as e:
             print(f"插入图片时发生错误: {e}")
             import traceback
             traceback.print_exc()
-    
+
     def _format_file_size(self, file_size):
         """格式化文件大小为可读字符串"""
         if file_size < 1024:
@@ -3459,27 +3479,27 @@ class NoteEditor(QWidget):
             return f"{file_size / 1024:.1f} KB"
         else:
             return f"{file_size / (1024 * 1024):.1f} MB"
-    
+
     def _add_attachment_to_manager(self, file_path, file_name, file_size):
         """将附件添加到附件管理器
-        
+
         返回：(success, attachment_id) 或 (False, None)
         """
         success, message, attachment_id = self.note_manager.attachment_manager.add_attachment(
             file_path, self._get_current_note_id()
         )
-        
+
         if not success:
             QMessageBox.warning(self, "添加附件失败", message)
             return False, None
-        
+
         return True, attachment_id
-    
+
     def _create_attachment_html(self, attachment_id, file_name, size_str):
         """创建附件的HTML代码"""
         attachment_url = f"attachment://{attachment_id}"
         return f'<a href="{attachment_url}" style="color: #0066cc;">{file_name} ({size_str})</a>'
-    
+
     def _log_attachment_insert_before(self, start_pos, file_name, size_str, attachment_id):
         """记录附件插入前的日志"""
         try:
@@ -3497,7 +3517,7 @@ class NoteEditor(QWidget):
             )
         except Exception:
             pass
-    
+
     def _log_attachment_insert_after(self, end_pos, start_pos):
         """记录附件插入后的日志"""
         try:
@@ -3513,15 +3533,15 @@ class NoteEditor(QWidget):
             )
         except Exception:
             pass
-    
+
     def _mark_inserted_attachment(self, doc, start_pos, end_pos):
         """对插入的附件打标记"""
         if end_pos <= start_pos:
             return
-        
+
         mark_cursor = QTextCursor(doc)
         _select_range(mark_cursor, start_pos, end_pos)
-        
+
         try:
             logger.debug(
                 "[attachment-insert][mark][before] start_pos=%s end_pos=%s doc_len=%s start_char=%s",
@@ -3532,17 +3552,17 @@ class NoteEditor(QWidget):
             )
         except Exception:
             pass
-        
+
         mark_format = QTextCharFormat()
         mark_format.setProperty(
             self.text_edit.ATTACHMENT_TAG_PROP,
             self.text_edit._attachment_tag_name,
         )
         mark_cursor.mergeCharFormat(mark_format)
-        
+
         # 验证标记范围
         self._verify_attachment_mark(doc, start_pos)
-    
+
     def _verify_attachment_mark(self, doc, start_pos):
         """验证附件标记范围"""
         try:
@@ -3564,7 +3584,7 @@ class NoteEditor(QWidget):
                 )
         except Exception:
             pass
-    
+
     def _reset_cursor_format(self, cursor):
         """重置光标格式，避免后续输入继承附件标记"""
         try:
@@ -3573,57 +3593,57 @@ class NoteEditor(QWidget):
             self.text_edit.setFocus(Qt.FocusReason.OtherFocusReason)
         except Exception:
             pass
-    
+
     def _insert_attachment_with_path(self, file_path):
         """插入附件链接 - 使用附件管理器加密存储"""
         try:
             import os
-            
+
             # 检查是否有note_manager和当前笔记ID
             if not self.note_manager or not self._get_current_note_id():
                 QMessageBox.warning(self, "错误", "无法添加附件：笔记未保存")
                 return
-            
+
             # 获取文件信息
             file_name = os.path.basename(file_path)
             file_size = os.path.getsize(file_path)
             size_str = self._format_file_size(file_size)
-            
+
             # 添加附件到管理器
             success, attachment_id = self._add_attachment_to_manager(file_path, file_name, file_size)
             if not success:
                 return
-            
+
             # 创建附件HTML
             attachment_html = self._create_attachment_html(attachment_id, file_name, size_str)
-            
+
             # 插入附件HTML
             cursor = self.text_edit.textCursor()
             start_pos = cursor.position()
-            
+
             self._log_attachment_insert_before(start_pos, file_name, size_str, attachment_id)
             cursor.insertHtml(attachment_html)
             end_pos = cursor.position()
             self._log_attachment_insert_after(end_pos, start_pos)
-            
+
             # 标记插入的附件
             try:
                 doc = self.text_edit.document()
                 self._mark_inserted_attachment(doc, start_pos, end_pos)
             except Exception:
                 pass
-            
+
             # 重置光标格式
             self._reset_cursor_format(cursor)
-            
+
             print(f"成功插入附件: {file_name} ({size_str}), ID: {attachment_id}")
-            
+
         except Exception as e:
             print(f"插入附件时发生错误: {e}")
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, "错误", f"插入附件失败: {str(e)}")
-        
+
     def insert_latex(self):
         """插入LaTeX公式"""
         dialog = LatexInputDialog(self)
@@ -3631,7 +3651,7 @@ class NoteEditor(QWidget):
             latex_code = dialog.get_latex()
             if latex_code:
                 self.insert_math_formula(latex_code, 'latex')
-                
+
     def insert_mathml(self):
         """插入MathML公式"""
         dialog = MathMLInputDialog(self)
@@ -3639,47 +3659,47 @@ class NoteEditor(QWidget):
             mathml_code = dialog.get_mathml()
             if mathml_code:
                 self.insert_math_formula(mathml_code, 'mathml')
-                
+
     def insert_math_formula(self, code, formula_type):
         """插入数学公式"""
         cursor = self.text_edit.textCursor()
-        
+
         # 渲染公式为图片
         image_data = self.math_renderer.render(code, formula_type)
-        
+
         if image_data and not image_data.isNull():
             try:
                 from PIL import Image as PILImage
                 import io
-                
+
                 # 将 QImage 转换为 PIL Image，完全避免使用 Qt 的 save 方法
                 width = image_data.width()
                 height = image_data.height()
-                
+
                 # 转换为 RGBA8888 格式（PIL 兼容）
                 image_data = image_data.convertToFormat(QImage.Format.Format_RGBA8888)
-                
+
                 # 获取图片的原始字节数据
                 ptr = image_data.constBits()
                 ptr.setsize(image_data.sizeInBytes())
-                
+
                 # 使用 PIL 从原始字节创建图片
                 pil_image = PILImage.frombytes('RGBA', (width, height), bytes(ptr), 'raw', 'RGBA', 0, 1)
-                
+
                 # 转换为 RGB（去除 alpha 通道）
                 if pil_image.mode == 'RGBA':
                     background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
                     background.paste(pil_image, mask=pil_image.split()[3])
                     pil_image = background
-                
+
                 # 使用 PIL 保存为 PNG 格式到内存
                 buffer = io.BytesIO()
                 pil_image.save(buffer, format='PNG', optimize=True)
                 image_bytes = buffer.getvalue()
-                
+
                 # 转换为 base64
                 image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-                
+
                 # **关键修复**：使用 insertImage() 而不是 insertHtml()
                 # 这样公式会成为真正的图片字符（U+FFFC），可以被点击选中
                 # 在图片名称中编码公式元数据（格式: data:image/png;base64,...|||MATH:type:code）
@@ -3687,7 +3707,7 @@ class NoteEditor(QWidget):
                 escaped_code = html.escape(code)
                 # 使用 ||| 作为分隔符，将元数据附加到图片名称后面
                 image_name = f"data:image/png;base64,{image_base64}|||MATH:{formula_type}:{escaped_code}"
-                
+
                 # 使用 QTextImageFormat 插入图片
                 image_format = QTextImageFormat()
                 image_format.setName(image_name)
@@ -3695,9 +3715,9 @@ class NoteEditor(QWidget):
                 image_format.setHeight(height)
                 # 设置垂直对齐方式为AlignBaseline，使公式底部与文本基线对齐
                 image_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
-                
+
                 cursor.insertImage(image_format)
-                
+
             except Exception as e:
                 print(f"插入公式时发生错误: {e}")
                 import traceback
@@ -3713,10 +3733,10 @@ class NoteEditor(QWidget):
                 cursor.insertText(f"$${code}$$")
             else:
                 cursor.insertText(f"[MathML: {code[:50]}...]")
-    
+
     def edit_math_formula(self, code, formula_type, image_cursor, image_format):
         """编辑已存在的数学公式
-        
+
         Args:
             code: 公式代码
             formula_type: 公式类型（'latex' 或 'mathml'）
@@ -3728,27 +3748,27 @@ class NoteEditor(QWidget):
             dialog = LatexInputDialog(self)
             # 设置对话框中的初始内容为原公式代码
             dialog.input_edit.setPlainText(code)
-            
+
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 new_code = dialog.get_latex()
                 if new_code and new_code != code:
                     # 用户修改了公式，更新公式图片
                     self._update_formula_image(new_code, formula_type, image_cursor, image_format)
-        
+
         elif formula_type == 'mathml':
             dialog = MathMLInputDialog(self)
             # 设置对话框中的初始内容为原公式代码
             dialog.input_edit.setPlainText(code)
-            
+
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 new_code = dialog.get_mathml()
                 if new_code and new_code != code:
                     # 用户修改了公式，更新公式图片
                     self._update_formula_image(new_code, formula_type, image_cursor, image_format)
-    
+
     def _update_formula_image(self, code, formula_type, image_cursor, old_image_format):
         """更新公式图片
-        
+
         Args:
             code: 新的公式代码
             formula_type: 公式类型
@@ -3757,66 +3777,66 @@ class NoteEditor(QWidget):
         """
         # 渲染新公式为图片
         image_data = self.math_renderer.render(code, formula_type)
-        
+
         if image_data and not image_data.isNull():
             try:
                 from PIL import Image as PILImage
                 import io
-                
+
                 # 将 QImage 转换为 PIL Image
                 width = image_data.width()
                 height = image_data.height()
-                
+
                 image_data = image_data.convertToFormat(QImage.Format.Format_RGBA8888)
                 ptr = image_data.constBits()
                 ptr.setsize(image_data.sizeInBytes())
-                
+
                 pil_image = PILImage.frombytes('RGBA', (width, height), bytes(ptr), 'raw', 'RGBA', 0, 1)
-                
+
                 if pil_image.mode == 'RGBA':
                     background = PILImage.new('RGB', pil_image.size, (255, 255, 255))
                     background.paste(pil_image, mask=pil_image.split()[3])
                     pil_image = background
-                
+
                 buffer = io.BytesIO()
                 pil_image.save(buffer, format='PNG', optimize=True)
                 image_bytes = buffer.getvalue()
-                
+
                 image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-                
+
                 # 创建新的图片名称（包含元数据）
                 escaped_code = html.escape(code)
                 new_image_name = f"data:image/png;base64,{image_base64}|||MATH:{formula_type}:{escaped_code}"
-                
+
                 # 查找真正的图片字符位置
                 old_pos = image_cursor.position()
                 cursor = QTextCursor(self.text_edit.document())
                 real_image_pos = None
-                
+
                 for offset in range(2):
                     check_pos = old_pos + offset
-                    
+
                     if _select_char_at(cursor, check_pos):
                         selected_text = cursor.selectedText()
                         char_format = cursor.charFormat()
-                        
+
                         if char_format.isImageFormat() and selected_text == '\ufffc':
                             real_image_pos = check_pos
                             break
-                    
+
                     cursor.clearSelection()
-                
+
                 if real_image_pos is None:
                     print("错误：找不到图片字符")
                     return
-                
+
                 # 开始编辑块
                 cursor.beginEditBlock()
-                
+
                 # 删除旧图片
                 _select_char_at(cursor, real_image_pos)
                 cursor.removeSelectedText()
-                
+
                 # 插入新图片（保持原尺寸或使用新尺寸）
                 new_format = QTextImageFormat()
                 new_format.setName(new_image_name)
@@ -3825,18 +3845,18 @@ class NoteEditor(QWidget):
                 new_format.setHeight(old_image_format.height())
                 new_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignBaseline)
                 cursor.insertImage(new_format)
-                
+
                 cursor.endEditBlock()
-                
+
                 print(f"成功更新公式: {width}x{height}")
-                
+
                 # 取消选中状态
                 if hasattr(self.text_edit, 'selected_image'):
                     self.text_edit.selected_image = None
                     self.text_edit.selected_image_rect = None
                     self.text_edit.selected_image_cursor = None
                     self.text_edit.viewport().update()
-                
+
             except Exception as e:
                 print(f"更新公式时发生错误: {e}")
                 import traceback
@@ -3848,18 +3868,18 @@ class NoteEditor(QWidget):
 
 class TableInsertDialog(QDialog):
     """表格插入对话框"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
-    
+
     def init_ui(self):
         """初始化界面"""
         self.setWindowTitle("插入表格")
         self.setFixedSize(300, 150)
-        
+
         layout = QVBoxLayout()
-        
+
         # 行数
         row_layout = QHBoxLayout()
         row_layout.addWidget(QLabel("行数:"))
@@ -3869,7 +3889,7 @@ class TableInsertDialog(QDialog):
         self.row_spin.setValue(3)
         row_layout.addWidget(self.row_spin)
         layout.addLayout(row_layout)
-        
+
         # 列数
         col_layout = QHBoxLayout()
         col_layout.addWidget(QLabel("列数:"))
@@ -3879,18 +3899,18 @@ class TableInsertDialog(QDialog):
         self.col_spin.setValue(3)
         col_layout.addWidget(self.col_spin)
         layout.addLayout(col_layout)
-        
+
         # 按钮
         button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | 
+            QDialogButtonBox.StandardButton.Ok |
             QDialogButtonBox.StandardButton.Cancel
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
-        
+
         self.setLayout(layout)
-    
+
     def get_dimensions(self):
         """获取表格尺寸"""
         return self.row_spin.value(), self.col_spin.value()
@@ -3898,19 +3918,19 @@ class TableInsertDialog(QDialog):
 
 class LinkInsertDialog(QDialog):
     """超链接插入对话框"""
-    
+
     def __init__(self, parent=None, selected_text=""):
         super().__init__(parent)
         self.selected_text = selected_text
         self.init_ui()
-    
+
     def init_ui(self):
         """初始化界面"""
         self.setWindowTitle("添加链接")
         self.setFixedSize(400, 150)
-        
+
         layout = QVBoxLayout()
-        
+
         # 显示文本
         text_layout = QHBoxLayout()
         text_layout.addWidget(QLabel("显示文本:"))
@@ -3919,7 +3939,7 @@ class LinkInsertDialog(QDialog):
         self.text_input.setPlaceholderText("链接文本")
         text_layout.addWidget(self.text_input)
         layout.addLayout(text_layout)
-        
+
         # URL
         url_layout = QHBoxLayout()
         url_layout.addWidget(QLabel("链接地址:"))
@@ -3927,18 +3947,18 @@ class LinkInsertDialog(QDialog):
         self.url_input.setPlaceholderText("https://example.com")
         url_layout.addWidget(self.url_input)
         layout.addLayout(url_layout)
-        
+
         # 按钮
         button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | 
+            QDialogButtonBox.StandardButton.Ok |
             QDialogButtonBox.StandardButton.Cancel
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
-        
+
         self.setLayout(layout)
-    
+
     def get_link(self):
         """获取链接信息"""
         return self.text_input.text(), self.url_input.text()
@@ -3946,48 +3966,48 @@ class LinkInsertDialog(QDialog):
 
 class LatexInputDialog(QDialog):
     """LaTeX输入对话框"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
-        
+
     def init_ui(self):
         """初始化界面"""
         self.setWindowTitle("插入 LaTeX 公式")
         self.setMinimumSize(600, 400)
-        
+
         layout = QVBoxLayout()
-        
+
         # 说明标签
         label = QLabel("输入 LaTeX 公式（不需要包含 $ 符号）：")
         layout.addWidget(label)
-        
+
         # 创建分割器
         splitter = QSplitter(Qt.Orientation.Vertical)
-        
+
         # 输入框
         self.input_edit = QTextEdit()
         self.input_edit.setPlaceholderText("例如: x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}")
         self.input_edit.setMaximumHeight(150)
         self.input_edit.textChanged.connect(self.update_preview)
         splitter.addWidget(self.input_edit)
-        
+
         # 预览区域
         preview_label = QLabel("预览：")
         layout.addWidget(preview_label)
-        
+
         self.preview = QTextBrowser()
         self.preview.setMinimumHeight(150)
         splitter.addWidget(self.preview)
-        
+
         layout.addWidget(splitter)
-        
+
         # 常用公式示例
         examples_label = QLabel("常用示例：")
         layout.addWidget(examples_label)
-        
+
         examples_layout = QHBoxLayout()
-        
+
         examples = [
             ("分数", r"\frac{a}{b}"),
             ("根号", r"\sqrt{x}"),
@@ -3996,33 +4016,33 @@ class LatexInputDialog(QDialog):
             ("积分", r"\int_{a}^{b} f(x)dx"),
             ("矩阵", r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}"),
         ]
-        
+
         for name, code in examples:
             btn = QPushButton(name)
             btn.clicked.connect(lambda checked, c=code: self.insert_example(c))
             examples_layout.addWidget(btn)
-            
+
         layout.addLayout(examples_layout)
-        
+
         # 按钮
         button_layout = QHBoxLayout()
-        
+
         ok_button = QPushButton("插入")
         ok_button.clicked.connect(self.accept)
         button_layout.addWidget(ok_button)
-        
+
         cancel_button = QPushButton("取消")
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
-        
+
         layout.addLayout(button_layout)
-        
+
         self.setLayout(layout)
-        
+
     def insert_example(self, code):
         """插入示例代码"""
         self.input_edit.insertPlainText(code)
-        
+
     def update_preview(self):
         """更新预览"""
         latex_code = self.input_edit.toPlainText()
@@ -4034,7 +4054,7 @@ class LatexInputDialog(QDialog):
             )
         else:
             self.preview.clear()
-            
+
     def get_latex(self):
         """获取LaTeX代码"""
         return self.input_edit.toPlainText()
@@ -4042,35 +4062,35 @@ class LatexInputDialog(QDialog):
 
 class MathMLInputDialog(QDialog):
     """MathML输入对话框"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
-        
+
     def init_ui(self):
         """初始化界面"""
         self.setWindowTitle("插入 MathML 公式")
         self.setMinimumSize(600, 400)
-        
+
         layout = QVBoxLayout()
-        
+
         # 说明标签
         label = QLabel("输入 MathML 代码：")
         layout.addWidget(label)
-        
+
         # 输入框
         self.input_edit = QTextEdit()
         self.input_edit.setPlaceholderText(
             "例如: <math><mfrac><mi>a</mi><mi>b</mi></mfrac></math>"
         )
         layout.addWidget(self.input_edit)
-        
+
         # 常用示例
         examples_label = QLabel("常用示例：")
         layout.addWidget(examples_label)
-        
+
         examples_layout = QHBoxLayout()
-        
+
         examples = [
             ("分数", "<math><mfrac><mi>a</mi><mi>b</mi></mfrac></math>"),
             ("根号", "<math><msqrt><mi>x</mi></msqrt></math>"),
@@ -4079,33 +4099,33 @@ class MathMLInputDialog(QDialog):
             ("积分", "<math><msubsup><mo>∫</mo><mi>a</mi><mi>b</mi></msubsup><mi>f</mi><mo>(</mo><mi>x</mi><mo>)</mo><mi>d</mi><mi>x</mi></math>"),
             ("矩阵", "<math><mfenced open='(' close=')'><mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable></mfenced></math>"),
         ]
-        
+
         for name, code in examples:
             btn = QPushButton(name)
             btn.clicked.connect(lambda checked, c=code: self.insert_example(c))
             examples_layout.addWidget(btn)
-            
+
         layout.addLayout(examples_layout)
-        
+
         # 按钮
         button_layout = QHBoxLayout()
-        
+
         ok_button = QPushButton("插入")
         ok_button.clicked.connect(self.accept)
         button_layout.addWidget(ok_button)
-        
+
         cancel_button = QPushButton("取消")
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
-        
+
         layout.addLayout(button_layout)
-        
+
         self.setLayout(layout)
-        
+
     def insert_example(self, code):
         """插入示例代码"""
         self.input_edit.insertPlainText(code)
-        
+
     def get_mathml(self):
         """获取MathML代码"""
         return self.input_edit.toPlainText()
