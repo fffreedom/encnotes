@@ -320,53 +320,36 @@ class PasteImageTextEdit(QTextEdit):
         body_fmt.setFontWeight(QFont.Weight.Normal)
         return body_fmt
 
-    def _set_title_input_format(self):
-        """设置标题输入格式（保留当前格式的其他属性）"""
-        document = self.document()
-        first_block = document.firstBlock()
-        if not first_block.isValid():
-            logger.debug("[update_title_and_input_format] 第一行无效，返回")
-            return
-
-        first_line_text = first_block.text()
-        title_fmt = self._create_title_format()
-        # 如果第一行为空，插入零宽度空格并使用标题格式
-        if first_line_text == "":
-            cursor = self.textCursor()
-            # 添加零宽度空格不需要再触发cursorPositionChanged事件
-            self.blockSignals(True)
-            cursor.insertText('\u200B', title_fmt)
-            self.blockSignals(False)
-            logger.debug("[update_title_and_input_format] 标题行为空，插入零宽度空格并给光标应用标题格式")
-        else:
-            logger.debug("[update_title_and_input_format] 标题行不为空，跳过光标应用标题格式设置，允许用户自定义标题格式")
-    
-    def _set_body_input_format(self, current_cursor, current_block):
-        """设置正文输入格式，如果当前行为空则插入零宽度空格"""
-        body_fmt = self._create_body_format()
-        # 获取当前行文本内容，包含零宽度空格等不可见字符
+    def set_input_format(self, current_cursor, current_block, is_title_format=False):
+        """设置输入格式，根据is_title_format决定设置标题格式还是正文格式
+        
+        Args:
+            current_cursor: 当前光标
+            current_block: 当前文本块
+            is_title_format: True表示设置标题格式，False表示设置正文格式
+        """
+        fmt = self._create_title_format() if is_title_format else self._create_body_format()
+        format_name = "标题" if is_title_format else "正文"
         block_text = current_block.text()
 
         # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
         if block_text == "":
-            # 检查是否正在删除零宽度空格，如果是则不插入新的零宽度空格
+            # 检查是否正在删除零宽度空格，如果是则不插入新的零宽度空格（仅正文格式需要此判断）
             if hasattr(self, '_deleting_zero_width_space') and self._deleting_zero_width_space:
-                logger.debug(f"[_set_body_input_format] 正在删除零宽度空格，跳过插入新的零宽度空格")
+                logger.debug(f"[set_input_format] 正在删除零宽度空格，跳过插入新的零宽度空格")
                 return
-            
+
             self.blockSignals(True)
-            current_cursor.setCharFormat(body_fmt)
-            # 从标题行换到正文行，需要插入零宽度空格，否则光标会显示为标题格式
-            current_cursor.insertText("\u200B")
-            current_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            current_cursor.setCharFormat(fmt)
+            current_cursor.insertText('\u200B')
+            # current_cursor.deletePreviousChar()
             self.setTextCursor(current_cursor)
             self.blockSignals(False)
-            logger.debug(f"[_set_body_input_format] 设置正文格式: font_size={body_fmt.fontPointSize()}, "
-                         f"font_weight={body_fmt.fontWeight()}，"
-                         f"block_text={repr(block_text[:50])}...，空行，插入了零宽度空格！")
+            logger.debug(f"[set_input_format] {format_name}行为空，插入零宽度空格并给光标应用{format_name}格式，"
+                         f"block_text={repr(block_text)}")
         else:
-            logger.debug(f"[_set_body_input_format] 设置正文格式: block_text_length={len(block_text)}, "
-                         f"block_text={repr(block_text[:50])}... 内容不为空，不需要真正设置!")
+            logger.debug(f"[set_input_format] {format_name}行不为空（长度={len(block_text)}），"
+                         f"内容不为空，不需要真正设置! block_text={repr(block_text[:50])}")
 
     def setCursorPosition(self, position):
         """设置光标位置的封装方法
@@ -441,10 +424,10 @@ class PasteImageTextEdit(QTextEdit):
         # 根据光标位置设置当前输入格式
         if current_block_number == 0:
             logger.debug("[update_title_and_input_format] 光标在第一行，尝试设置标题输入格式")
-            self._set_title_input_format()
+            self.set_input_format(current_cursor, current_block, True)
         elif current_block_number == 1:
             logger.debug(f"[update_title_and_input_format] 光标在正文第一行（第{current_block_number}行），尝试设置正文输入格式")
-            self._set_body_input_format(current_cursor, current_block)
+            self.set_input_format(current_cursor, current_block, False)
         else:
             logger.debug(f"[update_title_and_input_format] 光标在正文其他行（第{current_block_number}行），跳过格式设置, "
                          f"block_text={repr(current_block_text[:50])}...")
@@ -2142,61 +2125,54 @@ class PasteImageTextEdit(QTextEdit):
 
     # 使用非英文输入法（中文等）时，会触发inputMethodEvent，每次输入一个字母都会触发此事件，
     # 通过event.preeditString()来获取所有输入的字母，最后确认后（空格或者手动选择）可以通过commitString来获取输入法输入的值
-    def inputMethodEvent(self, event):
-        """处理输入法事件（如中文输入）
+    # def inputMethodEvent(self, event):
+    #     """处理输入法事件（如中文输入）
+    #
+    #     输入法输入完成后，会自动触发格式更新，确保标题格式正确。
+    #     """
+    #     commit_string = event.commitString()
+    #     preedit_string = event.preeditString()
+    #     logger.debug(f"[inputMethodEvent] 输入法事件触发 - commitString: '{commit_string}', preeditString: '{preedit_string}'")
+    #
+    #     # 在输入前预设置标题格式（如果需要）
+    #     if commit_string and self._should_apply_title_format_before_input():
+    #         logger.debug("[inputMethodEvent] 需要在输入前预设置标题格式")
+    #         self._apply_title_format_to_cursor()
+    #     elif commit_string:
+    #         logger.debug("[inputMethodEvent] 有提交文本但不需要预设置格式")
+    #
+    #     # 调用父类方法处理输入法事件，会触发cursorPositionChanged事件
+    #     super().inputMethodEvent(event)
+    #
+    #     # 输入完成后，触发格式检查和更新
+    #     if commit_string:
+    #         logger.debug("[inputMethodEvent] 输入完成，触发格式更新")
+    #         self.update_title_and_input_format()
+    #     else:
+    #         logger.debug("[inputMethodEvent] 无提交文本（预编辑阶段），跳过格式更新")
 
-        输入法输入完成后，会自动触发格式更新，确保标题格式正确。
-        """
-        commit_string = event.commitString()
-        preedit_string = event.preeditString()
-        logger.debug(f"[inputMethodEvent] 输入法事件触发 - commitString: '{commit_string}', preeditString: '{preedit_string}'")
-
-        # 在输入前预设置标题格式（如果需要）
-        if commit_string and self._should_apply_title_format_before_input():
-            logger.debug("[inputMethodEvent] 需要在输入前预设置标题格式")
-            self._apply_title_format_to_cursor()
-        elif commit_string:
-            logger.debug("[inputMethodEvent] 有提交文本但不需要预设置格式")
-
-        # 调用父类方法处理输入法事件
-        super().inputMethodEvent(event)
-
-        # 输入完成后，触发格式检查和更新
-        if commit_string:
-            logger.debug("[inputMethodEvent] 输入完成，触发格式更新")
-            self._trigger_format_update()
-        else:
-            logger.debug("[inputMethodEvent] 无提交文本（预编辑阶段），跳过格式更新")
-
-    def _should_apply_title_format_before_input(self) -> bool:
-        """判断是否需要在输入前应用标题格式
-
-        Returns:
-            bool: 如果光标在第一行且该行为空，返回 True
-        """
-        cursor = self.textCursor()
-        block = cursor.block()
-
-        # 只在第一行且为空时才需要预设置格式
-        if block.blockNumber() != 0:
-            return False
-
-        block_text = block.text()
-        return block_text == "" or block_text == "\u200B"
-
-    def _apply_title_format_to_cursor(self):
-        """为当前光标应用标题格式"""
-        title_fmt = self.currentCharFormat()
-        title_fmt.setFontPointSize(28)
-        title_fmt.setFontWeight(QFont.Weight.Bold)
-        self.setCurrentCharFormat(title_fmt)
-
-    def _trigger_format_update(self):
-        """触发格式更新
-
-        确保第一行格式正确，并根据光标位置设置输入格式。
-        """
-        self.update_title_and_input_format()
+    # def _should_apply_title_format_before_input(self) -> bool:
+    #     """判断是否需要在输入前应用标题格式
+    #
+    #     Returns:
+    #         bool: 如果光标在第一行且该行为空，返回 True
+    #     """
+    #     cursor = self.textCursor()
+    #     block = cursor.block()
+    #
+    #     # 只在第一行且为空时才需要预设置格式
+    #     if block.blockNumber() != 0:
+    #         return False
+    #
+    #     block_text = block.text()
+    #     return block_text == "" or block_text == "\u200B"
+    #
+    # def _apply_title_format_to_cursor(self):
+    #     """为当前光标应用标题格式"""
+    #     title_fmt = self.currentCharFormat()
+    #     title_fmt.setFontPointSize(28)
+    #     title_fmt.setFontWeight(QFont.Weight.Bold)
+    #     self.setCurrentCharFormat(title_fmt)
 
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
