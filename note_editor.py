@@ -340,16 +340,29 @@ class PasteImageTextEdit(QTextEdit):
                 return
 
             self.blockSignals(True)
-            current_cursor.setCharFormat(fmt)
-            current_cursor.insertText('\u200B')
-            # current_cursor.deletePreviousChar()
+            # block_fmt = QTextBlockFormat()
+            # block_fmt.setLineHeight(28, QTextBlockFormat.LineHeightTypes.FixedHeight.value)
+            # 设置光标所在block的段落级别的属性，如行高、段落对齐、缩间、段前/段后间距等，不影响后续输入字符格式，
+            # 参数类型为QTextBlockFormat
+            # current_cursor.setBlockFormat(block_fmt)
+            # 设置光标后续输入字符的格式，参数为QTextCharFormat
+            self.setCurrentCharFormat(fmt)
+            # 设置光标所在block的所有字符格式，包括已有字符和后续输入字符的格式，
+            # 如果设置的字符格式超出了段落行高，行高使用FixedHeight设置时，会导致字符被裁剪；
+            # 行高使用MinimumHeight设置时，行高会自动扩展，不裁剪
+            # 调用current_cursor.setBlockCharFormat(fmt)会导到光标丢失，光标
+            # current_cursor.setBlockCharFormat(fmt)
+            # 设置光标选中的文本格式，如果没有选中文本，则设置光标位置后续续入的字符格式
+            # current_cursor.setCharFormat(fmt)
+            # current_cursor.insertText("\u200b")
+            # 这儿的设置不能省略，如果不设置的话，前面current_cursor相关的设置在后面的输入不会生效
             self.setTextCursor(current_cursor)
             self.blockSignals(False)
-            logger.debug(f"[set_input_format] {format_name}行为空，插入零宽度空格并给光标应用{format_name}格式，"
+            logger.debug(f"[set_input_format] {format_name}行为空，设置光标格式为{format_name}格式，"
                          f"block_text={repr(block_text)}")
         else:
-            logger.debug(f"[set_input_format] {format_name}行不为空（长度={len(block_text)}），"
-                         f"内容不为空，不需要真正设置! block_text={repr(block_text[:50])}")
+            logger.debug(f"[set_input_format] {format_name}行不为空，不需要真正设置格式， "
+                         f"block_text={repr(block_text[:50])}")
 
     def setCursorPosition(self, position):
         """设置光标位置的封装方法
@@ -938,7 +951,7 @@ class PasteImageTextEdit(QTextEdit):
         # 返回图片的矩形区域（在视口坐标系中）
         return result_rect
     
-    # 重写的焦点获得事件，当编辑器获得焦点时会触发（第一次加载后设置光标或者鼠标点击时触发）
+    # 重写的焦点获得事件处理函数，当编辑器获得焦点时会触发（第一次加载后设置光标或者鼠标点击时触发）
     # 编辑器获得焦点后，再点击鼠标就不再会触发了，只会触发mousePressEvent
     def focusInEvent(self, event):
         """焦点获得事件：验证笔记状态并恢复标题格式"""
