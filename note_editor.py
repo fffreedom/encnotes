@@ -278,6 +278,38 @@ class PasteImageTextEdit(QTextEdit):
         # Qt中事件由Qt事件系统直接调用，通过重写事件处理函数来处理，如focusInEvent等，不受blockSignals()影响
         self.cursorPositionChanged.connect(self.update_title_and_input_format)
 
+        # 自定义光标闪烁控制（用于空行大字体时绘制正确高度的光标）
+        from PyQt6.QtCore import QTimer
+        self._cursor_blink_visible = True  # 当前闪烁状态：True=显示，False=隐藏
+        self._cursor_blink_timer = QTimer(self)
+        self._cursor_blink_timer.timeout.connect(self._on_cursor_blink)
+        # 隐藏 Qt 原生光标，由自己完全接管绘制
+        self.setCursorWidth(0)
+
+    def _on_cursor_blink(self):
+        """光标闪烁定时器回调，切换显示/隐藏状态并触发重绘"""
+        self._cursor_blink_visible = not self._cursor_blink_visible
+        self.viewport().update()
+
+    def _start_cursor_blink(self):
+        """获得焦点时启动光标闪烁"""
+        from PyQt6.QtWidgets import QApplication
+        self._cursor_blink_visible = True
+        # 获取系统光标闪烁时间，如果为0则不闪烁，单位是毫秒
+        flash_time = QApplication.cursorFlashTime()
+        if flash_time > 0:
+            self._cursor_blink_timer.start(flash_time // 2)
+        else:
+            self._cursor_blink_timer.stop()
+            self._cursor_blink_visible = True
+        self.viewport().update()
+
+    def _stop_cursor_blink(self):
+        """失去焦点时停止光标闪烁"""
+        self._cursor_blink_timer.stop()
+        self._cursor_blink_visible = False
+        self.viewport().update()
+
     def _init_attachment_tag_style(self):
         """初始化附件 tag 的样式（只用于标记范围，不改变显示）"""
         try:
@@ -340,26 +372,37 @@ class PasteImageTextEdit(QTextEdit):
                 return
 
             self.blockSignals(True)
-            # block_fmt = QTextBlockFormat()
-            # block_fmt.setLineHeight(28, QTextBlockFormat.LineHeightTypes.FixedHeight.value)
-            # 设置光标所在block的段落级别的属性，如行高、段落对齐、缩间、段前/段后间距等，不影响后续输入字符格式，
-            # 参数类型为QTextBlockFormat
-            # current_cursor.setBlockFormat(block_fmt)
-            # 设置光标后续输入字符的格式，参数为QTextCharFormat
-            self.setCurrentCharFormat(fmt)
+            block_fmt = QTextBlockFormat()
+            # 根据字符格式的字体计算行高，使用 MinimumHeight 避免裁剪字符
+            from PyQt6.QtGui import QFontMetrics
+            _font = fmt.font()
+            if _font.pointSize() <= 0 and _font.pixelSize() <= 0:
+                _font = self.document().defaultFont()
+            _line_height = QFontMetrics(_font).height()
+            block_fmt.setLineHeight(_line_height, QTextBlockFormat.LineHeightTypes.MinimumHeight.value)
+            # # 设置光标所在block的段落级别的属性，如行高、段落对齐、缩间、段前/段后间距等，不影响后续输入字符格式，
+            # # 参数类型为QTextBlockFormat，注意这个设置与光标的高度无关，光标的高度由字符格式决定，通过cursor_rect获取
+            current_cursor.setBlockFormat(block_fmt)
+
+            # cursor_rect = self.cursorRect(current_cursor)
+            # cursor_rect.setHeight(33)
             # 设置光标所在block的所有字符格式，包括已有字符和后续输入字符的格式，
             # 如果设置的字符格式超出了段落行高，行高使用FixedHeight设置时，会导致字符被裁剪；
             # 行高使用MinimumHeight设置时，行高会自动扩展，不裁剪
-            # 调用current_cursor.setBlockCharFormat(fmt)会导到光标丢失，光标
+            # 调用current_cursor.setBlockCharFormat(fmt)会导到光标丢失，需要重绘光标
             # current_cursor.setBlockCharFormat(fmt)
             # 设置光标选中的文本格式，如果没有选中文本，则设置光标位置后续续入的字符格式
             # current_cursor.setCharFormat(fmt)
             # current_cursor.insertText("\u200b")
             # 这儿的设置不能省略，如果不设置的话，前面current_cursor相关的设置在后面的输入不会生效
             self.setTextCursor(current_cursor)
+            # 设置光标后续输入字符的格式，参数为QTextCharFormat，必须放在self.setTextCursor(current_cursor)之后，
+            # 因为在前面设置会被setTextCursor覆盖
+            self.setCurrentCharFormat(fmt)
             self.blockSignals(False)
             logger.debug(f"[set_input_format] {format_name}行为空，设置光标格式为{format_name}格式，"
                          f"block_text={repr(block_text)}")
+            logger.debug(f"[set_input_format] 设置格式后html内容: {self.toHtml()}")
         else:
             logger.debug(f"[set_input_format] {format_name}行不为空，不需要真正设置格式， "
                          f"block_text={repr(block_text[:50])}")
@@ -718,9 +761,53 @@ class PasteImageTextEdit(QTextEdit):
             traceback.print_exc()
     
     def paintEvent(self, event):
-        """绘制事件 - 绘制选中图片的边界框"""
+        """绘制事件 - 绘制选中图片的边界框，以及修正空行光标高度"""
+        from PyQt6.QtGui import QFontMetrics, QPainter, QColor
+
+        # 提前收集自定义光标所需信息（在 super().paintEvent() 之前，cursor_rect 位置准确）
+        # setCursorWidth(0) 已隐藏所有原生光标，这里负责绘制所有情况下的光标
+        cursor_draw_info = None  # (cursor_rect, draw_height, top_y) 或 None
+        if self.hasFocus() and not self.isReadOnly():
+            cursor = self.textCursor()
+            if not cursor.hasSelection():
+                cursor_rect = self.cursorRect(cursor)
+                if cursor.block().text() == "":
+                    # 空行：检查字体高度是否大于行高
+                    fmt = self.currentCharFormat()
+                    font = fmt.font()
+                    if font.pointSize() <= 0 and font.pixelSize() <= 0:
+                        font = self.document().defaultFont()
+                        logger.debug(f"[paintEvent] currentCharFormat 字体未设置，使用文档默认字体: "
+                                     f"{font.family()} {font.pointSize()}pt")
+                    fm = QFontMetrics(font)
+                    font_height = fm.height()
+                    # 行高：光标的高度首先是按行高来计算，如果没有设置行高，则使用max(字体自然高度, blockFormat 设置的行高)
+                    line_height = cursor_rect.height()
+                    logger.debug(f"[paintEvent] font={font.family()} size={font.pointSize()}pt "
+                                 f"pixelSize={font.pixelSize()}px, font_height={font_height}, "
+                                 f"line_height={line_height}")
+                    if font_height > line_height:
+                        # 大光标：底部对齐，向上延伸 font_height
+                        draw_top = cursor_rect.bottom() - font_height + 1
+                        cursor_draw_info = (cursor_rect, font_height, draw_top)
+                    else:
+                        # 普通高度光标
+                        cursor_draw_info = (cursor_rect, cursor_rect.height(), cursor_rect.top())
+                else:
+                    # 有文字的行：使用原生 cursor_rect 高度
+                    cursor_draw_info = (cursor_rect, cursor_rect.height(), cursor_rect.top())
+
         super().paintEvent(event)
-        
+
+        if cursor_draw_info is not None:
+            cursor_rect, draw_height, draw_top = cursor_draw_info
+            cursor_color = self.palette().color(self.palette().ColorRole.Text)
+            painter = QPainter(self.viewport())
+            if self._cursor_blink_visible:
+                logger.debug(f"[paintEvent] 绘制光标: left={cursor_rect.left()}, top={draw_top}, height={draw_height}")
+                painter.fillRect(cursor_rect.left(), draw_top, 1, draw_height, cursor_color)
+            painter.end()
+
         # 绘制选中表格的边界框和全选图标
         if self.selected_table and self.selected_table_cursor:
             from PyQt6.QtGui import QPainter, QPen, QBrush
@@ -968,8 +1055,17 @@ class PasteImageTextEdit(QTextEdit):
         
         # 如果光标在空的第一行，恢复标题格式
         self.update_title_and_input_format()
+
+        # 启动自定义光标闪烁
+        self._start_cursor_blink()
         logger.debug("[focusInEvent] 焦点处理完成")
-    
+
+    def focusOutEvent(self, event):
+        """焦点失去事件：停止光标闪烁"""
+        super().focusOutEvent(event)
+        self._stop_cursor_blink()
+        logger.debug("[focusOutEvent] 焦点失去，停止光标闪烁")
+
     def _can_accept_focus(self) -> bool:
         """检查编辑器是否可以接受焦点
         

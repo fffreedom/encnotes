@@ -287,7 +287,8 @@ class NoteManager:
             note_dict = self._row_to_dict(row)
             content_length = len(note_dict.get('content', ''))
             logger.info(f"[get_note] 读取笔记成功: note_id={note_id}, title={note_dict.get('title', '')}, "
-                        f"content_length={content_length}, cursor_position={note_dict.get('cursor_position', 0)}")
+                        f"content_length={content_length}, cursor_position={note_dict.get('cursor_position', 0)}, "
+                        f"content={note_dict.get('content', '')}")
             logger.debug(f"[get_note] 内容前100字符: {note_dict.get('content', '')[:100]}")
             return note_dict
         else:
