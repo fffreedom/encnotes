@@ -382,23 +382,29 @@ class PasteImageTextEdit(QTextEdit):
             block_fmt.setLineHeight(_line_height, QTextBlockFormat.LineHeightTypes.MinimumHeight.value)
             # # 设置光标所在block的段落级别的属性，如行高、段落对齐、缩间、段前/段后间距等，不影响后续输入字符格式，
             # # 参数类型为QTextBlockFormat，注意这个设置与光标的高度无关，光标的高度由字符格式决定，通过cursor_rect获取
+            logger.debug(f"[set_input_format] >>> 调用 setBlockFormat 前，设置的行高值: _line_height={_line_height}, blockCharFormat font size={current_cursor.blockCharFormat().font().pointSize()}pt")
             current_cursor.setBlockFormat(block_fmt)
-
-            # cursor_rect = self.cursorRect(current_cursor)
-            # cursor_rect.setHeight(33)
             # 设置光标所在block的所有字符格式，包括已有字符和后续输入字符的格式，
             # 如果设置的字符格式超出了段落行高，行高使用FixedHeight设置时，会导致字符被裁剪；
             # 行高使用MinimumHeight设置时，行高会自动扩展，不裁剪
             # 调用current_cursor.setBlockCharFormat(fmt)会导到光标丢失，需要重绘光标
-            # current_cursor.setBlockCharFormat(fmt)
+            # 此步骤对标题行时不是必须的，因为后面的setCurrentCharFormat会将标题行的字符格式设置成标题格式，并放到段格格式里，
+            # paintEvent获取的行高是正确的。但从标题行进行入正文行时，block char format会继承标题行的字符格式，
+            # 而setBlockFormat只负责设置段落级别的属性，比如行高等，字符格式需要通过setBlockCharFormat设置。
+            # 这儿设置的block级别的字符格式和后面setCurrentCharFormat设置的输入字符格式不冲突，当还没有输入内容时，
+            # 没有单独的span来承载设置的后续输入的字符格式，这时候paintEvent获取行高时是使用block级别的字符格式
+            current_cursor.setBlockCharFormat(fmt)
             # 设置光标选中的文本格式，如果没有选中文本，则设置光标位置后续续入的字符格式
             # current_cursor.setCharFormat(fmt)
             # current_cursor.insertText("\u200b")
             # 这儿的设置不能省略，如果不设置的话，前面current_cursor相关的设置在后面的输入不会生效
+            logger.debug(f"[set_input_format] >>> 调用 setTextCursor 前，currentCharFormat font size={self.currentCharFormat().font().pointSize()}pt")
             self.setTextCursor(current_cursor)
+            logger.debug(f"[set_input_format] >>> 调用 setTextCursor 后，currentCharFormat font size={self.currentCharFormat().font().pointSize()}pt")
             # 设置光标后续输入字符的格式，参数为QTextCharFormat，必须放在self.setTextCursor(current_cursor)之后，
             # 因为在前面设置会被setTextCursor覆盖
             self.setCurrentCharFormat(fmt)
+            logger.debug(f"[set_input_format] >>> 调用 setCurrentCharFormat({format_name}格式) 后，currentCharFormat font size={self.currentCharFormat().font().pointSize()}pt")
             self.blockSignals(False)
             logger.debug(f"[set_input_format] {format_name}行为空，设置光标格式为{format_name}格式，"
                          f"block_text={repr(block_text)}")
@@ -775,6 +781,11 @@ class PasteImageTextEdit(QTextEdit):
                     # 空行：检查字体高度是否大于行高
                     fmt = self.currentCharFormat()
                     font = fmt.font()
+                    block_char_fmt = cursor.blockCharFormat()
+                    block_char_font = block_char_fmt.font()
+                    logger.debug(f"[paintEvent] >>> 空行字体信息: "
+                                 f"currentCharFormat font={font.family()} size={font.pointSize()}pt pixelSize={font.pixelSize()}px | "
+                                 f"blockCharFormat font={block_char_font.family()} size={block_char_font.pointSize()}pt pixelSize={block_char_font.pixelSize()}px")
                     if font.pointSize() <= 0 and font.pixelSize() <= 0:
                         font = self.document().defaultFont()
                         logger.debug(f"[paintEvent] currentCharFormat 字体未设置，使用文档默认字体: "
@@ -786,13 +797,11 @@ class PasteImageTextEdit(QTextEdit):
                     logger.debug(f"[paintEvent] font={font.family()} size={font.pointSize()}pt "
                                  f"pixelSize={font.pixelSize()}px, font_height={font_height}, "
                                  f"line_height={line_height}")
-                    if font_height > line_height:
-                        # 大光标：底部对齐，向上延伸 font_height
-                        draw_top = cursor_rect.bottom() - font_height + 1
-                        cursor_draw_info = (cursor_rect, font_height, draw_top)
-                    else:
-                        # 普通高度光标
-                        cursor_draw_info = (cursor_rect, cursor_rect.height(), cursor_rect.top())
+                    # 空行时，光标高度以 currentCharFormat 的字体高度为准（即将输入的字符格式）
+                    # blockCharFormat 可能残留旧格式（如标题格式），导致 line_height 偏大
+                    # 底部对齐：以 cursor_rect 底部为基准，向上延伸 font_height
+                    draw_top = cursor_rect.bottom() - font_height + 1
+                    cursor_draw_info = (cursor_rect, font_height, draw_top)
                 else:
                     # 有文字的行：使用原生 cursor_rect 高度
                     cursor_draw_info = (cursor_rect, cursor_rect.height(), cursor_rect.top())
