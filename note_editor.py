@@ -797,11 +797,11 @@ class PasteImageTextEdit(QTextEdit):
                     logger.debug(f"[paintEvent] font={font.family()} size={font.pointSize()}pt "
                                  f"pixelSize={font.pixelSize()}px, font_height={font_height}, "
                                  f"line_height={line_height}")
-                    # 空行时，光标高度以 currentCharFormat 的字体高度为准（即将输入的字符格式）
-                    # blockCharFormat 可能残留旧格式（如标题格式），导致 line_height 偏大
-                    # 底部对齐：以 cursor_rect 底部为基准，向上延伸 font_height
-                    draw_top = cursor_rect.bottom() - font_height + 1
-                    cursor_draw_info = (cursor_rect, font_height, draw_top)
+                    # 行内容为空时，光标高度可能因为还没有输入字符导致比要输入的字符格式小，所以要重绘
+                    if font_height > line_height:
+                        # 大光标：顶部对齐，向下延伸 font_height
+                        cursor_rect.setBottom(cursor_rect.top() + font_height - 1)
+                    cursor_draw_info = (cursor_rect, font_height, cursor_rect.top())
                 else:
                     # 有文字的行：使用原生 cursor_rect 高度
                     cursor_draw_info = (cursor_rect, cursor_rect.height(), cursor_rect.top())
