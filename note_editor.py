@@ -768,139 +768,162 @@ class PasteImageTextEdit(QTextEdit):
     
     def paintEvent(self, event):
         """绘制事件 - 绘制选中图片的边界框，以及修正空行光标高度"""
-        from PyQt6.QtGui import QFontMetrics, QPainter, QColor
-
-        # 提前收集自定义光标所需信息（在 super().paintEvent() 之前，cursor_rect 位置准确）
-        # setCursorWidth(0) 已隐藏所有原生光标，这里负责绘制所有情况下的光标
-        cursor_draw_info = None  # (cursor_rect, draw_height, top_y) 或 None
-        if self.hasFocus() and not self.isReadOnly():
-            cursor = self.textCursor()
-            if not cursor.hasSelection():
-                cursor_rect = self.cursorRect(cursor)
-                if cursor.block().text() == "":
-                    # 空行：检查字体高度是否大于行高
-                    fmt = self.currentCharFormat()
-                    font = fmt.font()
-                    block_char_fmt = cursor.blockCharFormat()
-                    block_char_font = block_char_fmt.font()
-                    logger.debug(f"[paintEvent] >>> 空行字体信息: "
-                                 f"currentCharFormat font={font.family()} size={font.pointSize()}pt pixelSize={font.pixelSize()}px | "
-                                 f"blockCharFormat font={block_char_font.family()} size={block_char_font.pointSize()}pt pixelSize={block_char_font.pixelSize()}px")
-                    if font.pointSize() <= 0 and font.pixelSize() <= 0:
-                        font = self.document().defaultFont()
-                        logger.debug(f"[paintEvent] currentCharFormat 字体未设置，使用文档默认字体: "
-                                     f"{font.family()} {font.pointSize()}pt")
-                    fm = QFontMetrics(font)
-                    font_height = fm.height()
-                    # 行高：光标的高度首先是按行高来计算，如果没有设置行高，则使用max(字体自然高度, blockFormat 设置的行高)
-                    line_height = cursor_rect.height()
-                    logger.debug(f"[paintEvent] font={font.family()} size={font.pointSize()}pt "
-                                 f"pixelSize={font.pixelSize()}px, font_height={font_height}, "
-                                 f"line_height={line_height}")
-                    # 行内容为空时，光标高度可能因为还没有输入字符导致比要输入的字符格式小，所以要重绘
-                    if font_height > line_height:
-                        # 大光标：顶部对齐，向下延伸 font_height
-                        cursor_rect.setBottom(cursor_rect.top() + font_height - 1)
-                    cursor_draw_info = (cursor_rect, font_height, cursor_rect.top())
-                else:
-                    # 有文字的行：使用原生 cursor_rect 高度
-                    cursor_draw_info = (cursor_rect, cursor_rect.height(), cursor_rect.top())
+        # 提前收集自定义光标信息（必须在 super().paintEvent() 之前，此时 cursor_rect 位置准确）
+        cursor_draw_info = self._collect_cursor_draw_info()
 
         super().paintEvent(event)
 
-        if cursor_draw_info is not None:
-            cursor_rect, draw_height, draw_top = cursor_draw_info
-            cursor_color = self.palette().color(self.palette().ColorRole.Text)
-            painter = QPainter(self.viewport())
-            if self._cursor_blink_visible:
-                logger.debug(f"[paintEvent] 绘制光标: left={cursor_rect.left()}, top={draw_top}, height={draw_height}")
-                painter.fillRect(cursor_rect.left(), draw_top, 1, draw_height, cursor_color)
-            painter.end()
+        self._paint_custom_cursor(cursor_draw_info)
+        self._paint_selected_table()
+        self._paint_selected_image()
+        self._paint_drag_preview()
 
-        # 绘制选中表格的边界框和全选图标
-        if self.selected_table and self.selected_table_cursor:
-            from PyQt6.QtGui import QPainter, QPen, QBrush
-            from PyQt6.QtCore import QRectF, QRect
-            
-            painter = QPainter(self.viewport())
-            
-            # 计算表格的实际边界框
-            table_rect = self.get_table_rect(self.selected_table)
-            
-            if table_rect:
-                # 只绘制边框，不绘制角标
-                # 绘制蓝色边界框
-                pen = QPen(QColor("#007AFF"), 3)
-                painter.setPen(pen)
-                painter.drawRect(table_rect)
-            
-            painter.end()
-        
-        if self.selected_image and self.selected_image_cursor:
-            # 实时计算图片位置（确保滚动时位置正确）
-            self.selected_image_rect = self.get_image_rect_at_cursor(self.selected_image_cursor)
-            
-            if self.selected_image_rect:
-                from PyQt6.QtGui import QPainter, QPen
-                
-                painter = QPainter(self.viewport())
-                
-                # 绘制边界框
-                pen = QPen(QColor("#007AFF"), 2)
-                painter.setPen(pen)
-                painter.drawRect(self.selected_image_rect)
-                
-                # 绘制8个控制点
-                handles = self.get_resize_handles()
-                painter.setBrush(QColor("#007AFF"))
-                for handle_rect in handles.values():
-                    painter.drawRect(handle_rect)
-                
-                painter.end()
-        
-        # 绘制拖动预览指示器
-        if self.dragging and self.drag_preview_cursor:
-            from PyQt6.QtGui import QPainter, QPen
-            from PyQt6.QtCore import QPoint
-            
-            painter = QPainter(self.viewport())
-            
-            # 获取预览位置的光标矩形
-            preview_rect = self.cursorRect(self.drag_preview_cursor)
-            
-            # 绘制一条垂直的蓝色虚线，表示图片将被插入的位置
-            pen = QPen(QColor("#007AFF"), 2)
-            pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            
-            # 绘制插入位置指示线
-            x = preview_rect.left()
-            y_start = preview_rect.top() - 5
-            y_end = preview_rect.bottom() + 5
-            
-            painter.drawLine(QPoint(x, y_start), QPoint(x, y_end))
-            
-            # 在指示线两端绘制小三角形
-            from PyQt6.QtGui import QPolygon
-            
-            # 上三角
-            top_triangle = QPolygon([
-                QPoint(x, y_start),
-                QPoint(x - 4, y_start - 6),
-                QPoint(x + 4, y_start - 6)
-            ])
-            painter.setBrush(QColor("#007AFF"))
-            painter.drawPolygon(top_triangle)
-            
-            # 下三角
-            bottom_triangle = QPolygon([
-                QPoint(x, y_end),
-                QPoint(x - 4, y_end + 6),
-                QPoint(x + 4, y_end + 6)
-            ])
-            painter.drawPolygon(bottom_triangle)
-            
-            painter.end()
+    def _collect_cursor_draw_info(self):
+        """收集自定义光标的绘制信息（需在 super().paintEvent() 之前调用）
+
+        setCursorWidth(0) 已隐藏所有原生光标，此方法负责收集所有情况下的光标绘制参数。
+
+        Returns:
+            tuple: (cursor_rect, draw_height, draw_top) 或 None
+        """
+        from PyQt6.QtGui import QFontMetrics
+
+        if not self.hasFocus() or self.isReadOnly():
+            return None
+
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            return None
+
+        cursor_rect = self.cursorRect(cursor)
+
+        if cursor.block().text() == "":
+            fmt = self.currentCharFormat()
+            font = fmt.font()
+            block_char_fmt = cursor.blockCharFormat()
+            block_char_font = block_char_fmt.font()
+            logger.debug(f"[paintEvent] >>> 空行字体信息: "
+                         f"currentCharFormat font={font.family()} size={font.pointSize()}pt pixelSize={font.pixelSize()}px | "
+                         f"blockCharFormat font={block_char_font.family()} size={block_char_font.pointSize()}pt pixelSize={block_char_font.pixelSize()}px")
+            if font.pointSize() <= 0 and font.pixelSize() <= 0:
+                font = self.document().defaultFont()
+                logger.debug(f"[paintEvent] currentCharFormat 字体未设置，使用文档默认字体: "
+                             f"{font.family()} {font.pointSize()}pt")
+            fm = QFontMetrics(font)
+            font_height = fm.height()
+            line_height = cursor_rect.height()
+            logger.debug(f"[paintEvent] font={font.family()} size={font.pointSize()}pt "
+                         f"pixelSize={font.pixelSize()}px, font_height={font_height}, "
+                         f"line_height={line_height}")
+            # 行内容为空时，光标高度可能因为还没有输入字符导致比要输入的字符格式小，所以要按字符格式大小重绘
+            if font_height > line_height:
+                # 大光标：顶部对齐，向下延伸 font_height
+                cursor_rect.setBottom(cursor_rect.top() + font_height - 1)
+            return (cursor_rect, font_height, cursor_rect.top())
+        else:
+            # 有文字的行：使用原生 cursor_rect 高度
+            return (cursor_rect, cursor_rect.height(), cursor_rect.top())
+
+    def _paint_custom_cursor(self, cursor_draw_info):
+        """绘制自定义光标
+
+        Args:
+            cursor_draw_info: _collect_cursor_draw_info() 返回的元组，或 None
+        """
+        from PyQt6.QtGui import QPainter
+
+        if cursor_draw_info is None:
+            return
+
+        cursor_rect, draw_height, draw_top = cursor_draw_info
+        cursor_color = self.palette().color(self.palette().ColorRole.Text)
+        painter = QPainter(self.viewport())
+        if self._cursor_blink_visible:
+            logger.debug(f"[paintEvent] 绘制光标: left={cursor_rect.left()}, top={draw_top}, height={draw_height}")
+            painter.fillRect(cursor_rect.left(), draw_top, 1, draw_height, cursor_color)
+        painter.end()
+
+    def _paint_selected_table(self):
+        """绘制选中表格的蓝色边界框"""
+        from PyQt6.QtGui import QPainter, QPen, QColor
+
+        if not self.selected_table or not self.selected_table_cursor:
+            return
+
+        table_rect = self.get_table_rect(self.selected_table)
+        if not table_rect:
+            return
+
+        painter = QPainter(self.viewport())
+        pen = QPen(QColor("#007AFF"), 3)
+        painter.setPen(pen)
+        painter.drawRect(table_rect)
+        painter.end()
+
+    def _paint_selected_image(self):
+        """绘制选中图片的边界框和8个缩放控制点"""
+        from PyQt6.QtGui import QPainter, QPen, QColor
+
+        if not self.selected_image or not self.selected_image_cursor:
+            return
+
+        # 实时计算图片位置（确保滚动时位置正确）
+        self.selected_image_rect = self.get_image_rect_at_cursor(self.selected_image_cursor)
+        if not self.selected_image_rect:
+            return
+
+        painter = QPainter(self.viewport())
+
+        # 绘制边界框
+        pen = QPen(QColor("#007AFF"), 2)
+        painter.setPen(pen)
+        painter.drawRect(self.selected_image_rect)
+
+        # 绘制8个控制点
+        painter.setBrush(QColor("#007AFF"))
+        for handle_rect in self.get_resize_handles().values():
+            painter.drawRect(handle_rect)
+
+        painter.end()
+
+    def _paint_drag_preview(self):
+        """绘制拖动预览指示器（虚线 + 两端三角箭头）"""
+        from PyQt6.QtGui import QPainter, QPen, QColor, QPolygon
+        from PyQt6.QtCore import QPoint
+
+        if not self.dragging or not self.drag_preview_cursor:
+            return
+
+        preview_rect = self.cursorRect(self.drag_preview_cursor)
+        x = preview_rect.left()
+        y_start = preview_rect.top() - 5
+        y_end = preview_rect.bottom() + 5
+
+        painter = QPainter(self.viewport())
+
+        # 绘制垂直虚线，表示图片将被插入的位置
+        pen = QPen(QColor("#007AFF"), 2)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawLine(QPoint(x, y_start), QPoint(x, y_end))
+
+        # 在指示线两端绘制小三角形
+        painter.setBrush(QColor("#007AFF"))
+        top_triangle = QPolygon([
+            QPoint(x, y_start),
+            QPoint(x - 4, y_start - 6),
+            QPoint(x + 4, y_start - 6)
+        ])
+        painter.drawPolygon(top_triangle)
+
+        bottom_triangle = QPolygon([
+            QPoint(x, y_end),
+            QPoint(x - 4, y_end + 6),
+            QPoint(x + 4, y_end + 6)
+        ])
+        painter.drawPolygon(bottom_triangle)
+
+        painter.end()
     
     def get_resize_handles(self):
         """获取8个缩放控制点的矩形区域"""
