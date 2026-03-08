@@ -796,8 +796,8 @@ class PasteImageTextEdit(QTextEdit):
             return None
 
         cursor_rect = self.cursorRect(cursor)
-
-        if cursor.block().text() == "":
+        block_number = cursor.block().blockNumber()
+        if (block_number == 0 or block_number == 1) and cursor.block().text() == "":
             fmt = self.currentCharFormat()
             font = fmt.font()
             block_char_fmt = cursor.blockCharFormat()
@@ -819,10 +819,10 @@ class PasteImageTextEdit(QTextEdit):
             if font_height > line_height:
                 # 大光标：顶部对齐，向下延伸 font_height
                 cursor_rect.setBottom(cursor_rect.top() + font_height - 1)
-            return (cursor_rect, font_height, cursor_rect.top())
+            return cursor_rect, font_height, cursor_rect.top()
         else:
             # 有文字的行：使用原生 cursor_rect 高度
-            return (cursor_rect, cursor_rect.height(), cursor_rect.top())
+            return cursor_rect, cursor_rect.height(), cursor_rect.top()
 
     def _paint_custom_cursor(self, cursor_draw_info):
         """绘制自定义光标
