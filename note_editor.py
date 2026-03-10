@@ -289,6 +289,7 @@ class PasteImageTextEdit(QTextEdit):
     def _on_cursor_blink(self):
         """光标闪烁定时器回调，切换显示/隐藏状态并触发重绘"""
         self._cursor_blink_visible = not self._cursor_blink_visible
+        logger.debug(f"[cursor_blink_timer] 定时器触发，切换状态 -> _cursor_blink_visible={self._cursor_blink_visible}")
         self.viewport().update()
 
     def _start_cursor_blink(self):
@@ -768,9 +769,11 @@ class PasteImageTextEdit(QTextEdit):
     
     def paintEvent(self, event):
         """绘制事件 - 绘制选中图片的边界框，以及修正空行光标高度"""
+        # import traceback
+        # caller_stack = ''.join(traceback.format_stack(limit=6)[:-1])  # 取最近5层调用栈
+        # logger.debug(f"[paintEvent] 触发重绘，_cursor_blink_visible={self._cursor_blink_visible}\n调用栈:\n{caller_stack}")
         # 提前收集自定义光标信息（必须在 super().paintEvent() 之前，此时 cursor_rect 位置准确）
         cursor_draw_info = self._collect_cursor_draw_info()
-
         super().paintEvent(event)
 
         self._paint_custom_cursor(cursor_draw_info)
@@ -780,9 +783,6 @@ class PasteImageTextEdit(QTextEdit):
 
     def _collect_cursor_draw_info(self):
         """收集自定义光标的绘制信息（需在 super().paintEvent() 之前调用）
-
-        setCursorWidth(0) 已隐藏所有原生光标，此方法负责收集所有情况下的光标绘制参数。
-
         Returns:
             tuple: (cursor_rect, draw_height, draw_top) 或 None
         """
@@ -838,6 +838,7 @@ class PasteImageTextEdit(QTextEdit):
         cursor_rect, draw_height, draw_top = cursor_draw_info
         cursor_color = self.palette().color(self.palette().ColorRole.Text)
         painter = QPainter(self.viewport())
+        logger.debug(f"[_paint_custom_cursor] _cursor_blink_visible={self._cursor_blink_visible}，{'绘制' if self._cursor_blink_visible else '跳过'}光标")
         if self._cursor_blink_visible:
             logger.debug(f"[paintEvent] 绘制光标: left={cursor_rect.left()}, top={draw_top}, height={draw_height}")
             painter.fillRect(cursor_rect.left(), draw_top, 1, draw_height, cursor_color)
@@ -1084,7 +1085,7 @@ class PasteImageTextEdit(QTextEdit):
 
         # 调用父类处理
         super().focusInEvent(event)
-        
+
         # 如果光标在空的第一行，恢复标题格式
         self.update_title_and_input_format()
 
@@ -1169,9 +1170,9 @@ class PasteImageTextEdit(QTextEdit):
         return False
 
     def _restore_cursor_visibility(self):
-        """恢复光标显示（如果之前被隐藏）"""
-        if self.cursorWidth() == 0:
-            self.setCursorWidth(1)
+        # 恢复自定义光标闪烁（例如从表格选中状态恢复后）
+        if not self._cursor_blink_timer.isActive():
+            self._start_cursor_blink()
 
     def _handle_table_border_click(self, table, cursor, event) -> bool:
         """处理表格边框点击（选中整个表格）
@@ -1899,12 +1900,12 @@ class PasteImageTextEdit(QTextEdit):
 
     def _restore_cursor_and_clear_table_selection(self, event):
         """恢复光标显示并清除表格选中状态"""
-        if self.cursorWidth() == 0:
-            self.setCursorWidth(1)
         if self.selected_table:
             self.selected_table = None
             self.selected_table_cursor = None
             self.viewport().update()
+        # 恢复自定义光标闪烁（复用_restore_cursor_visibility避免重复代码）
+        self._restore_cursor_visibility()
     
     def _log_attachment_delete_before(self, doc, del_key, current_cursor, attachment_sel, marked_span):
         """记录附件删除前的调试信息"""
@@ -2099,7 +2100,8 @@ class PasteImageTextEdit(QTextEdit):
         # 清除选中状态
         self.selected_table = None
         self.selected_table_cursor = None
-        self.setCursorWidth(1)
+        # 删除表格完成后恢复自定义光标闪烁
+        self._start_cursor_blink()
         self.viewport().update()
 
         event.accept()
@@ -2140,8 +2142,8 @@ class PasteImageTextEdit(QTextEdit):
                 clear_cursor.clearSelection()
                 self.setTextCursor(clear_cursor)
 
-                # 隐藏光标
-                self.setCursorWidth(0)
+                # 隐藏自定义光标（表格选中状态下不显示光标）
+                self._stop_cursor_blink()
                 self.viewport().update()
 
                 event.accept()
@@ -2257,7 +2259,10 @@ class PasteImageTextEdit(QTextEdit):
         # 从而调用update_title_and_input_format进行格式化处理
         logger.debug("[keyPressEvent] 调用父类方法处理按键事件")
         super().keyPressEvent(event)
-        logger.debug("[keyPressEvent] 按键事件处理完成")
+        # 按键后重置光标闪烁定时器，确保光标从按键时刻重新开始完整的显示周期，
+        # 避免因定时器相位不同步导致光标持续可见不闪烁的问题
+        self._start_cursor_blink()
+        logger.debug(f"[keyPressEvent] 按键事件处理完成，当前 _cursor_blink_visible={self._cursor_blink_visible}，定时器运行中={self._cursor_blink_timer.isActive()}")
 
         # 清除删除零宽度空格的标志
         if hasattr(self, '_deleting_zero_width_space'):
