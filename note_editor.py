@@ -2102,29 +2102,8 @@ class PasteImageTextEdit(QTextEdit):
             return True
 
         # 删除整个表格（第二次按删除键）
-        cursor = QTextCursor(self.document())
-        table_start = self.selected_table.firstPosition()
-        table_end = self.selected_table.lastPosition()
-
-        doc = self.document()
-        before_char = repr(_get_char_at(doc, table_start))
-        after_char = repr(_get_char_at(doc, table_end + 1))
-        logger.debug(f"[_handle_selected_table_deletion] 准备删除表格: table_start={table_start}, table_end={table_end}, "
-                     f"current_table={current_table}")
-        logger.debug(f"[_handle_selected_table_deletion] table_start({table_start})处字符={before_char}, "
-                     f"table_end+1({table_end + 1})处字符={after_char}")
-
-        # 表格是 frame，movePosition 无法跨越 frame 边界，需用 setPosition+KeepAnchor 直接选中
-        # 注意：起始位置是 table_start（不是 table_start-1），否则会多删表格前面的段落分隔符
-        # 这儿不能使用 _select_range，因为 _select_range无法跨越frame，导致无法删除表格
-        cursor.setPosition(table_start)
-        cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
-        logger.debug(f"[_handle_selected_table_deletion] 选中范围: anchor={cursor.anchor()}, "
-                     f"position={cursor.position()}, hasSelection={cursor.hasSelection()}")
-        cursor.removeSelectedText()
-        after_delete_char = repr(_get_char_at(doc, table_start))
-        logger.debug(f"[_handle_selected_table_deletion] removeSelectedText 已调用，删除后 "
-                     f"table_start({table_start})处字符={after_delete_char}")
+        logger.debug(f"[_handle_selected_table_deletion] 准备删除表格: selected_table={self.selected_table}")
+        self.delete_entire_table(self.selected_table)
 
         # 清除选中状态
         self.selected_table = None
