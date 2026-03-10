@@ -367,11 +367,6 @@ class PasteImageTextEdit(QTextEdit):
 
         # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
         if block_text == "":
-            # 检查是否正在删除零宽度空格，如果是则不插入新的零宽度空格（仅正文格式需要此判断）
-            if hasattr(self, '_deleting_zero_width_space') and self._deleting_zero_width_space:
-                logger.debug(f"[set_input_format] 正在删除零宽度空格，跳过插入新的零宽度空格")
-                return
-
             self.blockSignals(True)
             block_fmt = QTextBlockFormat()
             # 根据字符格式的字体计算行高，使用 MinimumHeight 避免裁剪字符
@@ -1894,8 +1889,23 @@ class PasteImageTextEdit(QTextEdit):
             cursor = QTextCursor(self.document())
             table_start = table.firstPosition()
             table_end = table.lastPosition()
-            
-            _select_range(cursor, table_start, table_end + 1)
+
+            # 使用 setPosition + KeepAnchor 方式，可以跨越 frame 边界选中整个表格
+            # movePosition 无法跨越 frame 边界，会导致选区不完整
+            # Qt的富文本文档模型（QTextDocument）中，文档内容被组织成一棵树形结构，QTextFrame 是这棵树中的一个容器节点，
+            # 用于将一段内容"框"起来，与文档的其他部分隔离。QTextDocument文档结构如下：
+            # QTextDocument
+            # └── QTextFrame (根 frame，整个文档)
+            #     ├── QTextBlock (普通段落)
+            #     ├── QTextBlock (普通段落)
+            #     ├── QTextTable (继承自 QTextFrame) ← 表格
+            #     │   ├── QTextTableCell
+            #     │   │   └── QTextBlock
+            #     │   └── QTextTableCell
+            #     │       └── QTextBlock
+            #     └── QTextBlock (普通段落)
+            cursor.setPosition(table_start)
+            cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
             cursor.removeSelectedText()
 
     def _restore_cursor_and_clear_table_selection(self, event):
@@ -2082,10 +2092,12 @@ class PasteImageTextEdit(QTextEdit):
         返回：True 表示已处理，False 表示未处理
         """
         if not self.selected_table or not self.selected_table_cursor:
+            logger.debug("[_handle_selected_table_deletion] 无选中表格，跳过")
             return False
 
         # 如果当前光标在表格内，说明用户正在编辑单元格内容
         if current_table == self.selected_table:
+            logger.debug("[_handle_selected_table_deletion] 光标在表格内，转发给父类处理")
             super().keyPressEvent(event)
             return True
 
@@ -2094,8 +2106,25 @@ class PasteImageTextEdit(QTextEdit):
         table_start = self.selected_table.firstPosition()
         table_end = self.selected_table.lastPosition()
 
-        _select_range(cursor, table_start, table_end + 1)
+        doc = self.document()
+        before_char = repr(_get_char_at(doc, table_start))
+        after_char = repr(_get_char_at(doc, table_end + 1))
+        logger.debug(f"[_handle_selected_table_deletion] 准备删除表格: table_start={table_start}, table_end={table_end}, "
+                     f"current_table={current_table}")
+        logger.debug(f"[_handle_selected_table_deletion] table_start({table_start})处字符={before_char}, "
+                     f"table_end+1({table_end + 1})处字符={after_char}")
+
+        # 表格是 frame，movePosition 无法跨越 frame 边界，需用 setPosition+KeepAnchor 直接选中
+        # 注意：起始位置是 table_start（不是 table_start-1），否则会多删表格前面的段落分隔符
+        # 这儿不能使用 _select_range，因为 _select_range无法跨越frame，导致无法删除表格
+        cursor.setPosition(table_start)
+        cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
+        logger.debug(f"[_handle_selected_table_deletion] 选中范围: anchor={cursor.anchor()}, "
+                     f"position={cursor.position()}, hasSelection={cursor.hasSelection()}")
         cursor.removeSelectedText()
+        after_delete_char = repr(_get_char_at(doc, table_start))
+        logger.debug(f"[_handle_selected_table_deletion] removeSelectedText 已调用，删除后 "
+                     f"table_start({table_start})处字符={after_delete_char}")
 
         # 清除选中状态
         self.selected_table = None
@@ -2121,11 +2150,13 @@ class PasteImageTextEdit(QTextEdit):
             table_start = table.firstPosition()
             table_end = table.lastPosition()
 
+            logger.debug(f"[_handle_table_selection] cursor_pos={cursor_pos}, table_start={table_start}, table_end={table_end}")
+
             # 检查光标是否紧邻表格
             is_before_table = (event.key() == Qt.Key.Key_Delete and
-                              cursor_pos <= table_start and cursor_pos >= table_start - 2)
+                              cursor_pos == table_start - 1)
             is_after_table = (event.key() == Qt.Key.Key_Backspace and
-                             cursor_pos >= table_end + 1 and cursor_pos <= table_end + 3)
+                             cursor_pos == table_end + 1)
 
             if is_before_table or is_after_table:
                 # 选中表格
@@ -2161,73 +2192,22 @@ class PasteImageTextEdit(QTextEdit):
             bool: 如果事件已被处理返回True，否则返回False
         """
         logger.debug(f"[_handle_delete_key_press] 检测到删除键: {'Delete' if event.key() == Qt.Key.Key_Delete else 'Backspace'}")
+
         current_cursor = self.textCursor()
 
-        # 检测并删除不可见空格（空格、制表符、零宽空格）
-        doc = self.document()
-        is_delete_key = event.key() == Qt.Key.Key_Delete
-        check_position = current_cursor.position() if is_delete_key else current_cursor.position() - 1
-
-        # 检查要删除的字符是否是不可见空格
-        if check_position >= 0 and check_position < doc.characterCount():
-            try:
-                # 使用全局函数获取指定位置的字符
-                char_to_delete = _get_char_at(doc, check_position)
-                if char_to_delete == "\u200b":
-                    logger.debug(f"[_handle_delete_key_press] 检测到零宽度空格: {repr(char_to_delete)}, 先删除")
-                    
-                    # 判断是否需要设置标志
-                    should_set_flag = True
-                    if not is_delete_key:
-                        # Backspace键：检查零宽度空格前面是否还有其他字符
-                        # 如果零宽度空格前面还有字符，删除后行不为空，不需要设置标志
-                        block = current_cursor.block()
-                        block_text = block.text()
-                        # 获取零宽度空格在当前行中的位置
-                        block_start = block.position()
-                        zero_width_pos_in_block = check_position - block_start
-                        
-                        # 如果零宽度空格前面还有其他字符（不只是零宽度空格本身）
-                        if zero_width_pos_in_block > 0:
-                            # 检查前面的字符
-                            text_before = block_text[:zero_width_pos_in_block]
-                            if text_before and text_before != "\u200b":
-                                should_set_flag = False
-                                logger.debug(f"[_handle_delete_key_press] Backspace删除零宽度空格，但前面还有字符: {repr(text_before)}，不设置标志")
-                    
-                    # 删除零宽度空格
-                    delete_cursor = QTextCursor(current_cursor)
-                    # 只有在需要时才设置标志，阻止cursorPositionChanged事件处理时重新插入零宽度空格
-                    if should_set_flag:
-                        self._deleting_zero_width_space = True
-                        logger.debug(f"[_handle_delete_key_press] 设置_deleting_zero_width_space标志，阻止重新插入零宽度空格")
-                    
-                    if is_delete_key:
-                        # Delete键：删除光标后的字符
-                        delete_cursor.deleteChar()
-                    else:
-                        # Backspace键：删除光标前的字符
-                        delete_cursor.deletePreviousChar()
-
-                    # 不返回，继续后面的处理，让默认的keyPressEvent继续删除换行符
-            except Exception as e:
-                logger.debug(f"[_handle_delete_key_press] 检测不可见空格时出错: {e}")
-
-        # 先处理附件删除
+        # 1. 处理附件删除
         logger.debug("[_handle_delete_key_press] 检查是否需要删除附件")
         if self._handle_attachment_deletion(event, current_cursor):
             logger.debug("[_handle_delete_key_press] 附件删除已处理，返回")
             return True
 
-        current_table = current_cursor.currentTable()
-
-        # 处理已选中表格的删除
+        # 2. 处理已选中表格的删除（第二次按删除键）
         logger.debug("[_handle_delete_key_press] 检查是否需要删除已选中的表格")
-        if self._handle_selected_table_deletion(event, current_table):
+        if self._handle_selected_table_deletion(event, current_cursor.currentTable()):
             logger.debug("[_handle_delete_key_press] 已选中表格删除已处理，返回")
             return True
 
-        # 处理表格选中（第一次按删除键）
+        # 3. 处理表格选中（第一次按删除键）
         cursor_pos = current_cursor.position()
         logger.debug(f"[_handle_delete_key_press] 检查是否需要选中表格 - cursor_pos: {cursor_pos}")
         if self._handle_table_selection(event, cursor_pos):
@@ -2263,12 +2243,6 @@ class PasteImageTextEdit(QTextEdit):
         # 避免因定时器相位不同步导致光标持续可见不闪烁的问题
         self._start_cursor_blink()
         logger.debug(f"[keyPressEvent] 按键事件处理完成，当前 _cursor_blink_visible={self._cursor_blink_visible}，定时器运行中={self._cursor_blink_timer.isActive()}")
-
-        # 清除删除零宽度空格的标志
-        if hasattr(self, '_deleting_zero_width_space'):
-            self._deleting_zero_width_space = False
-            logger.debug("[keyPressEvent] 清除_deleting_zero_width_space标志")
-
     # 使用非英文输入法（中文等）时，会触发inputMethodEvent，每次输入一个字母都会触发此事件，
     # 通过event.preeditString()来获取所有输入的字母，最后确认后（空格或者手动选择）可以通过commitString来获取输入法输入的值
     # def inputMethodEvent(self, event):
