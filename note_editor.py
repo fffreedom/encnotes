@@ -3318,9 +3318,11 @@ class NoteEditor(QWidget):
         table_format.setCellSpacing(0)
         table_format.setWidth(QTextLength(QTextLength.Type.PercentageLength, 100))
 
-        # 插入表格
+        # 插入表格，insertTable 后光标已自动定位在第一个单元格
         cursor.insertTable(rows, cols, table_format)
-
+        self.text_edit.setTextCursor(cursor)
+        # 恢复焦点，触发 focusInEvent → _start_cursor_blink
+        self.text_edit.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def insert_link(self):
         """插入超链接"""
@@ -3808,6 +3810,10 @@ class NoteEditor(QWidget):
                 cursor.insertText(f"$${code}$$")
             else:
                 cursor.insertText(f"[MathML: {code[:50]}...]")
+
+        # 恢复焦点到编辑器（对话框关闭后焦点会丢失，因为焦点原来在对话框上）
+        self.text_edit.setTextCursor(cursor)
+        self.text_edit.setFocus()
 
     def edit_math_formula(self, code, formula_type, image_cursor, image_format):
         """编辑已存在的数学公式
