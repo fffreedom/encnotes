@@ -2707,6 +2707,11 @@ class NoteEditor(QWidget):
         self.subheading_action.triggered.connect(lambda: self.apply_heading(3))
         format_menu.addAction(self.subheading_action)
 
+        # 正文
+        body_action = QAction("正文", self)
+        body_action.triggered.connect(self.apply_body_text)
+        format_menu.addAction(body_action)
+
         format_menu.addSeparator()
 
         # 文本样式
@@ -2744,13 +2749,6 @@ class NoteEditor(QWidget):
         bg_color_action = QAction("背景色...", self)
         bg_color_action.triggered.connect(self.choose_background_color)
         format_menu.addAction(bg_color_action)
-
-        format_menu.addSeparator()
-
-        # 正文
-        body_action = QAction("正文", self)
-        body_action.triggered.connect(self.apply_body_text)
-        format_menu.addAction(body_action)
 
         format_menu.addSeparator()
 
