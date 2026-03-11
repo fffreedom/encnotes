@@ -573,6 +573,7 @@ class PasteImageTextEdit(QTextEdit):
         try:
             # 获取表格格式
             table_format = table.format()
+            # 获取表格宽度信息
             table_width_length = table_format.width()
             
             # 获取左上角单元格（第一行第一列）
@@ -600,47 +601,55 @@ class PasteImageTextEdit(QTextEdit):
             left = top_left_rect.left() - border_width - cell_padding
             top = top_left_rect.top() - border_width - cell_padding
             bottom = bottom_right_rect.bottom() + border_width + cell_padding
-            
-            # 使用表格格式的宽度信息计算右边界
+            # 计算右边界
             document = self.document()
-            doc_layout = document.documentLayout()
-            doc_size = doc_layout.documentSize()
-            doc_width = doc_size.width()
-            
-            # 获取文档的根框架和边距
             root_frame = document.rootFrame()
-            root_frame_format = root_frame.frameFormat()
-            doc_left_margin = root_frame_format.leftMargin()
-            doc_right_margin = root_frame_format.rightMargin()
-            
-            # 计算内容区域的实际宽度（表格100%宽度的参考）
-            content_width = doc_width - doc_left_margin - doc_right_margin
-            
-            # 根据表格宽度类型计算实际宽度
-            if table_width_length.type() == QTextLength.Type.PercentageLength:
-                # 百分比宽度 - 相对于内容区域宽度
-                percentage = table_width_length.rawValue()
-                table_total_width = content_width * percentage / 100.0
-            elif table_width_length.type() == QTextLength.Type.FixedLength:
-                # 固定宽度
-                table_total_width = table_width_length.rawValue()
+            parent_frame = table.parentFrame()
+            is_nested = parent_frame and parent_frame != root_frame
+
+            if is_nested:
+                from PyQt6.QtGui import QTextTable
+                parent_table = None
+                frame = parent_frame
+                while frame and frame != root_frame:
+                    if isinstance(frame, QTextTable):
+                        parent_table = frame
+                        break
+                    frame = frame.parentFrame()
+                # 嵌套表格：直接通过父单元格的最后字符的光标矩形右边界作为nested表格的右边界
+                parent_cell_last_rect = self.cursorRect(parent_table.cellAt(top_left_cursor).lastCursorPosition())
+                right = parent_cell_last_rect.right()
             else:
-                # 可变宽度，使用内容区域宽度
-                table_total_width = content_width
-            
-            # 计算右边界：左边界 + 表格总宽度 - cell_padding
-            # 需要减去cell_padding的原因：
-            # 1. left的计算中减去了cell_padding，将位置从内容区域回退到了单元格边框内侧
-            # 2. table_total_width是Qt计算的表格100%宽度，这个宽度的右边界也是到最后一列单元格边框内侧
-            # 3. 因此需要减去一个cell_padding来保持对称性
-            right = left + table_total_width - cell_padding
-            
+                # 顶层表格：使用文档宽度计算
+                doc_layout = document.documentLayout()
+                doc_size = doc_layout.documentSize()
+                doc_width = doc_size.width()
+
+                root_frame_format = root_frame.frameFormat()
+                # 获取文档左右边距
+                doc_left_margin = root_frame_format.leftMargin()
+                doc_right_margin = root_frame_format.rightMargin()
+                # 获取文档内容最大宽度
+                content_width = doc_width - doc_left_margin - doc_right_margin
+
+                # 根据表格宽度类型计算实际宽度
+                if table_width_length.type() == QTextLength.Type.PercentageLength:
+                    percentage = table_width_length.rawValue()
+                    table_total_width = content_width * percentage / 100.0
+                elif table_width_length.type() == QTextLength.Type.FixedLength:
+                    table_total_width = table_width_length.rawValue()
+                else:
+                    table_total_width = content_width
+
+                right = left + table_total_width - cell_padding
+
             # 创建矩形
             table_rect = QRectF(left, top, right - left, bottom - top)
             
             return table_rect
             
         except Exception as e:
+            print(f"[ERROR] get_table_rect exception: {e}")
             return None
     
     def is_click_on_table_border(self, pos, table):
