@@ -16,7 +16,7 @@ from PyQt6.QtGui import (
     QTextCursor, QFont, QTextCharFormat, QColor, QAction,
     QTextBlockFormat, QTextListFormat, QTextTableFormat,
     QTextFrameFormat, QTextLength, QImage, QPixmap, QClipboard,
-    QTextImageFormat, QTextFormat, QTextDocument
+    QTextImageFormat, QTextFormat, QTextDocument, QIcon
 )
 
 from math_renderer import MathRenderer
@@ -2580,6 +2580,7 @@ class NoteEditor(QWidget):
     """笔记编辑器类 - 包含工具栏和编辑区"""
     def __init__(self, note_manager=None, main_window=None):
         super().__init__()
+        self.bullet_action = None
         self.math_renderer = MathRenderer()
         self.note_manager = note_manager
         self.main_window = main_window  # 保存 MainWindow 引用
@@ -2691,19 +2692,21 @@ class NoteEditor(QWidget):
         # 保存格式菜单的引用，用于更新状态
         self.format_menu = format_menu
 
+        # 创建空占位图标（16x16透明），确保所有菜单项图标列宽度一致
+        _empty_pixmap = QPixmap(16, 16)
+        _empty_pixmap.fill(Qt.GlobalColor.transparent)
+        _empty_icon = QIcon(_empty_pixmap)
+
         # 标题样式（平铺在格式菜单下）
-        self.title_action = QAction("标题", self)
-        self.title_action.setCheckable(True)
+        self.title_action = QAction(_empty_icon, "标题", self)
         self.title_action.triggered.connect(lambda: self.apply_heading(1))
         format_menu.addAction(self.title_action)
 
-        self.heading_action = QAction("小标题", self)
-        self.heading_action.setCheckable(True)
+        self.heading_action = QAction(_empty_icon, "小标题", self)
         self.heading_action.triggered.connect(lambda: self.apply_heading(2))
         format_menu.addAction(self.heading_action)
 
-        self.subheading_action = QAction("副标题", self)
-        self.subheading_action.setCheckable(True)
+        self.subheading_action = QAction(_empty_icon, "副标题", self)
         self.subheading_action.triggered.connect(lambda: self.apply_heading(3))
         format_menu.addAction(self.subheading_action)
 
@@ -2715,26 +2718,22 @@ class NoteEditor(QWidget):
         format_menu.addSeparator()
 
         # 文本样式
-        self.bold_action = QAction("粗体", self)
-        self.bold_action.setCheckable(True)
+        self.bold_action = QAction(_empty_icon, "粗体", self)
         self.bold_action.setShortcut("Ctrl+B")
         self.bold_action.triggered.connect(self.toggle_bold)
         format_menu.addAction(self.bold_action)
 
-        self.italic_action = QAction("斜体", self)
-        self.italic_action.setCheckable(True)
+        self.italic_action = QAction(_empty_icon, "斜体", self)
         self.italic_action.setShortcut("Ctrl+I")
         self.italic_action.triggered.connect(self.toggle_italic)
         format_menu.addAction(self.italic_action)
 
-        self.underline_action = QAction("下划线", self)
-        self.underline_action.setCheckable(True)
+        self.underline_action = QAction(_empty_icon, "下划线", self)
         self.underline_action.setShortcut("Ctrl+U")
         self.underline_action.triggered.connect(self.toggle_underline)
         format_menu.addAction(self.underline_action)
 
-        self.strikethrough_action = QAction("删除线", self)
-        self.strikethrough_action.setCheckable(True)
+        self.strikethrough_action = QAction(_empty_icon, "删除线", self)
         self.strikethrough_action.triggered.connect(self.toggle_strikethrough)
         format_menu.addAction(self.strikethrough_action)
 
@@ -2755,13 +2754,11 @@ class NoteEditor(QWidget):
         # 列表子菜单（移到格式菜单下）
         list_menu = format_menu.addMenu("列表")
 
-        self.bullet_action = QAction("• 项目符号列表", self)
-        self.bullet_action.setCheckable(True)
+        self.bullet_action = QAction(_empty_icon, "• 项目符号列表", self)
         self.bullet_action.triggered.connect(self.toggle_bullet_list)
         list_menu.addAction(self.bullet_action)
 
-        self.number_action = QAction("1. 编号列表", self)
-        self.number_action.setCheckable(True)
+        self.number_action = QAction(_empty_icon, "1. 编号列表", self)
         self.number_action.triggered.connect(self.toggle_numbered_list)
         list_menu.addAction(self.number_action)
 
@@ -3284,33 +3281,76 @@ class NoteEditor(QWidget):
 
     def update_format_menu_state(self):
         """更新格式菜单的状态（显示当前格式）"""
+        from PyQt6.QtGui import QIcon, QPainter
         cursor = self.text_edit.textCursor()
-        fmt = cursor.charFormat()
+        # 从右向左选择时，cursor.position() 在选区左端（边界外），
+        # 需要取选区内部位置的格式，否则会读到选区外的字符格式
+        if cursor.hasSelection():
+            # 取选区内靠近起始处的位置（min+1 确保在选区内部）
+            inner_pos = min(cursor.position(), cursor.anchor()) + 1
+            inner_cursor = self.text_edit.textCursor()
+            inner_cursor.setPosition(inner_pos)
+            fmt = inner_cursor.charFormat()
+        else:
+            fmt = cursor.charFormat()
 
         # 获取当前字体大小和粗细
         font_size = fmt.fontPointSize()
         font_weight = fmt.fontWeight()
 
+        # 构建对号图标和空图标（大小固定，文字位置不变）
+        icon_size = 16
+
+        def _make_check_icon():
+            """绘制一个对号图标"""
+            pixmap = QPixmap(icon_size, icon_size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = painter.pen()
+            pen.setColor(QColor("#333333"))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            # 绘制对号：从左下到中间，再从中间到右上
+            painter.drawLine(2, 9, 6, 13)
+            painter.drawLine(6, 13, 14, 3)
+            painter.end()
+            return QIcon(pixmap)
+
+        def _make_empty_icon():
+            """绘制一个透明空图标，占位用"""
+            pixmap = QPixmap(icon_size, icon_size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            return QIcon(pixmap)
+
+        check_icon = _make_check_icon()
+        empty_icon = _make_empty_icon()
+
+        def _set_check_icon(action, checked):
+            """根据checked状态设置action图标"""
+            action.setIcon(check_icon if checked else empty_icon)
+
         # 更新标题状态
-        self.title_action.setChecked(font_size == 28 and font_weight == QFont.Weight.Bold)
-        self.heading_action.setChecked(font_size == 22 and font_weight == QFont.Weight.Bold)
-        self.subheading_action.setChecked(font_size == 18 and font_weight == QFont.Weight.Bold)
+        _set_check_icon(self.title_action, font_size == 28 and font_weight == QFont.Weight.Bold)
+        _set_check_icon(self.heading_action, font_size == 22 and font_weight == QFont.Weight.Bold)
+        _set_check_icon(self.subheading_action, font_size == 18 and font_weight == QFont.Weight.Bold)
 
         # 更新文本样式状态
-        self.bold_action.setChecked(font_weight == QFont.Weight.Bold)
-        self.italic_action.setChecked(fmt.fontItalic())
-        self.underline_action.setChecked(fmt.fontUnderline())
-        self.strikethrough_action.setChecked(fmt.fontStrikeOut())
+        _set_check_icon(self.bold_action, font_weight == QFont.Weight.Bold)
+        _set_check_icon(self.italic_action, fmt.fontItalic())
+        _set_check_icon(self.underline_action, fmt.fontUnderline())
+        _set_check_icon(self.strikethrough_action, fmt.fontStrikeOut())
 
-        # 更新列表状态
-        current_list = cursor.currentList()
+        # 更新列表状态（同样需要用选区内部的光标检测）
+        check_cursor = inner_cursor if cursor.hasSelection() else cursor
+        current_list = check_cursor.currentList()
         if current_list:
             list_style = current_list.format().style()
-            self.bullet_action.setChecked(list_style == QTextListFormat.Style.ListDisc)
-            self.number_action.setChecked(list_style == QTextListFormat.Style.ListDecimal)
+            _set_check_icon(self.bullet_action, list_style == QTextListFormat.Style.ListDisc)
+            _set_check_icon(self.number_action, list_style == QTextListFormat.Style.ListDecimal)
         else:
-            self.bullet_action.setChecked(False)
-            self.number_action.setChecked(False)
+            _set_check_icon(self.bullet_action, False)
+            _set_check_icon(self.number_action, False)
 
     def insert_table(self):
         """插入表格（默认 3x3，不弹出对话框）"""
