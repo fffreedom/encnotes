@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QTextBrowser,
     QSplitter, QToolBar, QWidget, QFileDialog, QMessageBox,
     QInputDialog, QMenu, QTableWidget, QTableWidgetItem,
-    QSpinBox, QDialogButtonBox, QColorDialog
+    QSpinBox, QDialogButtonBox, QColorDialog, QToolButton
 )
 from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import (
@@ -2762,9 +2762,25 @@ class NoteEditor(QWidget):
         # 连接格式菜单的aboutToShow信号，在显示前更新状态
         format_menu.aboutToShow.connect(self.update_format_menu_state)
 
-        # 格式按钮
-        format_button = QPushButton("格式")
+        # 格式按钮（使用 QToolButton，通过样式表去掉下拉箭头）
+        format_button = QToolButton()
+        format_button.setText("格式")
+        format_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         format_button.setMenu(format_menu)
+        # 去掉下拉箭头，保持与工具栏其他按钮一致的字体大小
+        format_button.setStyleSheet("""
+            QToolButton {
+                font-size: 13px;
+                padding: 2px 6px;
+            }
+            QToolButton::menu-indicator {
+                image: none;
+                width: 0;
+            }
+        """)
+        # 格式按钮
+        # format_button = QPushButton("格式")
+        # format_button.setMenu(format_menu)
         toolbar.addWidget(format_button)
 
         # 表格按钮
