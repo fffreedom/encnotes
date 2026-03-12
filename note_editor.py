@@ -2751,16 +2751,13 @@ class NoteEditor(QWidget):
 
         format_menu.addSeparator()
 
-        # 列表子菜单（移到格式菜单下）
-        list_menu = format_menu.addMenu("列表")
-
         self.bullet_action = QAction(_empty_icon, "• 项目符号列表", self)
         self.bullet_action.triggered.connect(self.toggle_bullet_list)
-        list_menu.addAction(self.bullet_action)
+        format_menu.addAction(self.bullet_action)
 
         self.number_action = QAction(_empty_icon, "1. 编号列表", self)
         self.number_action.triggered.connect(self.toggle_numbered_list)
-        list_menu.addAction(self.number_action)
+        format_menu.addAction(self.number_action)
 
         # 连接格式菜单的aboutToShow信号，在显示前更新状态
         format_menu.aboutToShow.connect(self.update_format_menu_state)
