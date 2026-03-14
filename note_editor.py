@@ -16,7 +16,7 @@ from PyQt6.QtGui import (
     QTextCursor, QFont, QTextCharFormat, QColor, QAction,
     QTextBlockFormat, QTextListFormat, QTextTableFormat,
     QTextFrameFormat, QTextLength, QImage, QPixmap, QClipboard,
-    QTextImageFormat, QTextFormat, QTextDocument, QIcon
+    QTextImageFormat, QTextFormat, QTextDocument, QIcon, QPainter
 )
 
 from math_renderer import MathRenderer
@@ -1148,6 +1148,60 @@ class PasteImageTextEdit(QTextEdit):
     #     char_fmt.setFontWeight(QFont.Weight.Bold)  # 粗体
     #     self.setCurrentCharFormat(char_fmt)
 
+    def _handle_checklist_click(self, event) -> bool:
+        """检测鼠标是否点击了核对清单行首的复选框字符，如果是则切换选中状态
+
+        Returns:
+            如果处理了复选框点击返回True，否则返回False
+        """
+        UNCHECKED = "☐ "
+        CHECKED = "☑ "
+        cursor = self.cursorForPosition(event.pos())
+        block = cursor.block()
+        t = block.text()
+        # 判断当前行是否是核对清单行
+        if not (t.startswith(UNCHECKED) or t.startswith(CHECKED)):
+            return False
+        # 判断点击位置是否在行首复选框字符范围内（前2个字符）
+        block_start = block.position()
+        click_pos = cursor.position() - block_start
+        if click_pos <= len(UNCHECKED):
+            # 点击了复选框区域，切换状态
+            c = QTextCursor(block)
+            if t.startswith(UNCHECKED):
+                # 切换为选中：替换☐为☑，加黄色背景
+                c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                c.movePosition(QTextCursor.MoveOperation.NextCharacter,
+                               QTextCursor.MoveMode.KeepAnchor, len(UNCHECKED))
+                c.removeSelectedText()
+                c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                # 先清除整行背景，确保文字部分无背景
+                c.movePosition(QTextCursor.MoveOperation.EndOfBlock,
+                               QTextCursor.MoveMode.KeepAnchor)
+                clear_fmt = QTextCharFormat()
+                clear_fmt.setBackground(Qt.GlobalColor.transparent)
+                c.mergeCharFormat(clear_fmt)
+                # 插入带样式的☑字符（黄色背景）
+                c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                check_fmt = QTextCharFormat()
+                check_fmt.setBackground(QColor("#FFD700"))
+                c.setCharFormat(check_fmt)
+                c.insertText(CHECKED)
+            else:
+                # 切换为未选中：替换☑为☐，清除黄色背景
+                c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                c.movePosition(QTextCursor.MoveOperation.NextCharacter,
+                               QTextCursor.MoveMode.KeepAnchor, len(CHECKED))
+                c.removeSelectedText()
+                c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                # 插入普通☐字符（无背景色）
+                circle_fmt = QTextCharFormat()
+                circle_fmt.setBackground(Qt.GlobalColor.transparent)
+                c.setCharFormat(circle_fmt)
+                c.insertText(UNCHECKED)
+            return True
+        return False
+
     def _handle_anchor_click(self, event) -> bool:
         """处理附件链接点击
 
@@ -1365,6 +1419,11 @@ class PasteImageTextEdit(QTextEdit):
         self._restore_cursor_visibility()
         
         if event.button() == Qt.MouseButton.LeftButton:
+            # 检查是否点击了核对清单的圆圈
+            if self._handle_checklist_click(event):
+                logger.debug("[mousePressEvent] 处理核对清单复选框点击，事件结束")
+                return
+
             # 首先检查是否点击了链接（附件）
             if self._handle_anchor_click(event):
                 logger.debug("[mousePressEvent] 处理链接点击，事件结束")
@@ -2581,6 +2640,7 @@ class NoteEditor(QWidget):
     def __init__(self, note_manager=None, main_window=None):
         super().__init__()
         self.bullet_action = None
+        self.checklist_action = None
         self.math_renderer = MathRenderer()
         self.note_manager = note_manager
         self.main_window = main_window  # 保存 MainWindow 引用
@@ -2763,6 +2823,10 @@ class NoteEditor(QWidget):
         self.number_action.triggered.connect(self.toggle_numbered_list)
         format_menu.addAction(self.number_action)
 
+        self.checklist_action = QAction(_empty_icon, "☐ 核对清单", self)
+        self.checklist_action.triggered.connect(self.toggle_checklist)
+        format_menu.addAction(self.checklist_action)
+
         # 连接格式菜单的aboutToShow信号，在显示前更新状态
         format_menu.aboutToShow.connect(self.update_format_menu_state)
 
@@ -2786,6 +2850,33 @@ class NoteEditor(QWidget):
         # format_button = QPushButton("格式")
         # format_button.setMenu(format_menu)
         toolbar.addWidget(format_button)
+
+        # 核对清单按钮
+        checklist_button = QPushButton()
+        checklist_button.setToolTip("核对清单")
+        checklist_button.clicked.connect(self.toggle_checklist)
+        # 绘制核对清单图标
+        from PyQt6.QtGui import QPainter
+        _cl_pixmap = QPixmap(22, 22)
+        _cl_pixmap.fill(Qt.GlobalColor.transparent)
+        _cl_painter = QPainter(_cl_pixmap)
+        _cl_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        _cl_pen = _cl_painter.pen()
+        _cl_pen.setColor(QColor("#555555"))
+        _cl_pen.setWidth(1)
+        _cl_painter.setPen(_cl_pen)
+        # 第一行：实心圆（已选中）+ 横线
+        _cl_painter.setBrush(QColor("#555555"))
+        _cl_painter.drawEllipse(1, 2, 7, 7)
+        _cl_painter.drawLine(11, 6, 21, 6)
+        # 第二行：空心圆（未选中）+ 横线
+        _cl_painter.setBrush(Qt.GlobalColor.transparent)
+        _cl_painter.drawEllipse(1, 13, 7, 7)
+        _cl_painter.drawLine(11, 17, 21, 17)
+        _cl_painter.end()
+        checklist_button.setIcon(QIcon(_cl_pixmap))
+        checklist_button.setIconSize(QSize(22, 22))
+        toolbar.addWidget(checklist_button)
 
         # 表格按钮
         table_button = QPushButton("⊞")
@@ -3343,6 +3434,24 @@ class NoteEditor(QWidget):
                             len(m.group(1))
                         )
                         block_cursor.removeSelectedText()
+                # 如果行首是核对清单前缀，先删除并清除背景色
+                elif block.text().startswith("☐ ") or block.text().startswith("☑ "):
+                    prefix = "☐ " if block.text().startswith("☐ ") else "☑ "
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len(prefix)
+                    )
+                    block_cursor.removeSelectedText()
+                    # 清除黄色背景
+                    clr_cursor = QTextCursor(block)
+                    clr_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    clr_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
+                                            QTextCursor.MoveMode.KeepAnchor)
+                    clr_fmt = QTextCharFormat()
+                    clr_fmt.setBackground(Qt.GlobalColor.transparent)
+                    clr_cursor.mergeCharFormat(clr_fmt)
                 # 如果行首已有 '• ' 前缀则不重复添加
                 if not _is_bullet_block(block):
                     block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
@@ -3415,14 +3524,31 @@ class NoteEditor(QWidget):
                 blk_fmt.setLeftMargin(0)
                 block_cursor.setBlockFormat(blk_fmt)
                 # 如果行首是项目符号前缀，先删除
-                if block.text().startswith("\u2022 "):
+                if block.text().startswith("• "):
                     block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
                     block_cursor.movePosition(
                         QTextCursor.MoveOperation.NextCharacter,
                         QTextCursor.MoveMode.KeepAnchor,
-                        len("\u2022 ")
+                        len("• ")
                     )
                     block_cursor.removeSelectedText()
+                # 如果行首是核对清单前缀，先删除并清除背景色
+                elif block.text().startswith("☐ ") or block.text().startswith("☑ "):
+                    prefix = "☐ " if block.text().startswith("☐ ") else "☑ "
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len(prefix)
+                    )
+                    block_cursor.removeSelectedText()
+                    clr_cursor = QTextCursor(block)
+                    clr_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    clr_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
+                                            QTextCursor.MoveMode.KeepAnchor)
+                    clr_fmt = QTextCharFormat()
+                    clr_fmt.setBackground(Qt.GlobalColor.transparent)
+                    clr_cursor.mergeCharFormat(clr_fmt)
                 # 如果行首是编号列表前缀，先删除
                 elif not _is_dash_block(block):
                     import re
@@ -3534,6 +3660,23 @@ class NoteEditor(QWidget):
                         len("- ")
                     )
                     block_cursor.removeSelectedText()
+                # 如果行首是核对清单前缀，先删除并清除背景色
+                elif block.text().startswith("☐ ") or block.text().startswith("☑ "):
+                    prefix = "☐ " if block.text().startswith("☐ ") else "☑ "
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len(prefix)
+                    )
+                    block_cursor.removeSelectedText()
+                    clr_cursor = QTextCursor(block)
+                    clr_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    clr_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
+                                            QTextCursor.MoveMode.KeepAnchor)
+                    clr_fmt = QTextCharFormat()
+                    clr_fmt.setBackground(Qt.GlobalColor.transparent)
+                    clr_cursor.mergeCharFormat(clr_fmt)
                 # 如果行首已有编号前缀，先删除旧编号再插入新编号
                 elif _is_numbered_block(block):
                     m = re.match(r'^(\d+\.\s)', block.text())
@@ -3553,6 +3696,171 @@ class NoteEditor(QWidget):
                 break
             block = block.next()
         cursor.endEditBlock()
+
+    def toggle_checklist(self):
+        """切换核对清单，支持多行选择，行首显示 '☐ '（未选中）或 '☑ '（已选中，黄色背景）"""
+        cursor = self.text_edit.textCursor()
+        doc = self.text_edit.document()
+
+        UNCHECKED = "☐ "   # U+2610 方块复选框（未选中）
+        CHECKED_CHAR = "☑ "  # U+2611 方块复选框（已选中，黄色背景）
+
+        def _is_checklist_block(blk):
+            t = blk.text()
+            return t.startswith(UNCHECKED) or t.startswith(CHECKED_CHAR)
+
+        def _is_bullet_block(blk):
+            return blk.text().startswith("\u2022 ")
+
+        def _is_dash_block(blk):
+            return blk.text().startswith("- ")
+
+        def _is_numbered_block(blk):
+            import re
+            return bool(re.match(r'^\d+\.\s', blk.text()))
+
+        # 确定操作范围
+        if cursor.hasSelection():
+            start_pos = min(cursor.position(), cursor.anchor())
+            end_pos = max(cursor.position(), cursor.anchor())
+        else:
+            start_pos = cursor.position()
+            end_pos = cursor.position()
+
+        start_block = doc.findBlock(start_pos)
+        end_block = doc.findBlock(end_pos)
+
+        # 判断选区内所有块是否都已经是核对清单
+        all_checklist = True
+        block = start_block
+        while block.isValid():
+            if not _is_checklist_block(block):
+                all_checklist = False
+                break
+            if block == end_block:
+                break
+            block = block.next()
+
+        cursor.beginEditBlock()
+        block = start_block
+        while block.isValid():
+            block_cursor = QTextCursor(block)
+            if all_checklist:
+                # 取消核对清单：删除行首的圆圈前缀，并清除黄色背景
+                t = block.text()
+                if t.startswith(UNCHECKED) or t.startswith(CHECKED_CHAR):
+                    prefix = UNCHECKED if t.startswith(UNCHECKED) else CHECKED_CHAR
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len(prefix)
+                    )
+                    block_cursor.removeSelectedText()
+                # 清除整行的黄色背景
+                self._clear_checklist_highlight(block_cursor)
+            else:
+                # 先删除其他列表前缀
+                t = block.text()
+                if _is_bullet_block(block):
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len("\u2022 ")
+                    )
+                    block_cursor.removeSelectedText()
+                elif _is_dash_block(block):
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len("- ")
+                    )
+                    block_cursor.removeSelectedText()
+                elif _is_numbered_block(block):
+                    import re
+                    m = re.match(r'^(\d+\.\s)', block.text())
+                    if m:
+                        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                        block_cursor.movePosition(
+                            QTextCursor.MoveOperation.NextCharacter,
+                            QTextCursor.MoveMode.KeepAnchor,
+                            len(m.group(1))
+                        )
+                        block_cursor.removeSelectedText()
+                elif _is_checklist_block(block):
+                    # 已经是核对清单，跳过
+                    if block == end_block:
+                        break
+                    block = block.next()
+                    continue
+                # 取消已有的 Qt 列表格式
+                existing_list = block.textList()
+                if existing_list:
+                    existing_list.remove(block)
+                # 在行首插入未选中圆圈前缀
+                block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                block_cursor.insertText(UNCHECKED)
+            if block == end_block:
+                break
+            block = block.next()
+        cursor.endEditBlock()
+
+    def _clear_checklist_highlight(self, block_cursor):
+        """清除一行内所有字符的黄色背景色"""
+        block = block_cursor.block()
+        c = QTextCursor(block)
+        c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        c.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        fmt = QTextCharFormat()
+        fmt.setBackground(Qt.GlobalColor.transparent)
+        c.mergeCharFormat(fmt)
+
+    def _toggle_checklist_item(self, block):
+        """切换单个核对清单项的选中状态（点击复选框时调用）"""
+        UNCHECKED = "☐ "
+        CHECKED = "☑ "
+        t = block.text()
+        cursor = QTextCursor(block)
+
+        if t.startswith(UNCHECKED):
+            # 切换为选中：替换☐为☑，仅给复选框字符加黄色背景
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.NextCharacter,
+                QTextCursor.MoveMode.KeepAnchor,
+                len(UNCHECKED)
+            )
+            cursor.removeSelectedText()
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            # 先清除整行背景，确保文字部分无背景
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+            clear_fmt = QTextCharFormat()
+            clear_fmt.setBackground(Qt.GlobalColor.transparent)
+            cursor.mergeCharFormat(clear_fmt)
+            # 插入带样式的☑字符（黄色背景）
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            check_fmt = QTextCharFormat()
+            check_fmt.setBackground(QColor("#FFD700"))
+            cursor.setCharFormat(check_fmt)
+            cursor.insertText(CHECKED)
+        elif t.startswith(CHECKED):
+            # 切换为未选中：替换☑为☐，清除黄色背景
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.NextCharacter,
+                QTextCursor.MoveMode.KeepAnchor,
+                len(CHECKED)
+            )
+            cursor.removeSelectedText()
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            # 插入普通☐字符（无背景色）
+            circle_fmt = QTextCharFormat()
+            circle_fmt.setBackground(Qt.GlobalColor.transparent)
+            cursor.setCharFormat(circle_fmt)
+            cursor.insertText(UNCHECKED)
+        self.text_edit.setTextCursor(cursor)
 
     def update_format_menu_state(self):
         """更新格式菜单的状态（显示当前格式）"""
@@ -3624,9 +3932,11 @@ class NoteEditor(QWidget):
         is_bullet = block_text.startswith("\u2022 ")
         is_numbered = bool(re.match(r'^\d+\.\s', block_text))
         is_dash = block_text.startswith("- ")
+        is_checklist = block_text.startswith("☐ ") or block_text.startswith("☑ ")
         _set_check_icon(self.bullet_action, is_bullet)
         _set_check_icon(self.number_action, is_numbered)
         _set_check_icon(self.dash_action, is_dash)
+        _set_check_icon(self.checklist_action, is_checklist)
 
     def insert_table(self):
         """插入表格（默认 3x3，不弹出对话框）"""
