@@ -2755,6 +2755,10 @@ class NoteEditor(QWidget):
         self.bullet_action.triggered.connect(self.toggle_bullet_list)
         format_menu.addAction(self.bullet_action)
 
+        self.dash_action = QAction(_empty_icon, "- 短划线列表", self)
+        self.dash_action.triggered.connect(self.toggle_dash_list)
+        format_menu.addAction(self.dash_action)
+
         self.number_action = QAction(_empty_icon, "1. 编号列表", self)
         self.number_action.triggered.connect(self.toggle_numbered_list)
         format_menu.addAction(self.number_action)
@@ -3253,44 +3257,302 @@ class NoteEditor(QWidget):
         cursor.insertList(QTextListFormat.Style.ListDecimal)
 
     def toggle_bullet_list(self):
-        """切换项目符号列表"""
+        """切换项目符号列表，支持多行选择，行首显示 '• ' 前缀"""
         cursor = self.text_edit.textCursor()
-        current_list = cursor.currentList()
+        doc = self.text_edit.document()
 
-        if current_list and current_list.format().style() == QTextListFormat.Style.ListDisc:
-            # 如果已经是项目符号列表，则移除列表
-            block_fmt = cursor.blockFormat()
-            block_fmt.setIndent(0)
-            cursor.setBlockFormat(block_fmt)
+        BULLET_PREFIX = "\u2022 "  # • 
+
+        def _is_bullet_block(blk):
+            return blk.text().startswith(BULLET_PREFIX)
+
+        def _is_numbered_block(blk):
+            import re
+            return bool(re.match(r'^\d+\.\s', blk.text()))
+
+        # 确定操作范围
+        if cursor.hasSelection():
+            start_pos = min(cursor.position(), cursor.anchor())
+            end_pos = max(cursor.position(), cursor.anchor())
         else:
-            # 否则创建项目符号列表
-            if cursor.hasSelection():
-                # 如果有选中文字，保存选中的文字并转换为列表
-                selected_text = cursor.selectedText()
-                cursor.insertList(QTextListFormat.Style.ListDisc)
-                cursor.insertText(selected_text)
+            start_pos = cursor.position()
+            end_pos = cursor.position()
+
+        start_block = doc.findBlock(start_pos)
+        end_block = doc.findBlock(end_pos)
+
+        # 判断选区内所有块是否都已经是项目符号列表
+        all_bullet = True
+        block = start_block
+        while block.isValid():
+            if not _is_bullet_block(block):
+                all_bullet = False
+                break
+            if block == end_block:
+                break
+            block = block.next()
+
+        cursor.beginEditBlock()
+        block = start_block
+        while block.isValid():
+            block_cursor = QTextCursor(block)
+            if all_bullet:
+                # 取消项目符号列表：删除行首的 '• ' 前缀
+                block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                block_cursor.movePosition(
+                    QTextCursor.MoveOperation.NextCharacter,
+                    QTextCursor.MoveMode.KeepAnchor,
+                    len(BULLET_PREFIX)
+                )
+                block_cursor.removeSelectedText()
+                # 取消已有的 Qt 列表格式，并清除缩进
+                existing_list = block.textList()
+                if existing_list:
+                    existing_list.remove(block)
+                blk_fmt = block.blockFormat()
+                blk_fmt.setIndent(0)
+                blk_fmt.setLeftMargin(0)
+                block_cursor.setBlockFormat(blk_fmt)
             else:
-                cursor.insertList(QTextListFormat.Style.ListDisc)
+                # 先取消已有的 Qt 列表格式，清除缩进
+                existing_list = block.textList()
+                if existing_list:
+                    existing_list.remove(block)
+                blk_fmt = block.blockFormat()
+                blk_fmt.setIndent(0)
+                blk_fmt.setLeftMargin(0)
+                block_cursor.setBlockFormat(blk_fmt)
+                # 如果行首是短划线前缀，先删除
+                if block.text().startswith("- "):
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len("- ")
+                    )
+                    block_cursor.removeSelectedText()
+                # 如果行首是编号列表前缀，先删除
+                elif _is_numbered_block(block):
+                    import re
+                    m = re.match(r'^(\d+\.\s)', block.text())
+                    if m:
+                        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                        block_cursor.movePosition(
+                            QTextCursor.MoveOperation.NextCharacter,
+                            QTextCursor.MoveMode.KeepAnchor,
+                            len(m.group(1))
+                        )
+                        block_cursor.removeSelectedText()
+                # 如果行首已有 '• ' 前缀则不重复添加
+                if not _is_bullet_block(block):
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.insertText(BULLET_PREFIX)
+            if block == end_block:
+                break
+            block = block.next()
+        cursor.endEditBlock()
+
+    def toggle_dash_list(self):
+        """切换短划线列表，支持多行选择，行首显示 '- ' 前缀"""
+        cursor = self.text_edit.textCursor()
+        doc = self.text_edit.document()
+
+        DASH_PREFIX = "- "
+
+        def _is_dash_block(blk):
+            return blk.text().startswith(DASH_PREFIX)
+
+        # 确定操作范围：选区的起始块和结束块
+        if cursor.hasSelection():
+            start_pos = min(cursor.position(), cursor.anchor())
+            end_pos = max(cursor.position(), cursor.anchor())
+        else:
+            start_pos = cursor.position()
+            end_pos = cursor.position()
+
+        start_block = doc.findBlock(start_pos)
+        end_block = doc.findBlock(end_pos)
+
+        # 判断选区内所有块是否都已经是短划线列表
+        all_dash = True
+        block = start_block
+        while block.isValid():
+            if not _is_dash_block(block):
+                all_dash = False
+                break
+            if block == end_block:
+                break
+            block = block.next()
+
+        cursor.beginEditBlock()
+        block = start_block
+        while block.isValid():
+            block_cursor = QTextCursor(block)
+            if all_dash:
+                # 取消短划线列表：删除行首的 "- " 前缀
+                block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                block_cursor.movePosition(
+                    QTextCursor.MoveOperation.NextCharacter,
+                    QTextCursor.MoveMode.KeepAnchor,
+                    len(DASH_PREFIX)
+                )
+                block_cursor.removeSelectedText()
+                # 同时取消已有的 Qt 列表格式，并清除缩进
+                existing_list = block.textList()
+                if existing_list:
+                    existing_list.remove(block)
+                blk_fmt = block.blockFormat()
+                blk_fmt.setIndent(0)
+                blk_fmt.setLeftMargin(0)
+                block_cursor.setBlockFormat(blk_fmt)
+            else:
+                # 先取消已有的 Qt 列表格式，清除缩进
+                existing_list = block.textList()
+                if existing_list:
+                    existing_list.remove(block)
+                blk_fmt = block.blockFormat()
+                blk_fmt.setIndent(0)
+                blk_fmt.setLeftMargin(0)
+                block_cursor.setBlockFormat(blk_fmt)
+                # 如果行首是项目符号前缀，先删除
+                if block.text().startswith("\u2022 "):
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len("\u2022 ")
+                    )
+                    block_cursor.removeSelectedText()
+                # 如果行首是编号列表前缀，先删除
+                elif not _is_dash_block(block):
+                    import re
+                    m = re.match(r'^(\d+\.\s)', block.text())
+                    if m:
+                        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                        block_cursor.movePosition(
+                            QTextCursor.MoveOperation.NextCharacter,
+                            QTextCursor.MoveMode.KeepAnchor,
+                            len(m.group(1))
+                        )
+                        block_cursor.removeSelectedText()
+                # 如果行首已有 "- " 前缀则不重复添加
+                if not _is_dash_block(block):
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.insertText(DASH_PREFIX)
+            if block == end_block:
+                break
+            block = block.next()
+        cursor.endEditBlock()
 
     def toggle_numbered_list(self):
-        """切换编号列表"""
+        """切换编号列表，支持多行选择，行首显示 '1. ' '2. ' 等自动编号前缀"""
+        import re
         cursor = self.text_edit.textCursor()
-        current_list = cursor.currentList()
+        doc = self.text_edit.document()
 
-        if current_list and current_list.format().style() == QTextListFormat.Style.ListDecimal:
-            # 如果已经是编号列表，则移除列表
-            block_fmt = cursor.blockFormat()
-            block_fmt.setIndent(0)
-            cursor.setBlockFormat(block_fmt)
+        BULLET_PREFIX = "\u2022 "  # • 
+
+        def _is_numbered_block(blk):
+            return bool(re.match(r'^\d+\.\s', blk.text()))
+
+        def _is_bullet_block(blk):
+            return blk.text().startswith(BULLET_PREFIX)
+
+        def _is_dash_block(blk):
+            return blk.text().startswith("- ")
+
+        # 确定操作范围
+        if cursor.hasSelection():
+            start_pos = min(cursor.position(), cursor.anchor())
+            end_pos = max(cursor.position(), cursor.anchor())
         else:
-            # 否则创建编号列表
-            if cursor.hasSelection():
-                # 如果有选中文字，保存选中的文字并转换为列表
-                selected_text = cursor.selectedText()
-                cursor.insertList(QTextListFormat.Style.ListDecimal)
-                cursor.insertText(selected_text)
+            start_pos = cursor.position()
+            end_pos = cursor.position()
+
+        start_block = doc.findBlock(start_pos)
+        end_block = doc.findBlock(end_pos)
+
+        # 判断选区内所有块是否都已经是编号列表
+        all_numbered = True
+        block = start_block
+        while block.isValid():
+            if not _is_numbered_block(block):
+                all_numbered = False
+                break
+            if block == end_block:
+                break
+            block = block.next()
+
+        cursor.beginEditBlock()
+        block = start_block
+        number = 1  # 编号从1开始
+        while block.isValid():
+            block_cursor = QTextCursor(block)
+            if all_numbered:
+                # 取消编号列表：删除行首的 'N. ' 前缀
+                m = re.match(r'^(\d+\.\s)', block.text())
+                if m:
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len(m.group(1))
+                    )
+                    block_cursor.removeSelectedText()
+                # 取消已有的 Qt 列表格式，并清除缩进
+                existing_list = block.textList()
+                if existing_list:
+                    existing_list.remove(block)
+                blk_fmt = block.blockFormat()
+                blk_fmt.setIndent(0)
+                blk_fmt.setLeftMargin(0)
+                block_cursor.setBlockFormat(blk_fmt)
             else:
-                cursor.insertList(QTextListFormat.Style.ListDecimal)
+                # 先取消已有的 Qt 列表格式，清除缩进
+                existing_list = block.textList()
+                if existing_list:
+                    existing_list.remove(block)
+                blk_fmt = block.blockFormat()
+                blk_fmt.setIndent(0)
+                blk_fmt.setLeftMargin(0)
+                block_cursor.setBlockFormat(blk_fmt)
+                # 如果行首是项目符号前缀，先删除
+                if _is_bullet_block(block):
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len(BULLET_PREFIX)
+                    )
+                    block_cursor.removeSelectedText()
+                # 如果行首是短划线前缀，先删除
+                elif _is_dash_block(block):
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len("- ")
+                    )
+                    block_cursor.removeSelectedText()
+                # 如果行首已有编号前缀，先删除旧编号再插入新编号
+                elif _is_numbered_block(block):
+                    m = re.match(r'^(\d+\.\s)', block.text())
+                    if m:
+                        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                        block_cursor.movePosition(
+                            QTextCursor.MoveOperation.NextCharacter,
+                            QTextCursor.MoveMode.KeepAnchor,
+                            len(m.group(1))
+                        )
+                        block_cursor.removeSelectedText()
+                # 插入编号前缀
+                block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                block_cursor.insertText(f"{number}. ")
+                number += 1
+            if block == end_block:
+                break
+            block = block.next()
+        cursor.endEditBlock()
 
     def update_format_menu_state(self):
         """更新格式菜单的状态（显示当前格式）"""
@@ -3356,14 +3618,15 @@ class NoteEditor(QWidget):
 
         # 更新列表状态（同样需要用选区内部的光标检测）
         check_cursor = inner_cursor if cursor.hasSelection() else cursor
-        current_list = check_cursor.currentList()
-        if current_list:
-            list_style = current_list.format().style()
-            _set_check_icon(self.bullet_action, list_style == QTextListFormat.Style.ListDisc)
-            _set_check_icon(self.number_action, list_style == QTextListFormat.Style.ListDecimal)
-        else:
-            _set_check_icon(self.bullet_action, False)
-            _set_check_icon(self.number_action, False)
+        import re
+        current_block = check_cursor.block()
+        block_text = current_block.text()
+        is_bullet = block_text.startswith("\u2022 ")
+        is_numbered = bool(re.match(r'^\d+\.\s', block_text))
+        is_dash = block_text.startswith("- ")
+        _set_check_icon(self.bullet_action, is_bullet)
+        _set_check_icon(self.number_action, is_numbered)
+        _set_check_icon(self.dash_action, is_dash)
 
     def insert_table(self):
         """插入表格（默认 3x3，不弹出对话框）"""
