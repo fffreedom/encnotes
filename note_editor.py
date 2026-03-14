@@ -784,6 +784,7 @@ class PasteImageTextEdit(QTextEdit):
         self._paint_selected_table()
         self._paint_selected_image()
         self._paint_drag_preview()
+        self._paint_bullet_dots()
         self._paint_checklist_circles()
 
     def _collect_cursor_draw_info(self):
@@ -931,6 +932,76 @@ class PasteImageTextEdit(QTextEdit):
 
         painter.end()
     
+    def _paint_bullet_dots(self):
+        """在项目符号列表行首绘制更大的实心圆点（覆盖原 • 字符）"""
+        from PyQt6.QtGui import QPainter, QColor, QBrush
+        from PyQt6.QtCore import QRectF
+
+        BULLET_PREFIX = "\u2022 "  # • 
+
+        doc = self.document()
+        viewport = self.viewport()
+        painter = QPainter(viewport)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        viewport_height = viewport.rect().height()
+
+        block = doc.begin()
+        while block.isValid():
+            if not block.text().startswith(BULLET_PREFIX):
+                block = block.next()
+                continue
+
+            tmp_cursor = QTextCursor(block)
+            tmp_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            char_rect = self.cursorRect(tmp_cursor)
+
+            if char_rect.bottom() < 0 or char_rect.top() > viewport_height:
+                block = block.next()
+                continue
+
+            # 确保 • 字符颜色为透明（处理从文件加载的旧数据）
+            tmp_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            tmp_cursor.movePosition(
+                QTextCursor.MoveOperation.NextCharacter,
+                QTextCursor.MoveMode.KeepAnchor,
+                len(BULLET_PREFIX)
+            )
+            bullet_fmt = tmp_cursor.charFormat()
+            if bullet_fmt.foreground().color() != QColor(0, 0, 0, 0):
+                fix_fmt = QTextCharFormat()
+                fix_fmt.setForeground(QColor(0, 0, 0, 0))
+                tmp_cursor.mergeCharFormat(fix_fmt)
+
+            line_height = char_rect.height()
+            # 圆点直径：行高的 38%，最小5px，最大10px
+            dot_size = max(5, min(10, int(line_height * 0.38)))
+            dot_x = char_rect.left() + (line_height * 0.5 - dot_size) / 2 + 1
+            dot_y = char_rect.top() + (line_height - dot_size) / 2
+
+            dot_rect = QRectF(dot_x, dot_y, dot_size, dot_size)
+
+            # 获取当前行正文部分的文字颜色（跳过 • 字符，取后面的文字颜色）
+            text_cursor = QTextCursor(block)
+            text_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            text_cursor.movePosition(
+                QTextCursor.MoveOperation.NextCharacter,
+                QTextCursor.MoveMode.MoveAnchor,
+                len(BULLET_PREFIX)
+            )
+            text_fmt = text_cursor.charFormat()
+            text_color = text_fmt.foreground().color()
+            if not text_color.isValid() or text_color == QColor(0, 0, 0, 0):
+                text_color = self.palette().color(self.palette().ColorRole.Text)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(text_color))
+            painter.drawEllipse(dot_rect)
+
+            block = block.next()
+
+        painter.end()
+
     def _paint_checklist_circles(self):
         """在核对清单行首绘制高质量圆圈图标（覆盖原Unicode字符）"""
         from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath
@@ -1241,8 +1312,8 @@ class PasteImageTextEdit(QTextEdit):
         # 判断点击位置是否在行首圆圈字符范围内（前2个字符）
         block_start = block.position()
         click_pos = cursor.position() - block_start
-        if click_pos <= len(UNCHECKED):
-            # 点击了圆圈区域，切换状态
+        if click_pos < len(UNCHECKED):
+            # 点击了圆圈区域（不含后面的空格），切换状态
             c = QTextCursor(block)
             # 透明格式（圆圈字符不可见，由paintEvent绘制）
             invis_fmt = QTextCharFormat()
@@ -2328,6 +2399,38 @@ class PasteImageTextEdit(QTextEdit):
         if self._handle_table_selection(event, cursor_pos):
             logger.debug("[_handle_delete_key_press] 表格已选中，返回")
             return True
+
+        # 4. 处理项目符号列表前缀的退格键
+        if not current_cursor.hasSelection() and event.key() == Qt.Key.Key_Backspace:
+            block = current_cursor.block()
+            BULLET_PREFIX = "\u2022 "  # • 
+            if block.text().startswith(BULLET_PREFIX):
+                block_start = block.position()
+                pos_in_block = current_cursor.position() - block_start
+                prefix_len = len(BULLET_PREFIX)
+                if pos_in_block <= prefix_len:
+                    # 光标在 • 前缀范围内或紧跟其后，直接取消项目符号列表
+                    logger.debug("[_handle_delete_key_press] 光标在项目符号前缀内，取消项目符号列表")
+                    self.parent().toggle_bullet_list()
+                    event.accept()
+                    return True
+
+        # 5. 处理检查清单前缀的退格键
+        if not current_cursor.hasSelection() and event.key() == Qt.Key.Key_Backspace:
+            block = current_cursor.block()
+            UNCHECKED_PREFIX = "○ "  # 未选中
+            CHECKED_PREFIX = "● "   # 已选中
+            block_text = block.text()
+            if block_text.startswith(UNCHECKED_PREFIX) or block_text.startswith(CHECKED_PREFIX):
+                block_start = block.position()
+                pos_in_block = current_cursor.position() - block_start
+                prefix_len = len(UNCHECKED_PREFIX)  # 两者长度相同
+                if pos_in_block <= prefix_len:
+                    # 光标在检查清单前缀范围内或紧跟其后，直接取消检查清单
+                    logger.debug("[_handle_delete_key_press] 光标在检查清单前缀内，取消检查清单")
+                    self.parent().toggle_checklist()
+                    event.accept()
+                    return True
 
         return False
 
@@ -3526,7 +3629,21 @@ class NoteEditor(QWidget):
                 # 如果行首已有 '• ' 前缀则不重复添加
                 if not _is_bullet_block(block):
                     block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.insertText(BULLET_PREFIX)
+                    # 插入 • 字符时将其颜色设为透明，避免原来的小圆点与自定义绘制的大圆点重叠
+                    transparent_fmt = QTextCharFormat()
+                    transparent_fmt.setForeground(QColor(0, 0, 0, 0))
+                    block_cursor.insertText(BULLET_PREFIX, transparent_fmt)
+                else:
+                    # 已有 • 前缀，确保其颜色为透明
+                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    block_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len(BULLET_PREFIX)
+                    )
+                    transparent_fmt = QTextCharFormat()
+                    transparent_fmt.setForeground(QColor(0, 0, 0, 0))
+                    block_cursor.mergeCharFormat(transparent_fmt)
             if block == end_block:
                 break
             block = block.next()
