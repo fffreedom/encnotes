@@ -3514,6 +3514,9 @@ class NoteEditor(QWidget):
             # 如果有选中文本，应用到选中文本
             if cursor.hasSelection():
                 cursor.mergeCharFormat(fmt)
+                # Qt 选中高亮会遮盖字体颜色，取消选中让颜色立即显示
+                cursor.clearSelection()
+                self.text_edit.setTextCursor(cursor)
             else:
                 # 如果没有选中文本，设置当前格式（影响后续输入）
                 self.text_edit.setCurrentCharFormat(fmt)
@@ -3537,6 +3540,9 @@ class NoteEditor(QWidget):
             # 如果有选中文本，应用到选中文本
             if cursor.hasSelection():
                 cursor.mergeCharFormat(fmt)
+                # Qt 选中高亮会遮盖背景色，取消选中让背景色立即显示
+                cursor.clearSelection()
+                self.text_edit.setTextCursor(cursor)
             else:
                 # 如果没有选中文本，设置当前格式（影响后续输入）
                 self.text_edit.setCurrentCharFormat(fmt)
