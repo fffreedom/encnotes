@@ -2994,10 +2994,6 @@ class NoteEditor(QWidget):
         self.number_action.triggered.connect(self.toggle_numbered_list)
         format_menu.addAction(self.number_action)
 
-        self.checklist_action = QAction(_empty_icon, "○ 核对清单", self)
-        self.checklist_action.triggered.connect(self.toggle_checklist)
-        format_menu.addAction(self.checklist_action)
-
         # 连接格式菜单的aboutToShow信号，在显示前更新状态
         format_menu.aboutToShow.connect(self.update_format_menu_state)
 
@@ -3432,37 +3428,71 @@ class NoteEditor(QWidget):
 
         cursor.mergeCharFormat(char_fmt)
 
+    def _is_format_all_applied(self, cursor: QTextCursor, check_fn) -> bool:
+        """检查选区内所有字符是否都已应用某种格式。
+        如果没有选区，则检查当前光标位置的格式。
+        
+        Args:
+            cursor: 文本光标
+            check_fn: 接受 QTextCharFormat 返回 bool 的函数
+        Returns:
+            选区内所有字符都满足条件时返回 True
+        """
+        if not cursor.hasSelection():
+            return check_fn(cursor.charFormat())
+        
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+        doc = self.text_edit.document()
+        
+        # 逐字符检查选区内的格式
+        tmp = QTextCursor(doc)
+        for pos in range(start, end):
+            fmt = _selected_char_format(doc, pos)
+            if fmt is None:
+                continue
+            # 跳过换行符等特殊字符
+            tmp.setPosition(pos)
+            tmp.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 1)
+            ch = tmp.selectedText()
+            if ch in ('\n', '\r', '\u2029', '\u2028'):
+                continue
+            if not check_fn(fmt):
+                return False
+        return True
+
     def toggle_bold(self):
         """切换粗体"""
         cursor = self.text_edit.textCursor()
-        fmt = cursor.charFormat()
-
-        if fmt.fontWeight() == QFont.Weight.Bold:
-            fmt.setFontWeight(QFont.Weight.Normal)
-        else:
-            fmt.setFontWeight(QFont.Weight.Bold)
-
+        all_bold = self._is_format_all_applied(
+            cursor, lambda f: f.fontWeight() == QFont.Weight.Bold
+        )
+        fmt = QTextCharFormat()
+        fmt.setFontWeight(QFont.Weight.Normal if all_bold else QFont.Weight.Bold)
         cursor.mergeCharFormat(fmt)
 
     def toggle_italic(self):
         """切换斜体"""
         cursor = self.text_edit.textCursor()
-        fmt = cursor.charFormat()
-        fmt.setFontItalic(not fmt.fontItalic())
+        all_italic = self._is_format_all_applied(cursor, lambda f: f.fontItalic())
+        fmt = QTextCharFormat()
+        fmt.setFontItalic(not all_italic)
         cursor.mergeCharFormat(fmt)
 
     def toggle_underline(self):
         """切换下划线"""
         cursor = self.text_edit.textCursor()
-        fmt = cursor.charFormat()
-        fmt.setFontUnderline(not fmt.fontUnderline())
+        all_underline = self._is_format_all_applied(cursor, lambda f: f.fontUnderline())
+        fmt = QTextCharFormat()
+        fmt.setFontUnderline(not all_underline)
         cursor.mergeCharFormat(fmt)
 
     def toggle_strikethrough(self):
         """切换删除线"""
         cursor = self.text_edit.textCursor()
-        fmt = cursor.charFormat()
-        fmt.setFontStrikeOut(not fmt.fontStrikeOut())
+        all_strike = self._is_format_all_applied(cursor, lambda f: f.fontStrikeOut())
+        fmt = QTextCharFormat()
+        fmt.setFontStrikeOut(not all_strike)
         cursor.mergeCharFormat(fmt)
 
     def choose_text_color(self):
@@ -4142,11 +4172,9 @@ class NoteEditor(QWidget):
         is_bullet = block_text.startswith("\u2022 ")
         is_numbered = bool(re.match(r'^\d+\.\s', block_text))
         is_dash = block_text.startswith("- ")
-        is_checklist = block_text.startswith("○ ") or block_text.startswith("● ")
         _set_check_icon(self.bullet_action, is_bullet)
         _set_check_icon(self.number_action, is_numbered)
         _set_check_icon(self.dash_action, is_dash)
-        _set_check_icon(self.checklist_action, is_checklist)
 
     def insert_table(self):
         """插入表格（默认 3x3，不弹出对话框）"""
