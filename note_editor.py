@@ -827,7 +827,28 @@ class PasteImageTextEdit(QTextEdit):
                 cursor_rect.setBottom(cursor_rect.top() + font_height - 1)
             return cursor_rect, font_height, cursor_rect.top()
         else:
-            # 有文字的行：使用原生 cursor_rect 高度
+            # 有文字的行：根据光标位置的字符格式来决定光标高度
+            # 避免行内有大字体时，光标在正文格式字符旁边也显示为大字体高度
+            fmt = self.currentCharFormat()
+            font = fmt.font()
+            if font.pointSize() <= 0 and font.pixelSize() <= 0:
+                font = self.document().defaultFont()
+            fm = QFontMetrics(font)
+            font_height = fm.height()
+            line_height = cursor_rect.height()
+            print(f"[cursor] font_height={font_height}, line_height={line_height}, "
+                  f"cursor_rect={cursor_rect.x()},{cursor_rect.y()},{cursor_rect.width()},{cursor_rect.height()}, "
+                  f"cursor_bottom={cursor_rect.bottom()}, font_descent={fm.descent()}, "
+                  f"fm_ascent={fm.ascent()}, fm_height={fm.height()}")
+            if font_height < line_height:
+                # 光标字体比行高小：基于文字基线居中，使光标中心与文字中心对齐
+                # 文字基线 = cursor_rect.bottom() - fm.descent()
+                # 文字中心 = 基线 - fm.ascent() / 2
+                # 令光标中心 = 文字中心：draw_top = 文字中心 - font_height / 2
+                draw_top = cursor_rect.bottom() - fm.descent() - fm.ascent() // 2 - font_height // 2
+                # draw_top = cursor_rect.bottom() - (cursor_rect.height() - fm.lineSpacing()) // 2 - fm.height()
+                # draw_top = cursor_rect.bottom() - (cursor_rect.height() - fm.lineSpacing()) // 2 - fm.height()
+                return cursor_rect, font_height, draw_top
             return cursor_rect, cursor_rect.height(), cursor_rect.top()
 
     def _paint_custom_cursor(self, cursor_draw_info):
@@ -3379,42 +3400,80 @@ class NoteEditor(QWidget):
         """应用标题格式，如果已经是该格式则取消"""
         cursor = self.text_edit.textCursor()
 
-        # 获取当前字符格式
-        current_fmt = cursor.charFormat()
-        current_size = current_fmt.fontPointSize()
-        current_weight = current_fmt.fontWeight()
+        # 确定目标字号
+        size_map = {1: 28, 2: 22, 3: 18}
+        target_size = size_map.get(level, 14)
 
-        # 判断当前是否已经是该标题格式
-        is_current_format = False
-        if level == 1 and current_size == 28 and current_weight == QFont.Weight.Bold:
-            is_current_format = True
-        elif level == 2 and current_size == 22 and current_weight == QFont.Weight.Bold:
-            is_current_format = True
-        elif level == 3 and current_size == 18 and current_weight == QFont.Weight.Bold:
-            is_current_format = True
+        # 判断当前是否已经是该标题格式（检查选区内所有字符）
+        is_current_format = self._is_format_all_applied(
+            cursor,
+            lambda f: f.fontPointSize() == target_size and f.fontWeight() == QFont.Weight.Bold
+        )
 
         cursor.beginEditBlock()
 
         if is_current_format:
             # 如果已经是该格式，则恢复为正文格式
-            self.apply_body_text()
+            char_fmt = QTextCharFormat()
+            char_fmt.setFontPointSize(14)
+            char_fmt.setFontWeight(QFont.Weight.Normal)
+            if cursor.hasSelection():
+                cursor.mergeCharFormat(char_fmt)
+                # 重置 blockCharFormat，防止段落级别格式被污染
+                body_block_fmt = QTextCharFormat()
+                body_block_fmt.setFontPointSize(14)
+                body_block_fmt.setFontWeight(QFont.Weight.Normal)
+                cursor.setBlockCharFormat(body_block_fmt)
+                cursor.clearSelection()
+                self.text_edit.setTextCursor(cursor)
+            else:
+                self.text_edit.setCurrentCharFormat(char_fmt)
         else:
-            # 设置块格式
-            block_fmt = QTextBlockFormat()
-
-            # 设置字符格式
+            # 设置字符格式（仅作用于选中文字，不影响整行）
             char_fmt = QTextCharFormat()
             char_fmt.setFontWeight(QFont.Weight.Bold)
+            char_fmt.setFontPointSize(target_size)
 
-            if level == 1:  # 标题（首行标题格式）
-                char_fmt.setFontPointSize(28)
-            elif level == 2:  # 小标题
-                char_fmt.setFontPointSize(22)
-            elif level == 3:  # 副标题
-                char_fmt.setFontPointSize(18)
+            if cursor.hasSelection():
+                sel_start = cursor.selectionStart()
+                sel_end = cursor.selectionEnd()
 
-            cursor.mergeBlockFormat(block_fmt)
-            cursor.mergeCharFormat(char_fmt)
+                # 第一步：固化整行所有字符的当前格式，防止 blockCharFormat 被污染后影响未选中字符
+                doc = self.text_edit.document()
+                block = cursor.block()
+                block_start = block.position()
+                block_end = block_start + block.length() - 1  # 不含换行符
+
+                tmp_cursor = QTextCursor(doc)
+                pos = block_start
+                while pos < block_end:
+                    tmp_cursor.setPosition(pos)
+                    tmp_cursor.movePosition(QTextCursor.MoveOperation.Right,
+                                            QTextCursor.MoveMode.KeepAnchor, 1)
+                    existing_fmt = tmp_cursor.charFormat()
+                    # 确保字体大小被显式设置（固化格式）
+                    if existing_fmt.fontPointSize() <= 0:
+                        existing_fmt.setFontPointSize(14)
+                    if existing_fmt.fontWeight() == QFont.Weight.Normal or existing_fmt.fontWeight() == 0:
+                        existing_fmt.setFontWeight(QFont.Weight.Normal)
+                    tmp_cursor.setCharFormat(existing_fmt)
+                    pos += 1
+
+                # 第二步：对选中部分应用标题格式
+                cursor.setPosition(sel_start)
+                cursor.setPosition(sel_end, QTextCursor.MoveMode.KeepAnchor)
+                cursor.mergeCharFormat(char_fmt)
+
+                # 第三步：重置 blockCharFormat 为正文格式，防止段落级别格式被标题格式污染
+                body_block_fmt = QTextCharFormat()
+                body_block_fmt.setFontPointSize(14)
+                body_block_fmt.setFontWeight(QFont.Weight.Normal)
+                cursor.setBlockCharFormat(body_block_fmt)
+
+                cursor.clearSelection()
+                self.text_edit.setTextCursor(cursor)
+            else:
+                self.text_edit.setCurrentCharFormat(char_fmt)
 
         cursor.endEditBlock()
 
