@@ -994,11 +994,20 @@ class PasteImageTextEdit(QTextEdit):
                 fix_fmt.setForeground(QColor(0, 0, 0, 0))
                 tmp_cursor.mergeCharFormat(fix_fmt)
 
-            line_height = char_rect.height()
-            # 圆点直径：行高的 38%，最小5px，最大10px
-            dot_size = max(5, min(10, int(line_height * 0.38)))
-            dot_x = char_rect.left() + (line_height * 0.5 - dot_size) / 2 + 1
-            dot_y = char_rect.top() + (line_height - dot_size) / 2
+            # 圆点大小和位置：基于行首字符自身字体高度，避免受行内标题字符撑大行高影响
+            bullet_char_fmt = tmp_cursor.charFormat()
+            bullet_char_font = bullet_char_fmt.font()
+            if not bullet_char_font.family():
+                bullet_char_font = self.document().defaultFont()
+            from PyQt6.QtGui import QFontMetrics
+            fm = QFontMetrics(bullet_char_font)
+            font_height = fm.height()
+            # 圆点直径：字体高度的 38%，最小5px，最大10px
+            dot_size = max(5, min(10, int(font_height * 0.38)))
+            # 用 bottom - descent 近似基线，再居中到字体高度内
+            baseline_y = char_rect.bottom() - fm.descent()
+            dot_x = char_rect.left() + (font_height * 0.5 - dot_size) / 2 + 1
+            dot_y = baseline_y - fm.ascent() + (font_height - dot_size) / 2
 
             dot_rect = QRectF(dot_x, dot_y, dot_size, dot_size)
 
@@ -1059,11 +1068,19 @@ class PasteImageTextEdit(QTextEdit):
                 block = block.next()
                 continue
 
-            # 圆圈大小和位置：在字符区域内居中绘制
-            line_height = char_rect.height()
-            circle_size = min(line_height - 4, 16)  # 圆圈直径，最大16px
+            # 圆圈大小和位置：基于行首字符自身字体高度居中，避免受行内标题字符撑大行高影响
+            char_fmt = tmp_cursor.charFormat()
+            char_font = char_fmt.font()
+            if not char_font.family():
+                char_font = self.document().defaultFont()
+            from PyQt6.QtGui import QFontMetrics
+            fm = QFontMetrics(char_font)
+            font_height = fm.height()
+            circle_size = min(font_height - 2, 16)  # 圆圈直径，最大16px
+            # 用 bottom - descent 近似基线，再居中到字体高度内
+            baseline_y = char_rect.bottom() - fm.descent()
             circle_x = char_rect.left() + 1
-            circle_y = char_rect.top() + (line_height - circle_size) / 2
+            circle_y = baseline_y - fm.ascent() + (font_height - circle_size) / 2
 
             circle_rect = QRectF(circle_x, circle_y, circle_size, circle_size)
 
