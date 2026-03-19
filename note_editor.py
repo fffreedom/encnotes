@@ -953,23 +953,17 @@ class PasteImageTextEdit(QTextEdit):
 
         painter.end()
     
-    def _paint_bullet_dots(self):
-        """在项目符号列表行首绘制更大的实心圆点（覆盖原 • 字符）"""
-        from PyQt6.QtGui import QPainter, QColor, QBrush
-        from PyQt6.QtCore import QRectF
-
-        BULLET_PREFIX = "\u2022 "  # • 
+    def _iter_list_blocks(self, prefixes):
+        """遍历文档中以指定前缀开头的可见块，返回 (block, char_rect, fm, prefix) 迭代器"""
+        from PyQt6.QtGui import QFontMetrics
 
         doc = self.document()
-        viewport = self.viewport()
-        painter = QPainter(viewport)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        viewport_height = viewport.rect().height()
-
+        viewport_height = self.viewport().rect().height()
         block = doc.begin()
         while block.isValid():
-            if not block.text().startswith(BULLET_PREFIX):
+            t = block.text()
+            prefix = next((p for p in prefixes if t.startswith(p)), None)
+            if prefix is None:
                 block = block.next()
                 continue
 
@@ -981,46 +975,87 @@ class PasteImageTextEdit(QTextEdit):
                 block = block.next()
                 continue
 
-            # 确保 • 字符颜色为透明（处理从文件加载的旧数据）
-            tmp_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            tmp_cursor.movePosition(
-                QTextCursor.MoveOperation.NextCharacter,
-                QTextCursor.MoveMode.KeepAnchor,
-                len(BULLET_PREFIX)
-            )
-            bullet_fmt = tmp_cursor.charFormat()
-            if bullet_fmt.foreground().color() != QColor(0, 0, 0, 0):
-                fix_fmt = QTextCharFormat()
-                fix_fmt.setForeground(QColor(0, 0, 0, 0))
-                tmp_cursor.mergeCharFormat(fix_fmt)
+            char_font = tmp_cursor.charFormat().font()
+            if not char_font.family():
+                char_font = self.document().defaultFont()
+            fm = QFontMetrics(char_font)
 
-            # 圆点大小和位置：基于行首字符自身字体高度，避免受行内标题字符撑大行高影响
-            bullet_char_fmt = tmp_cursor.charFormat()
-            bullet_char_font = bullet_char_fmt.font()
-            if not bullet_char_font.family():
-                bullet_char_font = self.document().defaultFont()
-            from PyQt6.QtGui import QFontMetrics
-            fm = QFontMetrics(bullet_char_font)
-            font_height = fm.height()
+            yield block, char_rect, fm, prefix
+            block = block.next()
+
+    def _calc_circle_rect(self, char_rect, fm, size):
+        """根据行首 cursorRect 和字体度量计算圆形绘制区域"""
+        from PyQt6.QtCore import QRectF
+        font_height = fm.height()
+        baseline_y = char_rect.bottom() - fm.descent()
+        x = char_rect.left() + 1
+        y = baseline_y - fm.ascent() + (font_height - size) / 2
+        return QRectF(x, y, size, size)
+
+    def _ensure_prefix_transparent(self, block, prefix):
+        """确保前缀字符颜色为透明（处理从文件加载的旧数据）"""
+        from PyQt6.QtGui import QColor
+        tmp_cursor = QTextCursor(block)
+        tmp_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        tmp_cursor.movePosition(
+            QTextCursor.MoveOperation.NextCharacter,
+            QTextCursor.MoveMode.KeepAnchor,
+            len(prefix)
+        )
+        if tmp_cursor.charFormat().foreground().color() != QColor(0, 0, 0, 0):
+            fix_fmt = QTextCharFormat()
+            fix_fmt.setForeground(QColor(0, 0, 0, 0))
+            tmp_cursor.mergeCharFormat(fix_fmt)
+
+    def _reset_transparent_cursor_fmt(self, prefixes):
+        """若光标紧跟在列表前缀末尾且格式为透明色，重置为正常颜色，防止后续输入不可见"""
+        from PyQt6.QtGui import QColor
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            return
+        cur_block = cursor.block()
+        t = cur_block.text()
+        prefix = next((p for p in prefixes if t.startswith(p)), None)
+        if prefix is None:
+            return
+        pos_in_block = cursor.position() - cur_block.position()
+        if pos_in_block == len(prefix):
+            if cursor.charFormat().foreground().color() == QColor(0, 0, 0, 0):
+                normal_fmt = QTextCharFormat()
+                normal_fmt.setForeground(self.palette().color(self.palette().ColorRole.Text))
+                self.setCurrentCharFormat(normal_fmt)
+
+    def _paint_bullet_dots(self):
+        """在项目符号列表行首绘制更大的实心圆点（覆盖原 • 字符）"""
+        from PyQt6.QtGui import QPainter, QColor, QBrush
+
+        BULLET_PREFIX = "\u2022 "  # • 
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        for block, char_rect, fm, prefix in self._iter_list_blocks([BULLET_PREFIX]):
+            self._ensure_prefix_transparent(block, prefix)
+
             # 圆点直径：字体高度的 38%，最小5px，最大10px
+            font_height = fm.height()
             dot_size = max(5, min(10, int(font_height * 0.38)))
-            # 用 bottom - descent 近似基线，再居中到字体高度内
+            # 圆点水平位置居中于前缀半宽，x 偏移与 _calc_circle_rect 不同，单独计算
             baseline_y = char_rect.bottom() - fm.descent()
             dot_x = char_rect.left() + (font_height * 0.5 - dot_size) / 2 + 1
             dot_y = baseline_y - fm.ascent() + (font_height - dot_size) / 2
-
+            from PyQt6.QtCore import QRectF
             dot_rect = QRectF(dot_x, dot_y, dot_size, dot_size)
 
-            # 获取当前行正文部分的文字颜色（跳过 • 字符，取后面的文字颜色）
+            # 取正文部分文字颜色（跳过 • 字符，取后面的文字颜色）
             text_cursor = QTextCursor(block)
             text_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
             text_cursor.movePosition(
                 QTextCursor.MoveOperation.NextCharacter,
                 QTextCursor.MoveMode.MoveAnchor,
-                len(BULLET_PREFIX)
+                len(prefix)
             )
-            text_fmt = text_cursor.charFormat()
-            text_color = text_fmt.foreground().color()
+            text_color = text_cursor.charFormat().foreground().color()
             if not text_color.isValid() or text_color == QColor(0, 0, 0, 0):
                 text_color = self.palette().color(self.palette().ColorRole.Text)
 
@@ -1028,64 +1063,27 @@ class PasteImageTextEdit(QTextEdit):
             painter.setBrush(QBrush(text_color))
             painter.drawEllipse(dot_rect)
 
-            block = block.next()
-
         painter.end()
+        self._reset_transparent_cursor_fmt([BULLET_PREFIX])
 
     def _paint_checklist_circles(self):
         """在核对清单行首绘制高质量圆圈图标（覆盖原Unicode字符）"""
         from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath
-        from PyQt6.QtCore import QRectF
 
         UNCHECKED = "○ "
         CHECKED = "● "
 
-        doc = self.document()
-        viewport = self.viewport()
-        painter = QPainter(viewport)
+        painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # 获取可见区域高度（viewport坐标）
-        viewport_height = viewport.rect().height()
-
-        # 遍历文档中的所有块
-        block = doc.begin()
-        while block.isValid():
-            t = block.text()
-            is_unchecked = t.startswith(UNCHECKED)
-            is_checked = t.startswith(CHECKED)
-            if not (is_unchecked or is_checked):
-                block = block.next()
-                continue
-
-            # 计算圆圈字符的位置（cursorRect返回viewport坐标，已考虑滚动偏移）
-            tmp_cursor = QTextCursor(block)
-            tmp_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            char_rect = self.cursorRect(tmp_cursor)
-
-            # 跳过不在可见区域的块（viewport坐标判断）
-            if char_rect.bottom() < 0 or char_rect.top() > viewport_height:
-                block = block.next()
-                continue
-
-            # 圆圈大小和位置：基于行首字符自身字体高度居中，避免受行内标题字符撑大行高影响
-            char_fmt = tmp_cursor.charFormat()
-            char_font = char_fmt.font()
-            if not char_font.family():
-                char_font = self.document().defaultFont()
-            from PyQt6.QtGui import QFontMetrics
-            fm = QFontMetrics(char_font)
+        for block, char_rect, fm, prefix in self._iter_list_blocks([UNCHECKED, CHECKED]):
+            self._ensure_prefix_transparent(block, prefix)
             font_height = fm.height()
             circle_size = min(font_height - 2, 16)  # 圆圈直径，最大16px
-            # 用 bottom - descent 近似基线，再居中到字体高度内
-            baseline_y = char_rect.bottom() - fm.descent()
-            circle_x = char_rect.left() + 1
-            circle_y = baseline_y - fm.ascent() + (font_height - circle_size) / 2
+            circle_rect = self._calc_circle_rect(char_rect, fm, circle_size)
 
-            circle_rect = QRectF(circle_x, circle_y, circle_size, circle_size)
-
-            if is_checked:
-                # 选中状态：黄色实心圆 + 白色对号（加同色边框保持视觉尺寸与未选中一致）
+            if prefix == CHECKED:
+                # 选中状态：黄色实心圆 + 白色对号
                 painter.setPen(QPen(QColor("#FFB800"), 1.5))
                 painter.setBrush(QBrush(QColor("#FFB800")))
                 painter.drawEllipse(circle_rect)
@@ -1095,8 +1093,6 @@ class PasteImageTextEdit(QTextEdit):
                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
                 painter.setPen(pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-
-                # 对号路径：左下角到中间底部，再到右上角
                 cx = circle_rect.center().x()
                 cy = circle_rect.center().y()
                 r = circle_size / 2
@@ -1108,13 +1104,11 @@ class PasteImageTextEdit(QTextEdit):
             else:
                 # 未选中状态：白色背景 + 灰色圆形边框
                 painter.setBrush(QBrush(QColor("white")))
-                pen = QPen(QColor("#AAAAAA"), 1.5)
-                painter.setPen(pen)
+                painter.setPen(QPen(QColor("#AAAAAA"), 1.5))
                 painter.drawEllipse(circle_rect)
 
-            block = block.next()
-
         painter.end()
+        self._reset_transparent_cursor_fmt([UNCHECKED, CHECKED])
 
     def get_resize_handles(self):
         """获取8个缩放控制点的矩形区域"""
@@ -2472,6 +2466,90 @@ class PasteImageTextEdit(QTextEdit):
 
         return False
 
+    def _handle_return_key_press(self, event) -> bool:
+        """处理回车键：在列表行尾按回车时，新行自动延续相同的列表格式。
+        若当前行只有列表前缀而无正文内容，则退出列表格式（清除前缀）。
+
+        Returns:
+            bool: 已处理返回 True，否则返回 False
+        """
+        import re
+        cursor = self.textCursor()
+        # 有选区时不干预，交给默认处理
+        if cursor.hasSelection():
+            return False
+
+        block = cursor.block()
+        block_text = block.text()
+
+        BULLET_PREFIX = "\u2022 "   # • （符号列表）
+        DASH_PREFIX = "- "           # 短划线列表
+        UNCHECKED = "○ "             # 检查清单（未选中）
+
+        # 判断当前行的列表类型
+        if block_text.startswith(BULLET_PREFIX):
+            prefix_len = len(BULLET_PREFIX)
+            list_type = "bullet"
+        elif block_text.startswith(DASH_PREFIX):
+            prefix_len = len(DASH_PREFIX)
+            list_type = "dash"
+        elif block_text.startswith("○ ") or block_text.startswith("● "):
+            prefix_len = 2  # "○ " 和 "● " 均为 2 个字符
+            list_type = "checklist"
+        else:
+            m = re.match(r'^(\d+)\.\s', block_text)
+            if m:
+                prefix_len = len(m.group(0))
+                list_type = "numbered"
+                current_number = int(m.group(1))
+            else:
+                return False  # 不是列表行，不处理
+
+        content_after_prefix = block_text[prefix_len:]
+
+        if not content_after_prefix.strip():
+            # 当前行只有前缀，无正文内容 → 退出列表格式（删除前缀，不插入新行）
+            block_cursor = QTextCursor(block)
+            block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            block_cursor.movePosition(
+                QTextCursor.MoveOperation.NextCharacter,
+                QTextCursor.MoveMode.KeepAnchor,
+                prefix_len
+            )
+            block_cursor.removeSelectedText()
+            self.setTextCursor(block_cursor)
+            return True
+
+        # 当前行有正文内容 → 先执行默认换行，再在新行插入对应前缀
+        super().keyPressEvent(event)
+
+        new_cursor = self.textCursor()
+        new_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+
+        if list_type == "bullet":
+            # 先清除新行可能继承的块字符格式，避免继承上一行（如 checklist）的格式
+            normal_fmt = QTextCharFormat()
+            normal_fmt.setForeground(self.palette().color(self.foregroundRole()))
+            new_cursor.setBlockCharFormat(normal_fmt)
+            # 插入 • 前缀，颜色设为透明（由自定义绘制覆盖）
+            transparent_fmt = QTextCharFormat()
+            transparent_fmt.setForeground(QColor(0, 0, 0, 0))
+            new_cursor.insertText(BULLET_PREFIX, transparent_fmt)
+            # 重置光标字符格式为默认前景色，避免后续输入的文字继承透明色
+            new_cursor.setCharFormat(normal_fmt)
+            self.setTextCursor(new_cursor)
+
+        elif list_type == "dash":
+            new_cursor.insertText(DASH_PREFIX)
+
+        elif list_type == "checklist":
+            new_cursor.insertText(UNCHECKED)
+
+        elif list_type == "numbered":
+            new_cursor.insertText(f"{current_number + 1}. ")
+
+        return True
+
     # 英文输入法或功能键（Ctrl、Alt、Shift等+具体键）会触发此事件。
     # 使用功能键+其他键时，此事件触发时只能获取到功能键，+上的那个键值获取不到。
     # 其他输入法触发inputMethodEvent事件
@@ -2486,7 +2564,13 @@ class PasteImageTextEdit(QTextEdit):
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self._handle_delete_key_press(event):
                 return
-        else :
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # 处理列表行回车：自动延续列表格式
+            if self._handle_return_key_press(event):
+                self._start_cursor_blink()
+                return
+            # 非列表行回车，走默认处理
+        else:
             # 恢复光标显示并清除表格选中状态
             logger.debug("[keyPressEvent] 恢复光标显示并清除表格选中状态")
             self._restore_cursor_and_clear_table_selection(event)
@@ -2495,6 +2579,10 @@ class PasteImageTextEdit(QTextEdit):
         # 从而调用update_title_and_input_format进行格式化处理
         logger.debug("[keyPressEvent] 调用父类方法处理按键事件")
         super().keyPressEvent(event)
+        # 删除键处理后，检查光标是否紧跟在 BULLET_PREFIX 之后（即删除内容后光标回到 • 后面）
+        # 若是，则重置字符格式为正常前景色，避免后续输入的文字继承透明色而不可见
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self._reset_char_format_after_bullet_prefix()
         # 按键后重置光标闪烁定时器，确保光标从按键时刻重新开始完整的显示周期，
         # 避免因定时器相位不同步导致光标持续可见不闪烁的问题
         self._start_cursor_blink()
@@ -3164,9 +3252,6 @@ class NoteEditor(QWidget):
         # 重新渲染所有数学公式
         self.rerender_formulas()
 
-        # 对已有核对清单字符设置透明前景色（由paintEvent绘制圆圈图标）
-        self._apply_checklist_invisible_format()
-
     def _remark_attachment_blocks_after_load(self):
         """扫描文档，给附件展示块重新打标记（用于整体删除）。
 
@@ -3633,30 +3718,79 @@ class NoteEditor(QWidget):
         cursor = self.text_edit.textCursor()
         cursor.insertList(QTextListFormat.Style.ListDecimal)
 
-    def toggle_bullet_list(self):
-        """切换项目符号列表，支持多行选择，行首显示 '• ' 前缀"""
+    # ------------------------------------------------------------------ #
+    #  列表格式公共辅助方法
+    # ------------------------------------------------------------------ #
+
+    def _get_list_selection_range(self):
+        """返回 (cursor, start_block, end_block)，光标无选区时两块相同"""
         cursor = self.text_edit.textCursor()
         doc = self.text_edit.document()
+        if cursor.hasSelection():
+            start_pos = min(cursor.position(), cursor.anchor())
+            end_pos = max(cursor.position(), cursor.anchor())
+        else:
+            start_pos = end_pos = cursor.position()
+        return cursor, doc.findBlock(start_pos), doc.findBlock(end_pos)
 
+    def _clear_block_qt_list_format(self, block, block_cursor):
+        """取消块的 Qt 列表归属，并清除缩进/左边距"""
+        existing_list = block.textList()
+        if existing_list:
+            existing_list.remove(block)
+        blk_fmt = block.blockFormat()
+        blk_fmt.setIndent(0)
+        blk_fmt.setLeftMargin(0)
+        block_cursor.setBlockFormat(blk_fmt)
+
+    def _remove_block_list_prefix(self, block, block_cursor):
+        """
+        删除行首已有的任意列表前缀（• / - / N. / ○ / ●）。
+        若删除了 checklist 前缀，同时清除整行背景色。
+        返回被删除的前缀字符串，若无前缀则返回空字符串。
+        """
+        import re
+        text = block.text()
+        prefix = ""
+        if text.startswith("\u2022 "):          # • 
+            prefix = "\u2022 "
+        elif text.startswith("- "):
+            prefix = "- "
+        elif text.startswith("○ "):
+            prefix = "○ "
+        elif text.startswith("● "):
+            prefix = "● "
+        else:
+            m = re.match(r'^(\d+\.\s)', text)
+            if m:
+                prefix = m.group(1)
+
+        if prefix:
+            block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            block_cursor.movePosition(
+                QTextCursor.MoveOperation.NextCharacter,
+                QTextCursor.MoveMode.KeepAnchor,
+                len(prefix)
+            )
+            block_cursor.removeSelectedText()
+        return prefix
+
+    def _reset_cursor_char_format(self, cursor):
+        """将光标字符格式重置为编辑器默认前景色，防止后续输入继承透明色"""
+        fmt = QTextCharFormat()
+        fmt.setForeground(self.text_edit.palette().color(self.text_edit.foregroundRole()))
+        cursor.setCharFormat(fmt)
+
+    # ------------------------------------------------------------------ #
+
+    def toggle_bullet_list(self):
+        """切换项目符号列表，支持多行选择，行首显示 '• ' 前缀"""
         BULLET_PREFIX = "\u2022 "  # • 
 
         def _is_bullet_block(blk):
             return blk.text().startswith(BULLET_PREFIX)
 
-        def _is_numbered_block(blk):
-            import re
-            return bool(re.match(r'^\d+\.\s', blk.text()))
-
-        # 确定操作范围
-        if cursor.hasSelection():
-            start_pos = min(cursor.position(), cursor.anchor())
-            end_pos = max(cursor.position(), cursor.anchor())
-        else:
-            start_pos = cursor.position()
-            end_pos = cursor.position()
-
-        start_block = doc.findBlock(start_pos)
-        end_block = doc.findBlock(end_pos)
+        cursor, start_block, end_block = self._get_list_selection_range()
 
         # 判断选区内所有块是否都已经是项目符号列表
         all_bullet = True
@@ -3674,7 +3808,7 @@ class NoteEditor(QWidget):
         while block.isValid():
             block_cursor = QTextCursor(block)
             if all_bullet:
-                # 取消项目符号列表：删除行首的 '• ' 前缀
+                # 取消：删除行首 '• ' 前缀，清除 Qt 列表格式
                 block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
                 block_cursor.movePosition(
                     QTextCursor.MoveOperation.NextCharacter,
@@ -3682,80 +3816,17 @@ class NoteEditor(QWidget):
                     len(BULLET_PREFIX)
                 )
                 block_cursor.removeSelectedText()
-                # 取消已有的 Qt 列表格式，并清除缩进
-                existing_list = block.textList()
-                if existing_list:
-                    existing_list.remove(block)
-                blk_fmt = block.blockFormat()
-                blk_fmt.setIndent(0)
-                blk_fmt.setLeftMargin(0)
-                block_cursor.setBlockFormat(blk_fmt)
+                self._clear_block_qt_list_format(block, block_cursor)
             else:
-                # 先取消已有的 Qt 列表格式，清除缩进
-                existing_list = block.textList()
-                if existing_list:
-                    existing_list.remove(block)
-                blk_fmt = block.blockFormat()
-                blk_fmt.setIndent(0)
-                blk_fmt.setLeftMargin(0)
-                block_cursor.setBlockFormat(blk_fmt)
-                # 如果行首是短划线前缀，先删除
-                if block.text().startswith("- "):
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len("- ")
-                    )
-                    block_cursor.removeSelectedText()
-                # 如果行首是编号列表前缀，先删除
-                elif _is_numbered_block(block):
-                    import re
-                    m = re.match(r'^(\d+\.\s)', block.text())
-                    if m:
-                        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                        block_cursor.movePosition(
-                            QTextCursor.MoveOperation.NextCharacter,
-                            QTextCursor.MoveMode.KeepAnchor,
-                            len(m.group(1))
-                        )
-                        block_cursor.removeSelectedText()
-                # 如果行首是核对清单前缀，先删除并清除背景色
-                elif block.text().startswith("○ ") or block.text().startswith("● "):
-                    prefix = "○ " if block.text().startswith("○ ") else "● "
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len(prefix)
-                    )
-                    block_cursor.removeSelectedText()
-                    # 清除黄色背景
-                    clr_cursor = QTextCursor(block)
-                    clr_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    clr_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                                            QTextCursor.MoveMode.KeepAnchor)
-                    clr_fmt = QTextCharFormat()
-                    clr_fmt.setBackground(Qt.GlobalColor.transparent)
-                    clr_cursor.mergeCharFormat(clr_fmt)
-                # 如果行首已有 '• ' 前缀则不重复添加
-                if not _is_bullet_block(block):
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    # 插入 • 字符时将其颜色设为透明，避免原来的小圆点与自定义绘制的大圆点重叠
-                    transparent_fmt = QTextCharFormat()
-                    transparent_fmt.setForeground(QColor(0, 0, 0, 0))
-                    block_cursor.insertText(BULLET_PREFIX, transparent_fmt)
-                else:
-                    # 已有 • 前缀，确保其颜色为透明
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len(BULLET_PREFIX)
-                    )
-                    transparent_fmt = QTextCharFormat()
-                    transparent_fmt.setForeground(QColor(0, 0, 0, 0))
-                    block_cursor.mergeCharFormat(transparent_fmt)
+                # 清除 Qt 列表格式，删除其他列表前缀，再插入 • 前缀
+                self._clear_block_qt_list_format(block, block_cursor)
+                self._remove_block_list_prefix(block, block_cursor)
+                # 插入透明色前缀，由 paintEvent 绘制可见圆点
+                block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                transparent_fmt = QTextCharFormat()
+                transparent_fmt.setForeground(QColor(0, 0, 0, 0))
+                block_cursor.setCharFormat(transparent_fmt)
+                block_cursor.insertText(BULLET_PREFIX)
             if block == end_block:
                 break
             block = block.next()
@@ -3763,24 +3834,12 @@ class NoteEditor(QWidget):
 
     def toggle_dash_list(self):
         """切换短划线列表，支持多行选择，行首显示 '- ' 前缀"""
-        cursor = self.text_edit.textCursor()
-        doc = self.text_edit.document()
-
         DASH_PREFIX = "- "
 
         def _is_dash_block(blk):
             return blk.text().startswith(DASH_PREFIX)
 
-        # 确定操作范围：选区的起始块和结束块
-        if cursor.hasSelection():
-            start_pos = min(cursor.position(), cursor.anchor())
-            end_pos = max(cursor.position(), cursor.anchor())
-        else:
-            start_pos = cursor.position()
-            end_pos = cursor.position()
-
-        start_block = doc.findBlock(start_pos)
-        end_block = doc.findBlock(end_pos)
+        cursor, start_block, end_block = self._get_list_selection_range()
 
         # 判断选区内所有块是否都已经是短划线列表
         all_dash = True
@@ -3798,7 +3857,7 @@ class NoteEditor(QWidget):
         while block.isValid():
             block_cursor = QTextCursor(block)
             if all_dash:
-                # 取消短划线列表：删除行首的 "- " 前缀
+                # 取消：删除行首 "- " 前缀，清除 Qt 列表格式
                 block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
                 block_cursor.movePosition(
                     QTextCursor.MoveOperation.NextCharacter,
@@ -3806,62 +3865,11 @@ class NoteEditor(QWidget):
                     len(DASH_PREFIX)
                 )
                 block_cursor.removeSelectedText()
-                # 同时取消已有的 Qt 列表格式，并清除缩进
-                existing_list = block.textList()
-                if existing_list:
-                    existing_list.remove(block)
-                blk_fmt = block.blockFormat()
-                blk_fmt.setIndent(0)
-                blk_fmt.setLeftMargin(0)
-                block_cursor.setBlockFormat(blk_fmt)
+                self._clear_block_qt_list_format(block, block_cursor)
             else:
-                # 先取消已有的 Qt 列表格式，清除缩进
-                existing_list = block.textList()
-                if existing_list:
-                    existing_list.remove(block)
-                blk_fmt = block.blockFormat()
-                blk_fmt.setIndent(0)
-                blk_fmt.setLeftMargin(0)
-                block_cursor.setBlockFormat(blk_fmt)
-                # 如果行首是项目符号前缀，先删除
-                if block.text().startswith("• "):
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len("• ")
-                    )
-                    block_cursor.removeSelectedText()
-                # 如果行首是核对清单前缀，先删除并清除背景色
-                elif block.text().startswith("○ ") or block.text().startswith("● "):
-                    prefix = "○ " if block.text().startswith("○ ") else "● "
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len(prefix)
-                    )
-                    block_cursor.removeSelectedText()
-                    clr_cursor = QTextCursor(block)
-                    clr_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    clr_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                                            QTextCursor.MoveMode.KeepAnchor)
-                    clr_fmt = QTextCharFormat()
-                    clr_fmt.setBackground(Qt.GlobalColor.transparent)
-                    clr_cursor.mergeCharFormat(clr_fmt)
-                # 如果行首是编号列表前缀，先删除
-                elif not _is_dash_block(block):
-                    import re
-                    m = re.match(r'^(\d+\.\s)', block.text())
-                    if m:
-                        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                        block_cursor.movePosition(
-                            QTextCursor.MoveOperation.NextCharacter,
-                            QTextCursor.MoveMode.KeepAnchor,
-                            len(m.group(1))
-                        )
-                        block_cursor.removeSelectedText()
-                # 如果行首已有 "- " 前缀则不重复添加
+                # 清除 Qt 列表格式，删除其他列表前缀，再插入 - 前缀
+                self._clear_block_qt_list_format(block, block_cursor)
+                self._remove_block_list_prefix(block, block_cursor)
                 if not _is_dash_block(block):
                     block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
                     block_cursor.insertText(DASH_PREFIX)
@@ -3873,30 +3881,11 @@ class NoteEditor(QWidget):
     def toggle_numbered_list(self):
         """切换编号列表，支持多行选择，行首显示 '1. ' '2. ' 等自动编号前缀"""
         import re
-        cursor = self.text_edit.textCursor()
-        doc = self.text_edit.document()
-
-        BULLET_PREFIX = "\u2022 "  # • 
 
         def _is_numbered_block(blk):
             return bool(re.match(r'^\d+\.\s', blk.text()))
 
-        def _is_bullet_block(blk):
-            return blk.text().startswith(BULLET_PREFIX)
-
-        def _is_dash_block(blk):
-            return blk.text().startswith("- ")
-
-        # 确定操作范围
-        if cursor.hasSelection():
-            start_pos = min(cursor.position(), cursor.anchor())
-            end_pos = max(cursor.position(), cursor.anchor())
-        else:
-            start_pos = cursor.position()
-            end_pos = cursor.position()
-
-        start_block = doc.findBlock(start_pos)
-        end_block = doc.findBlock(end_pos)
+        cursor, start_block, end_block = self._get_list_selection_range()
 
         # 判断选区内所有块是否都已经是编号列表
         all_numbered = True
@@ -3917,14 +3906,13 @@ class NoteEditor(QWidget):
             if all_numbered:
                 # 取消编号列表：删除行首的 'N. ' 前缀
                 m = re.match(r'^(\d+\.\s)', block.text())
-                if m:
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len(m.group(1))
-                    )
-                    block_cursor.removeSelectedText()
+                block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                block_cursor.movePosition(
+                    QTextCursor.MoveOperation.NextCharacter,
+                    QTextCursor.MoveMode.KeepAnchor,
+                    len(m.group(1))
+                )
+                block_cursor.removeSelectedText()
                 # 取消已有的 Qt 列表格式，并清除缩进
                 existing_list = block.textList()
                 if existing_list:
@@ -3934,61 +3922,9 @@ class NoteEditor(QWidget):
                 blk_fmt.setLeftMargin(0)
                 block_cursor.setBlockFormat(blk_fmt)
             else:
-                # 先取消已有的 Qt 列表格式，清除缩进
-                existing_list = block.textList()
-                if existing_list:
-                    existing_list.remove(block)
-                blk_fmt = block.blockFormat()
-                blk_fmt.setIndent(0)
-                blk_fmt.setLeftMargin(0)
-                block_cursor.setBlockFormat(blk_fmt)
-                # 如果行首是项目符号前缀，先删除
-                if _is_bullet_block(block):
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len(BULLET_PREFIX)
-                    )
-                    block_cursor.removeSelectedText()
-                # 如果行首是短划线前缀，先删除
-                elif _is_dash_block(block):
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len("- ")
-                    )
-                    block_cursor.removeSelectedText()
-                # 如果行首是核对清单前缀，先删除并清除背景色
-                elif block.text().startswith("○ ") or block.text().startswith("● "):
-                    prefix = "○ " if block.text().startswith("○ ") else "● "
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len(prefix)
-                    )
-                    block_cursor.removeSelectedText()
-                    clr_cursor = QTextCursor(block)
-                    clr_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    clr_cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                                            QTextCursor.MoveMode.KeepAnchor)
-                    clr_fmt = QTextCharFormat()
-                    clr_fmt.setBackground(Qt.GlobalColor.transparent)
-                    clr_cursor.mergeCharFormat(clr_fmt)
-                # 如果行首已有编号前缀，先删除旧编号再插入新编号
-                elif _is_numbered_block(block):
-                    m = re.match(r'^(\d+\.\s)', block.text())
-                    if m:
-                        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                        block_cursor.movePosition(
-                            QTextCursor.MoveOperation.NextCharacter,
-                            QTextCursor.MoveMode.KeepAnchor,
-                            len(m.group(1))
-                        )
-                        block_cursor.removeSelectedText()
-                # 插入编号前缀
+                # 清除 Qt 列表格式，删除其他列表前缀，再插入编号前缀
+                self._clear_block_qt_list_format(block, block_cursor)
+                self._remove_block_list_prefix(block, block_cursor)
                 block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
                 block_cursor.insertText(f"{number}. ")
                 number += 1
@@ -3999,9 +3935,6 @@ class NoteEditor(QWidget):
 
     def toggle_checklist(self):
         """切换核对清单，支持多行选择，行首显示 '○ '（未选中）或 '● '（已选中，黄色背景）"""
-        cursor = self.text_edit.textCursor()
-        doc = self.text_edit.document()
-
         UNCHECKED = "○ "   # U+25CB 空心圆（未选中）
         CHECKED_CHAR = "● "  # U+25CF 实心圆（已选中，黄色背景）
 
@@ -4009,26 +3942,7 @@ class NoteEditor(QWidget):
             t = blk.text()
             return t.startswith(UNCHECKED) or t.startswith(CHECKED_CHAR)
 
-        def _is_bullet_block(blk):
-            return blk.text().startswith("\u2022 ")
-
-        def _is_dash_block(blk):
-            return blk.text().startswith("- ")
-
-        def _is_numbered_block(blk):
-            import re
-            return bool(re.match(r'^\d+\.\s', blk.text()))
-
-        # 确定操作范围
-        if cursor.hasSelection():
-            start_pos = min(cursor.position(), cursor.anchor())
-            end_pos = max(cursor.position(), cursor.anchor())
-        else:
-            start_pos = cursor.position()
-            end_pos = cursor.position()
-
-        start_block = doc.findBlock(start_pos)
-        end_block = doc.findBlock(end_pos)
+        cursor, start_block, end_block = self._get_list_selection_range()
 
         # 判断选区内所有块是否都已经是核对清单
         all_checklist = True
@@ -4046,60 +3960,19 @@ class NoteEditor(QWidget):
         while block.isValid():
             block_cursor = QTextCursor(block)
             if all_checklist:
-                # 取消核对清单：删除行首的圆圈前缀，并清除黄色背景
-                t = block.text()
-                if t.startswith(UNCHECKED) or t.startswith(CHECKED_CHAR):
-                    prefix = UNCHECKED if t.startswith(UNCHECKED) else CHECKED_CHAR
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len(prefix)
-                    )
-                    block_cursor.removeSelectedText()
-                # 清除整行的黄色背景
-                self._clear_checklist_highlight(block_cursor)
+                # 取消：删除行首圆圈前缀
+                prefix = UNCHECKED if block.text().startswith(UNCHECKED) else CHECKED_CHAR
+                block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                block_cursor.movePosition(
+                    QTextCursor.MoveOperation.NextCharacter,
+                    QTextCursor.MoveMode.KeepAnchor,
+                    len(prefix)
+                )
+                block_cursor.removeSelectedText()
             else:
-                # 先删除其他列表前缀
-                t = block.text()
-                if _is_bullet_block(block):
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len("\u2022 ")
-                    )
-                    block_cursor.removeSelectedText()
-                elif _is_dash_block(block):
-                    block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    block_cursor.movePosition(
-                        QTextCursor.MoveOperation.NextCharacter,
-                        QTextCursor.MoveMode.KeepAnchor,
-                        len("- ")
-                    )
-                    block_cursor.removeSelectedText()
-                elif _is_numbered_block(block):
-                    import re
-                    m = re.match(r'^(\d+\.\s)', block.text())
-                    if m:
-                        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                        block_cursor.movePosition(
-                            QTextCursor.MoveOperation.NextCharacter,
-                            QTextCursor.MoveMode.KeepAnchor,
-                            len(m.group(1))
-                        )
-                        block_cursor.removeSelectedText()
-                elif _is_checklist_block(block):
-                    # 已经是核对清单，跳过
-                    if block == end_block:
-                        break
-                    block = block.next()
-                    continue
-                # 取消已有的 Qt 列表格式
-                existing_list = block.textList()
-                if existing_list:
-                    existing_list.remove(block)
-                # 在行首插入未选中圆圈前缀（前景色透明，由paintEvent绘制圆圈图标）
+                self._clear_block_qt_list_format(block, block_cursor)
+                self._remove_block_list_prefix(block, block_cursor)
+                # 在行首插入未选中圆圈前缀（前景色透明，由 paintEvent 绘制圆圈图标）
                 block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
                 _invis_fmt = QTextCharFormat()
                 _invis_fmt.setForeground(QColor(0, 0, 0, 0))
@@ -4110,79 +3983,6 @@ class NoteEditor(QWidget):
                 break
             block = block.next()
         cursor.endEditBlock()
-
-    def _clear_checklist_highlight(self, block_cursor):
-        """清除一行内所有字符的黄色背景色"""
-        block = block_cursor.block()
-        c = QTextCursor(block)
-        c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-        c.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
-        fmt = QTextCharFormat()
-        fmt.setBackground(Qt.GlobalColor.transparent)
-        c.mergeCharFormat(fmt)
-
-    def _apply_checklist_invisible_format(self):
-        """扫描文档，将所有核对清单行首的圆圈字符设为透明前景色（由paintEvent绘制圆圈图标）"""
-        UNCHECKED = "○ "
-        CHECKED = "● "
-        doc = self.text_edit.document()
-        block = doc.begin()
-        invis_fmt = QTextCharFormat()
-        invis_fmt.setForeground(QColor(0, 0, 0, 0))
-        invis_fmt.setBackground(Qt.GlobalColor.transparent)
-        while block.isValid():
-            t = block.text()
-            prefix = None
-            if t.startswith(UNCHECKED):
-                prefix = UNCHECKED
-            elif t.startswith(CHECKED):
-                prefix = CHECKED
-            if prefix:
-                c = QTextCursor(block)
-                c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                c.movePosition(QTextCursor.MoveOperation.NextCharacter,
-                               QTextCursor.MoveMode.KeepAnchor, len(prefix))
-                c.mergeCharFormat(invis_fmt)
-            block = block.next()
-
-
-        """切换单个核对清单项的选中状态（点击圆圈时调用）"""
-        UNCHECKED = "○ "
-        CHECKED = "● "
-        t = block.text()
-        cursor = QTextCursor(block)
-
-        # 透明格式（圆圈字符不可见，由paintEvent绘制）
-        invis_fmt = QTextCharFormat()
-        invis_fmt.setForeground(QColor(0, 0, 0, 0))
-        invis_fmt.setBackground(Qt.GlobalColor.transparent)
-
-        if t.startswith(UNCHECKED):
-            # 切换为选中：替换○为●
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.movePosition(
-                QTextCursor.MoveOperation.NextCharacter,
-                QTextCursor.MoveMode.KeepAnchor,
-                len(UNCHECKED)
-            )
-            cursor.removeSelectedText()
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.setCharFormat(invis_fmt)
-            cursor.insertText(CHECKED)
-        elif t.startswith(CHECKED):
-            # 切换为未选中：替换●为○
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.movePosition(
-                QTextCursor.MoveOperation.NextCharacter,
-                QTextCursor.MoveMode.KeepAnchor,
-                len(CHECKED)
-            )
-            cursor.removeSelectedText()
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.setCharFormat(invis_fmt)
-            cursor.insertText(UNCHECKED)
-        self.text_edit.setTextCursor(cursor)
-        self.text_edit.viewport().update()
 
     def update_format_menu_state(self):
         """更新格式菜单的状态（显示当前格式）"""
