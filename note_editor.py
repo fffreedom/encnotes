@@ -9,8 +9,10 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QTextBrowser,
     QSplitter, QToolBar, QWidget, QFileDialog, QMessageBox,
     QInputDialog, QMenu, QTableWidget, QTableWidgetItem,
-    QSpinBox, QDialogButtonBox, QColorDialog, QToolButton
+    QSpinBox, QDialogButtonBox, QColorDialog, QToolButton, QWidgetAction,
+    QProxyStyle, QStyleOptionMenuItem
 )
+from PyQt6.QtWidgets import QStyle
 from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import (
     QTextCursor, QFont, QTextCharFormat, QColor, QAction,
@@ -3054,22 +3056,46 @@ class NoteEditor(QWidget):
         _empty_pixmap.fill(Qt.GlobalColor.transparent)
         _empty_icon = QIcon(_empty_pixmap)
 
-        # 标题样式（平铺在格式菜单下）
-        self.title_action = QAction(_empty_icon, "标题", self)
-        self.title_action.triggered.connect(lambda: self.apply_heading(1))
+        # 标题样式：用普通 QAction + QProxyStyle 自定义字体绘制，文字位置完全由Qt菜单系统控制
+        _heading_font_map = {}  # action -> (font_size, bold)
+
+        class HeadingMenuStyle(QProxyStyle):
+            def drawControl(self, element, option, painter, widget=None):
+                if element == QStyle.ControlElement.CE_MenuItem and isinstance(option, QStyleOptionMenuItem):
+                    action_font = _heading_font_map.get(option.text)
+                    if action_font:
+                        font_size, bold = action_font
+                        new_option = QStyleOptionMenuItem(option)
+                        f = QFont(option.font)
+                        f.setPointSize(font_size)
+                        f.setBold(bold)
+                        new_option.font = f
+                        super().drawControl(element, new_option, painter, widget)
+                        return
+                super().drawControl(element, option, painter, widget)
+
+        _heading_style = HeadingMenuStyle(format_menu.style())
+        format_menu.setStyle(_heading_style)
+
+        def _make_heading_action(text, font_size, bold, callback):
+            """创建以对应格式展示文字的菜单项（普通QAction，字体由HeadingMenuStyle控制）"""
+            action = QAction(_empty_icon, text, self)
+            _heading_font_map[text] = (font_size, bold)
+            action.triggered.connect(callback)
+            action._heading_text = text
+            return action
+
+        self.title_action = _make_heading_action("标题", 22, True, lambda: self.apply_heading(1))
         format_menu.addAction(self.title_action)
 
-        self.heading_action = QAction(_empty_icon, "小标题", self)
-        self.heading_action.triggered.connect(lambda: self.apply_heading(2))
+        self.heading_action = _make_heading_action("小标题", 18, True, lambda: self.apply_heading(2))
         format_menu.addAction(self.heading_action)
 
-        self.subheading_action = QAction(_empty_icon, "副标题", self)
-        self.subheading_action.triggered.connect(lambda: self.apply_heading(3))
+        self.subheading_action = _make_heading_action("副标题", 15, True, lambda: self.apply_heading(3))
         format_menu.addAction(self.subheading_action)
 
         # 正文
-        body_action = QAction("正文", self)
-        body_action.triggered.connect(self.apply_body_text)
+        body_action = _make_heading_action("正文", 13, False, self.apply_body_text)
         format_menu.addAction(body_action)
 
         format_menu.addSeparator()
