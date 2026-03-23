@@ -101,11 +101,14 @@ def main():
     window.show()
     
     exit_code = app.exec()
-    # 显式销毁 window，确保 Qt 对象在 QApplication 存活期间被正确清理。
-    # 若依赖 Python GC 在 atexit 阶段销毁，Qt 内部事件（如 QLayout 析构触发的 sendEvent）
-    # 会在 QApplication 退出后仍被 QMenuBar::eventFilter 处理，导致访问空指针崩溃（SIGSEGV）。
+    # 显式销毁 window，确保子窗口在 QApplication 存活期间完成清理。
     del window
-    sys.exit(exit_code)
+    # 使用 os._exit 强制退出，完全跳过 Python GC / atexit 阶段。
+    # 不能手动 del app：QApplication 析构时 macOS 平台插件（NSEventThread 等）
+    # 可能仍在运行，会触发空指针崩溃（SIGSEGV）。
+    # os._exit 让进程直接终止，QApplication 无需析构，彻底规避此问题。
+    import os
+    os._exit(exit_code)
 
 
 if __name__ == "__main__":

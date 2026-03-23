@@ -1444,8 +1444,8 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.load_folders(True)  # 加载文件夹并恢复状态
 
-        # 设置自动同步定时器（每5分钟）
-        self.sync_timer = QTimer()
+        # 设置自动同步定时器（每5分钟）确保 del window 时 sync_timer 随 window 一起被 Qt 对象树正确销毁，引用计数归零
+        self.sync_timer = QTimer(self)
         self.sync_timer.timeout.connect(self.auto_sync)
         self.sync_timer.start(300000)  # 5分钟
 
@@ -5793,5 +5793,11 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         
-        # 7. 接受关闭事件
+        # 7. 停止所有定时器，避免 Qt 对象析构时仍有活跃定时器持有引用
+        try:
+            self.sync_timer.stop()
+        except Exception:
+            pass
+        
+        # 8. 接受关闭事件
         event.accept()
