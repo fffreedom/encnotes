@@ -100,7 +100,12 @@ def main():
     window = MainWindow()
     window.show()
     
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    # 显式销毁 window，确保 Qt 对象在 QApplication 存活期间被正确清理。
+    # 若依赖 Python GC 在 atexit 阶段销毁，Qt 内部事件（如 QLayout 析构触发的 sendEvent）
+    # 会在 QApplication 退出后仍被 QMenuBar::eventFilter 处理，导致访问空指针崩溃（SIGSEGV）。
+    del window
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

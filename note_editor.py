@@ -2465,6 +2465,28 @@ class PasteImageTextEdit(QTextEdit):
 
         return False
 
+    def _reset_char_format_after_bullet_prefix(self):
+        """删除键处理后，检查光标是否紧跟在 BULLET_PREFIX 之后。
+        若是，则重置字符格式为正常前景色，避免后续输入的文字继承透明色而不可见。
+        """
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            return
+        block = cursor.block()
+        BULLET_PREFIX = "\u2022 "  # • 
+        block_text = block.text()
+        if not block_text.startswith(BULLET_PREFIX):
+            return
+        block_start = block.position()
+        pos_in_block = cursor.position() - block_start
+        prefix_len = len(BULLET_PREFIX)
+        if pos_in_block == prefix_len:
+            # 光标紧跟在 • 前缀之后，重置字符格式为正常前景色
+            fmt = QTextCharFormat(cursor.charFormat())
+            fmt.setForeground(self.palette().color(self.foregroundRole()))
+            self.setCurrentCharFormat(fmt)
+            logger.debug("[_reset_char_format_after_bullet_prefix] 重置光标字符格式前景色")
+
     def _handle_return_key_press(self, event) -> bool:
         """处理回车键：在列表行尾按回车时，新行自动延续相同的列表格式。
         若当前行只有列表前缀而无正文内容，则退出列表格式（清除前缀）。
@@ -2582,6 +2604,10 @@ class PasteImageTextEdit(QTextEdit):
         # 若是，则重置字符格式为正常前景色，避免后续输入的文字继承透明色而不可见
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self._reset_char_format_after_bullet_prefix()
+            # super().keyPressEvent 删除内容后，Qt 内部会重新设置 currentCharFormat，
+            # 可能覆盖 cursorPositionChanged 里设置的标题格式。
+            # 在此再次调用 update_title_and_input_format，确保标题行全选删除后光标格式正确。
+            self.update_title_and_input_format()
         # 按键后重置光标闪烁定时器，确保光标从按键时刻重新开始完整的显示周期，
         # 避免因定时器相位不同步导致光标持续可见不闪烁的问题
         self._start_cursor_blink()
