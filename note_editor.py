@@ -369,44 +369,41 @@ class PasteImageTextEdit(QTextEdit):
 
         # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
         if block_text == "":
-            self.blockSignals(True)
-            block_fmt = QTextBlockFormat()
-            # 根据字符格式的字体计算行高，使用 MinimumHeight 避免裁剪字符
+            # 立即设置后续输入字符格式（不修改文档，不会影响回车操作）
+            self.setCurrentCharFormat(fmt)
+            logger.debug(f"[set_input_format] >>> 调用 setCurrentCharFormat({format_name}格式)，"
+                         f"currentCharFormat font size={self.currentCharFormat().font().pointSize()}pt")
+
+            # setBlockFormat 和 setBlockCharFormat 会修改文档，如果在 cursorPositionChanged 信号处理函数里
+            # 同步调用，会导致 Qt 内部撤销正在进行的回车操作（换行丢失）。
+            # 使用 QTimer.singleShot(0) 延迟到当前事件处理完成后再执行，避免干扰回车操作。
+            from PyQt6.QtCore import QTimer
             from PyQt6.QtGui import QFontMetrics
             _font = fmt.font()
             if _font.pointSize() <= 0 and _font.pixelSize() <= 0:
                 _font = self.document().defaultFont()
             _line_height = QFontMetrics(_font).height()
-            block_fmt.setLineHeight(_line_height, QTextBlockFormat.LineHeightTypes.MinimumHeight.value)
-            # # 设置光标所在block的段落级别的属性，如行高、段落对齐、缩间、段前/段后间距等，不影响后续输入字符格式，
-            # # 参数类型为QTextBlockFormat，注意这个设置与光标的高度无关，光标的高度由字符格式决定，通过cursor_rect获取
-            logger.debug(f"[set_input_format] >>> 调用 setBlockFormat 前，设置的行高值: _line_height={_line_height}, blockCharFormat font size={current_cursor.blockCharFormat().font().pointSize()}pt")
-            current_cursor.setBlockFormat(block_fmt)
-            # 设置光标所在block的所有字符格式，包括已有字符和后续输入字符的格式，
-            # 如果设置的字符格式超出了段落行高，行高使用FixedHeight设置时，会导致字符被裁剪；
-            # 行高使用MinimumHeight设置时，行高会自动扩展，不裁剪
-            # 调用current_cursor.setBlockCharFormat(fmt)会导到光标丢失，需要重绘光标
-            # 此步骤对标题行时不是必须的，因为后面的setCurrentCharFormat会将标题行的字符格式设置成标题格式，并放到段格格式里，
-            # paintEvent获取的行高是正确的。但从标题行进行入正文行时，block char format会继承标题行的字符格式，
-            # 而setBlockFormat只负责设置段落级别的属性，比如行高等，字符格式需要通过setBlockCharFormat设置。
-            # 这儿设置的block级别的字符格式和后面setCurrentCharFormat设置的输入字符格式不冲突，当还没有输入内容时，
-            # 没有单独的span来承载设置的后续输入的字符格式，这时候paintEvent获取行高时是使用block级别的字符格式
-            current_cursor.setBlockCharFormat(fmt)
-            # 设置光标选中的文本格式，如果没有选中文本，则设置光标位置后续续入的字符格式
-            # current_cursor.setCharFormat(fmt)
-            # current_cursor.insertText("\u200b")
-            # 这儿的设置不能省略，如果不设置的话，前面current_cursor相关的设置在后面的输入不会生效
-            logger.debug(f"[set_input_format] >>> 调用 setTextCursor 前，currentCharFormat font size={self.currentCharFormat().font().pointSize()}pt")
-            self.setTextCursor(current_cursor)
-            logger.debug(f"[set_input_format] >>> 调用 setTextCursor 后，currentCharFormat font size={self.currentCharFormat().font().pointSize()}pt")
-            # 设置光标后续输入字符的格式，参数为QTextCharFormat，必须放在self.setTextCursor(current_cursor)之后，
-            # 因为在前面设置会被setTextCursor覆盖
-            self.setCurrentCharFormat(fmt)
-            logger.debug(f"[set_input_format] >>> 调用 setCurrentCharFormat({format_name}格式) 后，currentCharFormat font size={self.currentCharFormat().font().pointSize()}pt")
-            self.blockSignals(False)
-            logger.debug(f"[set_input_format] {format_name}行为空，设置光标格式为{format_name}格式，"
+            _fmt_copy = QTextCharFormat(fmt)
+            _block_number = current_block.blockNumber()
+
+            def _apply_block_format():
+                c = self.textCursor()
+                b = c.block()
+                # 只在光标仍在同一块且块仍为空时才应用格式，避免误操作
+                if b.blockNumber() == _block_number and b.text() == "":
+                    block_fmt = QTextBlockFormat()
+                    block_fmt.setLineHeight(_line_height, QTextBlockFormat.LineHeightTypes.MinimumHeight.value)
+                    logger.debug(f"[set_input_format] 延迟执行 setBlockFormat，_line_height={_line_height}")
+                    self.blockSignals(True)
+                    c.setBlockFormat(block_fmt)
+                    c.setBlockCharFormat(_fmt_copy)
+                    self.setTextCursor(c)
+                    self.setCurrentCharFormat(_fmt_copy)
+                    self.blockSignals(False)
+
+            QTimer.singleShot(0, _apply_block_format)
+            logger.debug(f"[set_input_format] {format_name}行为空，已设置输入格式，延迟执行 setBlockFormat，"
                          f"block_text={repr(block_text)}")
-            logger.debug(f"[set_input_format] 设置格式后html内容: {self.toHtml()}")
         else:
             logger.debug(f"[set_input_format] {format_name}行不为空，不需要真正设置格式， "
                          f"block_text={repr(block_text[:50])}")
