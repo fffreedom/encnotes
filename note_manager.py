@@ -277,6 +277,8 @@ class NoteManager:
         
     def get_note(self, note_id: str) -> Optional[Dict]:
         """获取笔记"""
+        import traceback
+        # logger.debug(f"[get_note] 调用堆栈:\n{''.join(traceback.format_stack()[:-1])}")
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM ZNOTE WHERE ZIDENTIFIER = ?
@@ -289,7 +291,6 @@ class NoteManager:
             logger.info(f"[get_note] 读取笔记成功: note_id={note_id}, title={note_dict.get('title', '')}, "
                         f"content_length={content_length}, cursor_position={note_dict.get('cursor_position', 0)}, "
                         f"content={note_dict.get('content', '')}")
-            logger.debug(f"[get_note] 内容前100字符: {note_dict.get('content', '')[:100]}")
             return note_dict
         else:
             logger.warning(f"[get_note] 笔记不存在: note_id={note_id}")
@@ -308,37 +309,37 @@ class NoteManager:
         logger.info(f"[update_note] 开始更新笔记: note_id={note_id}, title={title}, "
                     f"content_length={len(content) if content else 0}, cursor_position={cursor_position}")
         
-        cursor = self.conn.cursor()
+        # 动态构建 SET 子句，只更新传入的字段
+        fields = []
+        params = []
         
-        # 获取当前笔记
-        note = self.get_note(note_id)
-        if not note:
-            logger.warning(f"[update_note] 笔记不存在: note_id={note_id}")
-            return
-            
-        # 更新字段
         if title is not None:
-            cursor.execute('''
-                UPDATE ZNOTE SET ZTITLE = ? WHERE ZIDENTIFIER = ?
-            ''', (title, note_id))
-            
+            fields.append("ZTITLE = ?")
+            params.append(title)
+        
         if content is not None:
-            # 加密内容
-            encrypted_content = self._encrypt_content(content)
-            cursor.execute('''
-                UPDATE ZNOTE SET ZCONTENT = ? WHERE ZIDENTIFIER = ?
-            ''', (encrypted_content, note_id))
+            fields.append("ZCONTENT = ?")
+            params.append(self._encrypt_content(content))
         
         if cursor_position is not None:
-            cursor.execute('''
-                UPDATE ZNOTE SET ZCURSORPOSITION = ? WHERE ZIDENTIFIER = ?
-            ''', (cursor_position, note_id))
-            
-        # 更新修改时间
-        cocoa_time = self._timestamp_to_cocoa(datetime.now())
-        cursor.execute('''
-            UPDATE ZNOTE SET ZMODIFICATIONDATE = ? WHERE ZIDENTIFIER = ?
-        ''', (cocoa_time, note_id))
+            fields.append("ZCURSORPOSITION = ?")
+            params.append(cursor_position)
+        
+        # 始终更新修改时间
+        fields.append("ZMODIFICATIONDATE = ?")
+        params.append(self._timestamp_to_cocoa(datetime.now()))
+        
+        params.append(note_id)
+        
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"UPDATE ZNOTE SET {', '.join(fields)} WHERE ZIDENTIFIER = ?",
+            params
+        )
+        
+        if cursor.rowcount == 0:
+            logger.warning(f"[update_note] 笔记不存在: note_id={note_id}")
+            return
         
         self.conn.commit()
         logger.info(f"[update_note] 笔记更新完成: note_id={note_id}")

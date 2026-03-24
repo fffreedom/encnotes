@@ -5092,6 +5092,7 @@ class MainWindow(QMainWindow):
 
     def on_text_changed(self):
         """文本变化事件"""
+        logger.debug("[on_text_changed] 文本变化事件触发")
         if self._get_current_note_id():
             # 自动保存
             self.save_current_note()
@@ -5177,6 +5178,7 @@ class MainWindow(QMainWindow):
             str: 格式化的时间字符串（YYYY/MM/DD）
         """
         from datetime import datetime
+        logger.debug(f"[_get_note_time_string] 获取笔记时间: note_id={note_id}")
         try:
             note_obj = self.note_manager.get_note(note_id)
             updated_at = datetime.fromisoformat(note_obj.get('updated_at')) if note_obj else None
@@ -5216,6 +5218,7 @@ class MainWindow(QMainWindow):
             plain_text: 笔记的纯文本内容
             title: 笔记标题
         """
+        logger.debug(f"[_update_note_list_item_preview] 更新预览: title={title}")
         try:
             preview_text = self._extract_preview_text(plain_text, title)
             time_str = self._get_note_time_string(self._get_current_note_id())
@@ -5253,6 +5256,7 @@ class MainWindow(QMainWindow):
             title: 笔记标题
             plain_text: 笔记的纯文本内容
         """
+        logger.debug(f"[_update_note_list_display] 更新列表显示: title={title}")
         item, widget, layout = self._find_note_list_item_by_id(self._get_current_note_id())
         if layout:
             # 更新标题
@@ -5267,11 +5271,7 @@ class MainWindow(QMainWindow):
             note_id: 要保存的笔记ID，如果为None则使用 _get_current_note_id()
                     这个参数用于解决时序问题，例如在切换笔记时需要保存之前的笔记
         """
-        # 记录调用栈，用于排查调用源
-        # import traceback
-        # stack_trace = ''.join(traceback.format_stack()[:-1])  # 排除当前函数
-        # logger.debug(f"[save_current_note] 🔍 调用栈追踪:\n{stack_trace}")
-        
+        logger.debug(f"[save_current_note] 开始执行, note_id={note_id}")
         # 如果编辑器还未初始化（启动阶段），不保存
         if not self._editor_initialized:
             logger.debug("[save_current_note] 编辑器未初始化，跳过保存")

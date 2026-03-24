@@ -291,7 +291,7 @@ class PasteImageTextEdit(QTextEdit):
     def _on_cursor_blink(self):
         """光标闪烁定时器回调，切换显示/隐藏状态并触发重绘"""
         self._cursor_blink_visible = not self._cursor_blink_visible
-        logger.debug(f"[cursor_blink_timer] 定时器触发，切换状态 -> _cursor_blink_visible={self._cursor_blink_visible}")
+        # logger.debug(f"[cursor_blink_timer] 定时器触发，切换状态 -> _cursor_blink_visible={self._cursor_blink_visible}")
         self.viewport().update()
 
     def _start_cursor_blink(self):
@@ -389,17 +389,27 @@ class PasteImageTextEdit(QTextEdit):
             def _apply_block_format():
                 c = self.textCursor()
                 b = c.block()
+                doc_block_count = self.document().blockCount()
+                logger.debug(f"[_apply_block_format] 延迟回调触发: 当前block_number={b.blockNumber()}, "
+                             f"期望block_number={_block_number}, block_text={repr(b.text())}, "
+                             f"文档总行数={doc_block_count}, cursor_pos={c.position()}")
                 # 只在光标仍在同一块且块仍为空时才应用格式，避免误操作
                 if b.blockNumber() == _block_number and b.text() == "":
                     block_fmt = QTextBlockFormat()
                     block_fmt.setLineHeight(_line_height, QTextBlockFormat.LineHeightTypes.MinimumHeight.value)
-                    logger.debug(f"[set_input_format] 延迟执行 setBlockFormat，_line_height={_line_height}")
+                    logger.debug(f"[_apply_block_format] 条件满足，执行 setBlockFormat，_line_height={_line_height}")
                     self.blockSignals(True)
                     c.setBlockFormat(block_fmt)
                     c.setBlockCharFormat(_fmt_copy)
                     self.setTextCursor(c)
                     self.setCurrentCharFormat(_fmt_copy)
                     self.blockSignals(False)
+                    logger.debug(f"[_apply_block_format] 执行完毕，文档总行数={self.document().blockCount()}, "
+                                 f"cursor_pos={self.textCursor().position()}")
+                else:
+                    logger.debug(f"[_apply_block_format] 条件不满足，跳过格式设置: "
+                                 f"block_number={b.blockNumber()} vs {_block_number}, "
+                                 f"block_text={repr(b.text())}, 文档总行数={doc_block_count}")
 
             QTimer.singleShot(0, _apply_block_format)
             logger.debug(f"[set_input_format] {format_name}行为空，已设置输入格式，延迟执行 setBlockFormat，"
@@ -821,9 +831,9 @@ class PasteImageTextEdit(QTextEdit):
             fm = QFontMetrics(font)
             font_height = fm.height()
             line_height = cursor_rect.height()
-            logger.debug(f"[paintEvent] font={font.family()} size={font.pointSize()}pt "
-                         f"pixelSize={font.pixelSize()}px, font_height={font_height}, "
-                         f"line_height={line_height}")
+            # logger.debug(f"[paintEvent] font={font.family()} size={font.pointSize()}pt "
+            #              f"pixelSize={font.pixelSize()}px, font_height={font_height}, "
+            #              f"line_height={line_height}")
             # 行内容为空时，光标高度可能因为还没有输入字符导致比要输入的字符格式小，所以要按字符格式大小重绘
             if font_height > line_height:
                 # 大光标：顶部对齐，向下延伸 font_height
@@ -839,10 +849,10 @@ class PasteImageTextEdit(QTextEdit):
             fm = QFontMetrics(font)
             font_height = fm.height()
             line_height = cursor_rect.height()
-            print(f"[cursor] font_height={font_height}, line_height={line_height}, "
-                  f"cursor_rect={cursor_rect.x()},{cursor_rect.y()},{cursor_rect.width()},{cursor_rect.height()}, "
-                  f"cursor_bottom={cursor_rect.bottom()}, font_descent={fm.descent()}, "
-                  f"fm_ascent={fm.ascent()}, fm_height={fm.height()}")
+            # logger.debug(f"[cursor] font_height={font_height}, line_height={line_height}, "
+            #       f"cursor_rect={cursor_rect.x()},{cursor_rect.y()},{cursor_rect.width()},{cursor_rect.height()}, "
+            #       f"cursor_bottom={cursor_rect.bottom()}, font_descent={fm.descent()}, "
+            #       f"fm_ascent={fm.ascent()}, fm_height={fm.height()}")
             if font_height < line_height:
                 # 光标字体比行高小：基于文字基线居中，使光标中心与文字中心对齐
                 # 文字基线 = cursor_rect.bottom() - fm.descent()
@@ -868,9 +878,9 @@ class PasteImageTextEdit(QTextEdit):
         cursor_rect, draw_height, draw_top = cursor_draw_info
         cursor_color = self.palette().color(self.palette().ColorRole.Text)
         painter = QPainter(self.viewport())
-        logger.debug(f"[_paint_custom_cursor] _cursor_blink_visible={self._cursor_blink_visible}，{'绘制' if self._cursor_blink_visible else '跳过'}光标")
+        # logger.debug(f"[_paint_custom_cursor] _cursor_blink_visible={self._cursor_blink_visible}，{'绘制' if self._cursor_blink_visible else '跳过'}光标")
         if self._cursor_blink_visible:
-            logger.debug(f"[paintEvent] 绘制光标: left={cursor_rect.left()}, top={draw_top}, height={draw_height}")
+            # logger.debug(f"[paintEvent] 绘制光标: left={cursor_rect.left()}, top={draw_top}, height={draw_height}")
             painter.fillRect(cursor_rect.left(), draw_top, 1, draw_height, cursor_color)
         painter.end()
 
@@ -2528,6 +2538,9 @@ class PasteImageTextEdit(QTextEdit):
                 list_type = "numbered"
                 current_number = int(m.group(1))
             else:
+                logger.debug(f"[_handle_return_key_press] 非列表行，返回False交给默认处理: "
+                             f"block_number={block.blockNumber()}, block_text={repr(block_text[:50])}, "
+                             f"文档总行数={self.document().blockCount()}")
                 return False  # 不是列表行，不处理
 
         content_after_prefix = block_text[prefix_len:]
@@ -2591,6 +2604,10 @@ class PasteImageTextEdit(QTextEdit):
                 return
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             # 处理列表行回车：自动延续列表格式
+            _pre_block_count = self.document().blockCount()
+            _pre_cursor = self.textCursor()
+            logger.debug(f"[keyPressEvent] 回车键按下: 回车前文档总行数={_pre_block_count}, "
+                         f"cursor_pos={_pre_cursor.position()}, block_number={_pre_cursor.block().blockNumber()}")
             if self._handle_return_key_press(event):
                 self._start_cursor_blink()
                 return
@@ -2604,6 +2621,12 @@ class PasteImageTextEdit(QTextEdit):
         # 从而调用update_title_and_input_format进行格式化处理
         logger.debug("[keyPressEvent] 调用父类方法处理按键事件")
         super().keyPressEvent(event)
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            _post_block_count = self.document().blockCount()
+            _post_cursor = self.textCursor()
+            logger.debug(f"[keyPressEvent] 回车键处理完毕: 回车后文档总行数={_post_block_count}, "
+                         f"cursor_pos={_post_cursor.position()}, block_number={_post_cursor.block().blockNumber()}, "
+                         f"行数变化={_post_block_count - _pre_block_count}")
         # 删除键处理后，检查光标是否紧跟在 BULLET_PREFIX 之后（即删除内容后光标回到 • 后面）
         # 若是，则重置字符格式为正常前景色，避免后续输入的文字继承透明色而不可见
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
