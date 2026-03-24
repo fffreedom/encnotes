@@ -796,6 +796,10 @@ class PasteImageTextEdit(QTextEdit):
         if not self.hasFocus() or self.isReadOnly():
             return None
 
+        # 表格选中时不绘制光标
+        if self.selected_table:
+            return None
+
         cursor = self.textCursor()
         if cursor.hasSelection():
             return None
@@ -2152,7 +2156,7 @@ class PasteImageTextEdit(QTextEdit):
             self.selected_table = None
             self.selected_table_cursor = None
             self.viewport().update()
-        # 恢复自定义光标闪烁（复用_restore_cursor_visibility避免重复代码）
+        # 恢复光标显示
         self._restore_cursor_visibility()
     
     def _log_attachment_delete_before(self, doc, del_key, current_cursor, attachment_sel, marked_span):
