@@ -2627,6 +2627,13 @@ class PasteImageTextEdit(QTextEdit):
             logger.debug(f"[keyPressEvent] 回车键处理完毕: 回车后文档总行数={_post_block_count}, "
                          f"cursor_pos={_post_cursor.position()}, block_number={_post_cursor.block().blockNumber()}, "
                          f"行数变化={_post_block_count - _pre_block_count}")
+            # 如果回车后行数没有增加，说明 Qt 只清除了段落格式而没有新增段落（通常发生在有自定义
+            # line-height 的空行上按回车时）。此时手动插入换行，确保回车操作正常生效。
+            if _post_block_count == _pre_block_count:
+                logger.debug("[keyPressEvent] 行数未增加，手动插入换行")
+                cursor = self.textCursor()
+                cursor.insertBlock()
+                self.setTextCursor(cursor)
         # 删除键处理后，检查光标是否紧跟在 BULLET_PREFIX 之后（即删除内容后光标回到 • 后面）
         # 若是，则重置字符格式为正常前景色，避免后续输入的文字继承透明色而不可见
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
