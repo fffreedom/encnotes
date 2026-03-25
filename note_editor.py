@@ -2367,17 +2367,36 @@ class PasteImageTextEdit(QTextEdit):
         event.accept()
         return True
 
+    def _collect_all_tables(self, frame):
+        """递归收集指定 frame 下所有的表格（包括嵌套表格）
+
+        Args:
+            frame: 起始 QTextFrame
+
+        Returns:
+            list: 所有找到的表格列表
+        """
+        tables = []
+        for child_frame in frame.childFrames():
+            # 如果有cellAt方法，说明这个frame本身是个表格
+            if hasattr(child_frame, 'cellAt'):
+                # 是表格
+                tables.append(child_frame)
+                # 继续递归查找表格内的嵌套表格
+                tables.extend(self._collect_all_tables(child_frame))
+            else:
+                tables.extend(self._collect_all_tables(child_frame))
+        return tables
+
     def _handle_table_selection(self, event, cursor_pos):
         """处理表格选中（第一次按删除键）
 
         返回：True 表示已处理，False 表示未处理
         """
-        frame = self.document().rootFrame()
-        for child_frame in frame.childFrames():
-            table = child_frame
-            if not hasattr(table, 'firstPosition'):
-                continue
+        # 递归收集文档中所有表格（包括嵌套在单元格内的表格）
+        all_tables = self._collect_all_tables(self.document().rootFrame())
 
+        for table in all_tables:
             table_start = table.firstPosition()
             table_end = table.lastPosition()
 
