@@ -285,6 +285,8 @@ class PasteImageTextEdit(QTextEdit):
         self._cursor_blink_visible = True  # 当前闪烁状态：True=显示，False=隐藏
         self._cursor_blink_timer = QTimer(self)
         self._cursor_blink_timer.timeout.connect(self._on_cursor_blink)
+        # 手动设置格式后记录目标字号（pt），用于下一次光标绘制时使用正确高度，绘制后清除
+        self._manual_format_pt = 0
         # 隐藏 Qt 原生光标，由自己完全接管绘制
         self.setCursorWidth(0)
 
@@ -840,29 +842,33 @@ class PasteImageTextEdit(QTextEdit):
                 cursor_rect.setBottom(cursor_rect.top() + font_height - 1)
             return cursor_rect, font_height, cursor_rect.top()
         else:
-            # 有文字的行：根据光标位置的字符格式来决定光标高度
-            # 避免行内有大字体时，光标在正文格式字符旁边也显示为大字体高度
-            fmt = self.currentCharFormat()
-            font = fmt.font()
-            if font.pointSize() <= 0 and font.pixelSize() <= 0:
-                font = self.document().defaultFont()
+            # 有文字的行：
+            # - 正常移动光标时，使用 currentCharFormat（跟随光标左侧字符格式）
+            # - 手动设置格式后（_manual_format_pt > 0），使用记录的目标字号，绘制后清除标志
+            if self._manual_format_pt > 0:
+                # 手动设置格式场景：使用目标字号构造字体
+                font = QFont(self.document().defaultFont())
+                font.setPointSize(self._manual_format_pt)
+                self._manual_format_pt = 0  # 消费后立即清除，下次移动光标恢复正常逻辑
+            else:
+                # 正常移动光标场景：跟随光标左侧字符格式
+                fmt = self.currentCharFormat()
+                font = fmt.font()
+                if font.pointSize() <= 0 and font.pixelSize() <= 0:
+                    font = self.document().defaultFont()
+
             fm = QFontMetrics(font)
             font_height = fm.height()
             line_height = cursor_rect.height()
-            # logger.debug(f"[cursor] font_height={font_height}, line_height={line_height}, "
-            #       f"cursor_rect={cursor_rect.x()},{cursor_rect.y()},{cursor_rect.width()},{cursor_rect.height()}, "
-            #       f"cursor_bottom={cursor_rect.bottom()}, font_descent={fm.descent()}, "
-            #       f"fm_ascent={fm.ascent()}, fm_height={fm.height()}")
             if font_height < line_height:
                 # 光标字体比行高小：基于文字基线居中，使光标中心与文字中心对齐
-                # 文字基线 = cursor_rect.bottom() - fm.descent()
-                # 文字中心 = 基线 - fm.ascent() / 2
-                # 令光标中心 = 文字中心：draw_top = 文字中心 - font_height / 2
                 draw_top = cursor_rect.bottom() - fm.descent() - fm.ascent() // 2 - font_height // 2
-                # draw_top = cursor_rect.bottom() - (cursor_rect.height() - fm.lineSpacing()) // 2 - fm.height()
-                # draw_top = cursor_rect.bottom() - (cursor_rect.height() - fm.lineSpacing()) // 2 - fm.height()
                 return cursor_rect, font_height, draw_top
-            return cursor_rect, cursor_rect.height(), cursor_rect.top()
+            elif font_height > line_height:
+                # 光标字体比行高大（如手动设置标题格式但行内容还是正文行高）：垂直居中于当前行
+                draw_top = cursor_rect.top() + (line_height - font_height) // 2
+                return cursor_rect, font_height, draw_top
+            return cursor_rect, font_height, cursor_rect.top()
 
     def _paint_custom_cursor(self, cursor_draw_info):
         """绘制自定义光标
@@ -2557,6 +2563,39 @@ class PasteImageTextEdit(QTextEdit):
                 list_type = "numbered"
                 current_number = int(m.group(1))
             else:
+                # 检查当前行是否有标题格式（apply_heading 设置的格式）
+                # 如果有，换行后将新行重置为正文格式
+                heading_sizes = {28, 22, 18, 15}  # 笔记标题28、标题22、小标题18、副标题15
+                cur_fmt = cursor.charFormat()
+                cur_size = cur_fmt.fontPointSize()
+                cur_bold = cur_fmt.fontWeight() == QFont.Weight.Bold
+                is_heading_line = cur_size in heading_sizes and cur_bold
+                if not is_heading_line:
+                    # 也检查整行是否有标题格式（光标可能在行首，charFormat 可能是正文格式）
+                    doc = self.document()
+                    block_start = block.position()
+                    block_end = block_start + block.length() - 1
+                    tmp_cursor = QTextCursor(doc)
+                    for pos in range(block_start, block_end):
+                        tmp_cursor.setPosition(pos)
+                        fmt = tmp_cursor.charFormat()
+                        size = fmt.fontPointSize()
+                        bold = fmt.fontWeight() == QFont.Weight.Bold
+                        if size in heading_sizes and bold:
+                            is_heading_line = True
+                            break
+                if is_heading_line:
+                    logger.debug(f"[_handle_return_key_press] 标题格式行换行，换行后重置为正文格式: "
+                                 f"block_number={block.blockNumber()}, block_text={repr(block_text[:50])}")
+                    super().keyPressEvent(event)
+                    new_cursor = self.textCursor()
+                    body_fmt = QTextCharFormat()
+                    body_fmt.setFontPointSize(14)
+                    body_fmt.setFontWeight(QFont.Weight.Normal)
+                    new_cursor.setBlockCharFormat(body_fmt)
+                    self.setCurrentCharFormat(body_fmt)
+                    self.setTextCursor(new_cursor)
+                    return True
                 logger.debug(f"[_handle_return_key_press] 非列表行，返回False交给默认处理: "
                              f"block_number={block.blockNumber()}, block_text={repr(block_text[:50])}, "
                              f"文档总行数={self.document().blockCount()}")
@@ -3631,7 +3670,9 @@ class NoteEditor(QWidget):
                 cursor.clearSelection()
                 self.text_edit.setTextCursor(cursor)
             else:
+                cursor.setBlockCharFormat(char_fmt)
                 self.text_edit.setCurrentCharFormat(char_fmt)
+                self.text_edit._manual_format_pt = int(char_fmt.fontPointSize())
         else:
             # 设置字符格式（仅作用于选中文字，不影响整行）
             char_fmt = QTextCharFormat()
@@ -3677,7 +3718,9 @@ class NoteEditor(QWidget):
                 cursor.clearSelection()
                 self.text_edit.setTextCursor(cursor)
             else:
+                cursor.setBlockCharFormat(char_fmt)
                 self.text_edit.setCurrentCharFormat(char_fmt)
+                self.text_edit._manual_format_pt = int(char_fmt.fontPointSize())
 
         cursor.endEditBlock()
 
@@ -3689,7 +3732,12 @@ class NoteEditor(QWidget):
         char_fmt.setFontPointSize(14)
         char_fmt.setFontWeight(QFont.Weight.Normal)
 
-        cursor.mergeCharFormat(char_fmt)
+        if cursor.hasSelection():
+            cursor.mergeCharFormat(char_fmt)
+        else:
+            cursor.setBlockCharFormat(char_fmt)
+            self.text_edit.setCurrentCharFormat(char_fmt)
+            self.text_edit._manual_format_pt = char_fmt.fontPointSize()
 
     def _is_format_all_applied(self, cursor: QTextCursor, check_fn) -> bool:
         """检查选区内所有字符是否都已应用某种格式。
