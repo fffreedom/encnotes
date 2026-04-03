@@ -181,6 +181,8 @@ class MathRenderer:
         try:
             import matplotlib
             matplotlib.use('Agg')  # 使用非GUI后端
+            import logging
+            logging.getLogger('matplotlib').setLevel(logging.WARNING)
             import matplotlib.pyplot as plt
             from matplotlib import mathtext
             from matplotlib.font_manager import FontProperties

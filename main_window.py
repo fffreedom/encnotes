@@ -82,9 +82,23 @@ class FolderListWidget(QListWidget):
         self._drop_indicator_position = None  # 'above', 'below', 'on' 或 None
         self._drop_indicator_rect = None  # 指示器的矩形区域
         self._drop_target_item = None  # 目标item
+        # 标记鼠标是否真实按下在本 widget 内，防止外部拖拽（如笔记拖拽松手）误触发文件夹拖拽
+        self._mouse_pressed_inside = False
 
+    def mousePressEvent(self, event):
+        self._mouse_pressed_inside = True
+        super().mousePressEvent(event)
 
-    
+    def mouseReleaseEvent(self, event):
+        self._mouse_pressed_inside = False
+        super().mouseReleaseEvent(event)
+
+    def startDrag(self, supported_actions):
+        """只允许从本 widget 内部真实 mousePress 发起的拖拽"""
+        if not self._mouse_pressed_inside:
+            return
+        super().startDrag(supported_actions)
+
     def dragMoveEvent(self, event):
         """拖动过程中实时更新拖放指示器（支持拖到任意位置，自动检测父文件夹）"""
         # 验证拖动源并确定拖动类型
@@ -98,7 +112,7 @@ class FolderListWidget(QListWidget):
         pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
         target_item = self.itemAt(pos)
         target_folder_id = self._get_folder_id_from_item(target_item)
-        logger.debug(f"DragMove: pos={pos}, target_item={target_item}, target_folder_id={target_folder_id}")
+        logger.debug(f"DragMove: pos={pos}, drag_type={drag_type}, source={event.source()}, source_type={type(event.source()).__name__}, target_item={target_item}, target_folder_id={target_folder_id}")
         # 根据拖动类型分发处理
         if drag_type == 'note':
             self._handle_note_drag_move(event, pos, target_item)
@@ -678,7 +692,6 @@ class FolderListWidget(QListWidget):
     # 拖动到空白（标签下面的空白区域或非文件夹列表）处不会触发dropEvent事件，所以这儿的target_folder_id不可能为None
     def dropEvent(self, event):
         """处理拖拽放下事件：支持文件夹拖拽和笔记拖拽"""
-        logger.debug("🔵 [DEBUG] dropEvent triggered")
         try:
             import time
             t_start = time.time()
@@ -699,6 +712,9 @@ class FolderListWidget(QListWidget):
             
             # 3. 获取目标文件夹
             target_folder_id = self._get_drop_target_folder(event)
+            pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
+            target_item = self.itemAt(pos)
+            logger.debug(f"🔵 [DEBUG] dropEvent triggered, source={event.source()}, source_type={type(event.source()).__name__}, target_item={target_item}, target_folder_id={target_folder_id}")
             if not target_folder_id:
                 # 拖到了非文件夹项
                 event.ignore()
@@ -897,7 +913,7 @@ class NoteListWidget(QListWidget):
         Args:
             event: QMouseEvent 鼠标事件
         """
-        logger.debug("🟡 [DEBUG] mousePressEvent triggered")
+        logger.debug("🟡 [DEBUG] NoteListWidget mousePressEvent triggered")
         # 1. 获取并验证点击的item
         item = self.itemAt(event.pos())
         if not self._is_valid_selectable_item(item):
