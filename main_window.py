@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy
 )
 
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QEvent
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QDesktopServices
 from PyQt6.QtCore import QUrl
 
@@ -26,13 +26,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
+# 宽度不足时自动显示省略号的Label（用于setItemWidget场景），elide是省略的意思
 class ElidedLabel(QLabel):
     """宽度不足时自动显示省略号的Label（用于setItemWidget场景）"""
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(parent)
         self._full_text = text or ""
+        self._is_elided = False
         super().setText(self._full_text)
 
     def setFullText(self, text: str):
@@ -52,6 +53,22 @@ class ElidedLabel(QLabel):
         available = max(0, self.width() - 1)
         elided = fm.elidedText(self._full_text, Qt.TextElideMode.ElideRight, available)
         super().setText(elided)
+        self._is_elided = (elided != self._full_text)
+        # 清空系统 tooltip，改用自定义弹窗
+        super().setToolTip("")
+
+    # 重写事件处理，当出现悬浮提示窗口事件时，检查只有在确实省略了文字展示时才使用自定义的tooltip提示窗，否则隐藏悬浮窗
+    def event(self, e):
+        from PyQt6.QtCore import QEvent
+        if e.type() == QEvent.Type.ToolTip:
+            if self._is_elided:
+                from PyQt6.QtWidgets import QToolTip
+                QToolTip.showText(e.globalPos(), self._full_text, self)
+            else:
+                from PyQt6.QtWidgets import QToolTip
+                QToolTip.hideText()
+            return True
+        return super().event(e)
 
 
 class FolderListWidget(QListWidget):
@@ -65,6 +82,8 @@ class FolderListWidget(QListWidget):
         self._drop_indicator_position = None  # 'above', 'below', 'on' 或 None
         self._drop_indicator_rect = None  # 指示器的矩形区域
         self._drop_target_item = None  # 目标item
+
+
     
     def dragMoveEvent(self, event):
         """拖动过程中实时更新拖放指示器（支持拖到任意位置，自动检测父文件夹）"""
@@ -3100,7 +3119,6 @@ class MainWindow(QMainWindow):
             # 文件夹名称（仅名称部分可编辑）
             name_label = ElidedLabel(folder['name'])
             name_label.setFullText(folder['name'])
-            name_label.setToolTip(folder['name'])
             name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             name_label.setStyleSheet("""
                 font-size: 13px;
@@ -3201,7 +3219,6 @@ class MainWindow(QMainWindow):
 
         name_label = ElidedLabel(text)
         name_label.setFullText(text)
-        name_label.setToolTip(text.replace("📝 ", "").replace("🗑️ ", ""))
         name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         name_label.setStyleSheet("""
             font-size: 13px;
@@ -3394,7 +3411,6 @@ class MainWindow(QMainWindow):
             # 如果取消，直接恢复原显示
             if cancelled:
                 name_widget.setFullText(old_name)
-                name_widget.setToolTip(old_name)
                 return
 
             # 提交更新
@@ -3404,7 +3420,6 @@ class MainWindow(QMainWindow):
 
             if not new_name or new_name == old_name:
                 name_widget.setFullText(old_name)
-                name_widget.setToolTip(old_name)
                 return
 
             # 校验：同一父文件夹下不允许重名（忽略大小写和首尾空白）
@@ -5212,7 +5227,6 @@ class MainWindow(QMainWindow):
         """
         if isinstance(label, ElidedLabel):
             label.setFullText(text)
-            label.setToolTip(text)
         elif isinstance(label, QLabel):
             label.setText(text)
     

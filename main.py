@@ -96,6 +96,9 @@ def main():
     
     # 设置Mac风格
     app.setStyle("Fusion")
+
+    # 全局 tooltip 样式：去掉边框
+    app.setStyleSheet("QToolTip { border: none; }")
     
     window = MainWindow()
     window.show()
