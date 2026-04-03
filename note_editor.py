@@ -3042,17 +3042,27 @@ class PasteImageTextEdit(QTextEdit):
         # 默认处理
         UNCHECKED = "○ "
         CHECKED = "● "
+        BULLET_PREFIX = "\u2022 "  # • 项目符号
 
-        # 检查粘贴内容是否包含核对清单行
-        paste_has_checklist = False
+        def _is_list_line(line):
+            """判断一行是否是列表行（核对清单/项目符号/短划线/编号）"""
+            if (line.startswith(UNCHECKED) or line.startswith(CHECKED)
+                    or line.startswith(BULLET_PREFIX) or line.startswith("- ")):
+                return True
+            if re.match(r'^\d+\.\s', line):
+                return True
+            return False
+
+        # 检查粘贴内容是否包含列表行
+        paste_has_list = False
         if source.hasText():
             for line in source.text().splitlines():
-                if line.startswith(UNCHECKED) or line.startswith(CHECKED):
-                    paste_has_checklist = True
+                if _is_list_line(line):
+                    paste_has_list = True
                     break
 
-        if paste_has_checklist:
-            # 粘贴内容含核对清单时，先换行再粘贴，确保核对清单始终从新行开始
+        if paste_has_list:
+            # 粘贴内容含列表时，先换行再粘贴，确保列表始终从新行开始
             cursor = self.textCursor()
             cursor_block_text = cursor.block().text()
             cursor_in_block_pos = cursor.position() - cursor.block().position()
@@ -3066,10 +3076,10 @@ class PasteImageTextEdit(QTextEdit):
 
         super().insertFromMimeData(source)
 
-        if not paste_has_checklist:
+        if not paste_has_list:
             return
 
-        # 粘贴后将所有核对清单前缀设为透明色，确保 paintEvent 绘制圆圈
+        # 粘贴后将核对清单和项目符号前缀设为透明色，确保 paintEvent 绘制圆圈/圆点
         invis_fmt = QTextCharFormat()
         invis_fmt.setForeground(QColor(0, 0, 0, 0))
         invis_fmt.setBackground(Qt.GlobalColor.transparent)
@@ -3083,7 +3093,8 @@ class PasteImageTextEdit(QTextEdit):
         block = start_block
         while block.isValid() and block.position() <= paste_end_pos:
             text = block.text()
-            for prefix in (UNCHECKED, CHECKED):
+            # 核对清单和项目符号前缀需设为透明色（由 paintEvent 绘制覆盖）
+            for prefix in (UNCHECKED, CHECKED, BULLET_PREFIX):
                 if text.startswith(prefix):
                     blk_cursor = QTextCursor(block)
                     blk_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
