@@ -2526,6 +2526,48 @@ class PasteImageTextEdit(QTextEdit):
             self.setCurrentCharFormat(fmt)
             logger.debug("[_reset_char_format_after_bullet_prefix] 重置光标字符格式前景色")
 
+    def _renumber_numbered_list_at(self, block):
+        """对包含给定 block 的连续编号列表段重新从1开始顺序编号。
+
+        从 block 向上找到编号列表的起始行，再向下遍历整个连续编号列表段，
+        依次将前缀替换为 1. 2. 3. ...
+        非编号列表行（包括空行）会中断连续段。
+        """
+        if not block.isValid():
+            return
+
+        # 向上找到编号列表段的起始块
+        start_block = block
+        prev = block.previous()
+        while prev.isValid() and re.match(r'^\d+\.\s', prev.text()):
+            start_block = prev
+            prev = prev.previous()
+
+        # 从起始块向下重新编号
+        doc = self.document()
+        cursor = QTextCursor(doc)
+        cursor.beginEditBlock()
+        number = 1
+        cur = start_block
+        while cur.isValid() and re.match(r'^\d+\.\s', cur.text()):
+            text = cur.text()
+            m = re.match(r'^(\d+\.\s)', text)
+            if m:
+                old_prefix = m.group(1)
+                new_prefix = f"{number}. "
+                if old_prefix != new_prefix:
+                    blk_cursor = QTextCursor(cur)
+                    blk_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    blk_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        len(old_prefix)
+                    )
+                    blk_cursor.insertText(new_prefix)
+            number += 1
+            cur = cur.next()
+        cursor.endEditBlock()
+
     def _handle_return_key_press(self, event) -> bool:
         """处理回车键：在列表行尾按回车时，新行自动延续相同的列表格式。
         若当前行只有列表前缀而无正文内容，则退出列表格式（清除前缀）。
@@ -2696,6 +2738,8 @@ class PasteImageTextEdit(QTextEdit):
         # 若是，则重置字符格式为正常前景色，避免后续输入的文字继承透明色而不可见
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self._reset_char_format_after_bullet_prefix()
+            # 删除行后，对当前行所在的编号列表段重新编号
+            self._renumber_numbered_list_at(self.textCursor().block())
             # super().keyPressEvent 删除内容后，Qt 内部会重新设置 currentCharFormat，
             # 可能覆盖 cursorPositionChanged 里设置的标题格式。
             # 在此再次调用 update_title_and_input_format，确保标题行全选删除后光标格式正确。
@@ -3075,6 +3119,15 @@ class PasteImageTextEdit(QTextEdit):
         paste_start_block_pos = self.textCursor().block().position()
 
         super().insertFromMimeData(source)
+
+        # 粘贴后，检查粘贴位置附近是否有编号列表需要重新编号
+        # （无论粘贴内容是否含列表，粘贴到编号列表中间都可能破坏编号顺序）
+        doc = self.document()
+        start_block_after = doc.findBlock(paste_start_block_pos)
+        self._renumber_numbered_list_at(start_block_after)  # 粘贴起始位置所在段
+        end_block_after = self.textCursor().block()
+        if end_block_after != start_block_after:
+            self._renumber_numbered_list_at(end_block_after)  # 粘贴结束位置所在段
 
         if not paste_has_list:
             return
