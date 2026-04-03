@@ -33,6 +33,14 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
+# ── 编辑器字体大小常量 ──────────────────────────────────────────────────────────
+FONT_SIZE_NOTE_TITLE = 28   # 笔记第一行标题（自动应用）
+FONT_SIZE_HEADING1   = 22   # 格式菜单：标题
+FONT_SIZE_HEADING2   = 18   # 格式菜单：小标题
+FONT_SIZE_HEADING3   = 15   # 格式菜单：副标题
+FONT_SIZE_BODY       = 14   # 正文
+# ────────────────────────────────────────────────────────────────────────────────
+
 
 def _select_range(cursor: QTextCursor, start: int, end: int) -> bool:
     """统一的选中字符范围的函数，使用movePosition方式。
@@ -346,14 +354,14 @@ class PasteImageTextEdit(QTextEdit):
     def _create_title_format(self):
         """创建标题字符格式（28号粗体）"""
         title_fmt = QTextCharFormat()
-        title_fmt.setFontPointSize(28)
+        title_fmt.setFontPointSize(FONT_SIZE_NOTE_TITLE)
         title_fmt.setFontWeight(QFont.Weight.Bold)
         return title_fmt
     
     def _create_body_format(self):
         """创建正文字符格式（14号普通）"""
         body_fmt = QTextCharFormat()
-        body_fmt.setFontPointSize(14)
+        body_fmt.setFontPointSize(FONT_SIZE_BODY)
         body_fmt.setFontWeight(QFont.Weight.Normal)
         return body_fmt
 
@@ -2607,7 +2615,7 @@ class PasteImageTextEdit(QTextEdit):
             else:
                 # 检查当前行是否有标题格式（apply_heading 设置的格式）
                 # 如果有，换行后将新行重置为正文格式
-                heading_sizes = {28, 22, 18, 15}  # 笔记标题28、标题22、小标题18、副标题15
+                heading_sizes = {FONT_SIZE_NOTE_TITLE, FONT_SIZE_HEADING1, FONT_SIZE_HEADING2, FONT_SIZE_HEADING3}  # 笔记标题、标题、小标题、副标题
                 cur_fmt = cursor.charFormat()
                 cur_size = cur_fmt.fontPointSize()
                 cur_bold = cur_fmt.fontWeight() == QFont.Weight.Bold
@@ -2632,7 +2640,7 @@ class PasteImageTextEdit(QTextEdit):
                     super().keyPressEvent(event)
                     new_cursor = self.textCursor()
                     body_fmt = QTextCharFormat()
-                    body_fmt.setFontPointSize(14)
+                    body_fmt.setFontPointSize(FONT_SIZE_BODY)
                     body_fmt.setFontWeight(QFont.Weight.Normal)
                     new_cursor.setBlockCharFormat(body_fmt)
                     self.setCurrentCharFormat(body_fmt)
@@ -3318,17 +3326,17 @@ class NoteEditor(QWidget):
             action._heading_text = text
             return action
 
-        self.title_action = _make_heading_action("标题", 22, True, lambda: self.apply_heading(1))
+        self.title_action = _make_heading_action("标题", FONT_SIZE_HEADING1, True, lambda: self.apply_heading(1))
         format_menu.addAction(self.title_action)
 
-        self.heading_action = _make_heading_action("小标题", 18, True, lambda: self.apply_heading(2))
+        self.heading_action = _make_heading_action("小标题", FONT_SIZE_HEADING2, True, lambda: self.apply_heading(2))
         format_menu.addAction(self.heading_action)
 
-        self.subheading_action = _make_heading_action("副标题", 15, True, lambda: self.apply_heading(3))
+        self.subheading_action = _make_heading_action("副标题", FONT_SIZE_HEADING3, True, lambda: self.apply_heading(3))
         format_menu.addAction(self.subheading_action)
 
         # 正文
-        body_action = _make_heading_action("正文", 13, False, self.apply_body_text)
+        body_action = _make_heading_action("正文", FONT_SIZE_BODY, False, self.apply_body_text)
         format_menu.addAction(body_action)
 
         format_menu.addSeparator()
@@ -3731,7 +3739,7 @@ class NoteEditor(QWidget):
 
         # 创建标题字符格式
         title_char_fmt = QTextCharFormat()
-        title_char_fmt.setFontPointSize(28)
+        title_char_fmt.setFontPointSize(FONT_SIZE_NOTE_TITLE)
         title_char_fmt.setFontWeight(QFont.Weight.Bold)
 
         # 关键：插入一个零宽度空格，这样块格式才能生效
@@ -3762,8 +3770,8 @@ class NoteEditor(QWidget):
         cursor = self.text_edit.textCursor()
 
         # 确定目标字号
-        size_map = {1: 28, 2: 22, 3: 18}
-        target_size = size_map.get(level, 14)
+        size_map = {1: FONT_SIZE_HEADING1, 2: FONT_SIZE_HEADING2, 3: FONT_SIZE_HEADING3}
+        target_size = size_map.get(level, FONT_SIZE_BODY)
 
         # 判断当前是否已经是该标题格式（检查选区内所有字符）
         is_current_format = self._is_format_all_applied(
@@ -3776,13 +3784,13 @@ class NoteEditor(QWidget):
         if is_current_format:
             # 如果已经是该格式，则恢复为正文格式
             char_fmt = QTextCharFormat()
-            char_fmt.setFontPointSize(14)
+            char_fmt.setFontPointSize(FONT_SIZE_BODY)
             char_fmt.setFontWeight(QFont.Weight.Normal)
             if cursor.hasSelection():
                 cursor.mergeCharFormat(char_fmt)
                 # 重置 blockCharFormat，防止段落级别格式被污染
                 body_block_fmt = QTextCharFormat()
-                body_block_fmt.setFontPointSize(14)
+                body_block_fmt.setFontPointSize(FONT_SIZE_BODY)
                 body_block_fmt.setFontWeight(QFont.Weight.Normal)
                 cursor.setBlockCharFormat(body_block_fmt)
                 cursor.clearSelection()
@@ -3816,7 +3824,7 @@ class NoteEditor(QWidget):
                     existing_fmt = tmp_cursor.charFormat()
                     # 确保字体大小被显式设置（固化格式）
                     if existing_fmt.fontPointSize() <= 0:
-                        existing_fmt.setFontPointSize(14)
+                        existing_fmt.setFontPointSize(FONT_SIZE_BODY)
                     if existing_fmt.fontWeight() == QFont.Weight.Normal or existing_fmt.fontWeight() == 0:
                         existing_fmt.setFontWeight(QFont.Weight.Normal)
                     tmp_cursor.setCharFormat(existing_fmt)
@@ -3829,7 +3837,7 @@ class NoteEditor(QWidget):
 
                 # 第三步：重置 blockCharFormat 为正文格式，防止段落级别格式被标题格式污染
                 body_block_fmt = QTextCharFormat()
-                body_block_fmt.setFontPointSize(14)
+                body_block_fmt.setFontPointSize(FONT_SIZE_BODY)
                 body_block_fmt.setFontWeight(QFont.Weight.Normal)
                 cursor.setBlockCharFormat(body_block_fmt)
 
@@ -3847,7 +3855,7 @@ class NoteEditor(QWidget):
         cursor = self.text_edit.textCursor()
 
         char_fmt = QTextCharFormat()
-        char_fmt.setFontPointSize(14)
+        char_fmt.setFontPointSize(FONT_SIZE_BODY)
         char_fmt.setFontWeight(QFont.Weight.Normal)
 
         if cursor.hasSelection():
@@ -4304,9 +4312,9 @@ class NoteEditor(QWidget):
             action.setIcon(check_icon if checked else empty_icon)
 
         # 更新标题状态
-        _set_check_icon(self.title_action, font_size == 28 and font_weight == QFont.Weight.Bold)
-        _set_check_icon(self.heading_action, font_size == 22 and font_weight == QFont.Weight.Bold)
-        _set_check_icon(self.subheading_action, font_size == 18 and font_weight == QFont.Weight.Bold)
+        _set_check_icon(self.title_action, font_size == FONT_SIZE_HEADING1 and font_weight == QFont.Weight.Bold)
+        _set_check_icon(self.heading_action, font_size == FONT_SIZE_HEADING2 and font_weight == QFont.Weight.Bold)
+        _set_check_icon(self.subheading_action, font_size == FONT_SIZE_HEADING3 and font_weight == QFont.Weight.Bold)
 
         # 更新文本样式状态
         _set_check_icon(self.bold_action, font_weight == QFont.Weight.Bold)

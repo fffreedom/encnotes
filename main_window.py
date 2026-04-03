@@ -3824,6 +3824,27 @@ class MainWindow(QMainWindow):
                 self.folder_list.setCurrentRow(selected_row)
         except Exception as e:
             pass
+        # load_folders() 重建列表后，所有 widget 的 selected 属性被重置为 False。
+        # 由于 current_folder_id/current_tag_id 未变，on_folder_changed 中的
+        # _handle_item_selection 会因"没有变化"而跳过高亮刷新，需在此手动恢复。
+        self._restore_current_item_highlight()
+
+    def _restore_current_item_highlight(self):
+        """在 load_folders() 重建列表后，强制恢复当前选中项的高亮状态。
+        
+        load_folders() 会重建所有 widget，导致 selected 属性被重置为 False。
+        此方法根据 current_folder_id / current_tag_id / current_system_key 找到对应
+        widget 并重新设置高亮，避免选中状态视觉上消失。
+        """
+        if self.current_folder_id:
+            widget = self._find_row_widget_by_payload("folder", self.current_folder_id)
+            self._set_row_widget_selected(widget, True)
+        elif self.current_tag_id:
+            widget = self._find_row_widget_by_payload("tag", self.current_tag_id)
+            self._set_row_widget_selected(widget, True)
+        elif self.current_system_key:
+            widget = self._find_row_widget_by_payload("system", self.current_system_key)
+            self._set_row_widget_selected(widget, True)
 
     def _create_and_save_new_note(self, folder_id):
         """创建并保存新笔记
@@ -4240,7 +4261,12 @@ class MainWindow(QMainWindow):
         if default_title is None:
             default_title = "新笔记"
 
-        # “同一文件夹只允许一个空的新笔记草稿”
+        # 先切换到目标文件夹，确保 current_folder_id 正确，文件夹列表选中状态正确
+        if folder_id != self.current_folder_id:
+            self.current_folder_id = folder_id
+            self._select_folder_in_list(folder_id)
+
+        # "同一文件夹只允许一个空的新笔记草稿"
         if folder_id and default_title == "新笔记":
             try:
                 notes = self.note_manager.get_notes_by_folder(folder_id)
@@ -4260,14 +4286,11 @@ class MainWindow(QMainWindow):
         # 刷新笔记列表
         self.load_notes()
 
-        # 同步刷新左侧文件夹计数
-        selected_row = self.folder_list.currentRow()
+        # 同步刷新左侧文件夹计数，并恢复目标文件夹的选中状态
         self.load_folders()
-        try:
-            if selected_row is not None and 0 <= selected_row < self.folder_list.count():
-                self.folder_list.setCurrentRow(selected_row)
-        except Exception:
-            pass
+        self._select_folder_in_list(folder_id)
+        # load_folders() 重建列表后 widget 的 selected 属性被重置，需手动恢复高亮
+        self._restore_current_item_highlight()
 
         # 选中新创建的笔记
         for i in range(self.note_list.count()):
