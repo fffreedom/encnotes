@@ -1798,6 +1798,14 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 5)
 
+        # 禁止折叠，防止拖动时被挤压成 0
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        # 文件夹列表最小宽度，防止向左拖动时被挤压成 0
+        self.folder_list.setMinimumWidth(120)
+        # 文件列表最小宽度，防止编辑器向左拖动时被挤压成 0
+        self.note_list.setMinimumWidth(120)
+
         # 设置分割器启动时初始宽度，文件夹列表和笔记列表最大宽度由各自的setMaximumWidth设置，最小宽度不设置
         # 这里把左侧文件夹栏稍微加宽，避免"新建文件夹"等默认名称显示不全
         splitter.setSizes([200, 200, 900])
