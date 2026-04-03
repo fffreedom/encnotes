@@ -4567,12 +4567,23 @@ class MainWindow(QMainWindow):
                 prev_tag_widget = self._find_row_widget_by_payload("tag", self.current_tag_id)
                 self._set_row_widget_selected(prev_tag_widget, False)
             
+            # 取消之前的文件夹/系统项高亮（标签与文件夹互斥，不能同时选中）
+            prev_folder_widget = None
+            if self.current_folder_id:
+                prev_folder_widget = self._find_row_widget_by_payload("folder", self.current_folder_id)
+            elif self.current_system_key:
+                prev_folder_widget = self._find_row_widget_by_payload("system", self.current_system_key)
+            if prev_folder_widget:
+                self._set_row_widget_selected(prev_folder_widget, False)
+            
             # 设置当前标签高亮
             cur_tag_widget = self.folder_list.itemWidget(cur_item) if cur_item else None
             self._set_row_widget_selected(cur_tag_widget, True)
             
-            # 更新当前选中的标签（保持文件夹的选中状态，实现双选中）
+            # 更新当前选中的标签，清除文件夹/系统项选中状态
             self.current_tag_id = item_id
+            self.current_folder_id = None
+            self.current_system_key = None
         else:
             # 处理文件夹或系统项选中
             # 检查是否真的发生了变化
