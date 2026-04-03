@@ -2893,7 +2893,6 @@ class MainWindow(QMainWindow):
 
         is_empty_tag = (tag_name == "")
         display_name = tag_name if not is_empty_tag else "（未命名标签）"
-        item_text = f"    🏷️ {display_name} ({count})"
 
         tag_item = QListWidgetItem()
         tag_item.setData(Qt.ItemDataRole.UserRole, ("tag", tag['id']))
@@ -2902,15 +2901,49 @@ class MainWindow(QMainWindow):
         tag_widget = QWidget()
         tag_widget.setObjectName("folder_row_widget")
         tag_layout = QHBoxLayout(tag_widget)
-        tag_layout.setContentsMargins(0, 0, 0, 0)
-        tag_layout.setSpacing(0)
+        tag_layout.setContentsMargins(0, 0, 10, 0)
+        tag_layout.setSpacing(6)
+        tag_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        tag_label = QLabel(item_text)
+        # 左侧缩进（与文件夹顶级项对齐：indent_widget + twisty/spacer = 0 + 14 = 14px）
+        indent_widget = QWidget()
+        indent_widget.setFixedWidth(14)
+        tag_layout.addWidget(indent_widget)
+
+        # 图标（单独一列，重命名时保持显示）
+        icon_label = QLabel("🏷️")
+        icon_label.setFixedWidth(16)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setStyleSheet("""
+            font-size: 13px;
+            background: transparent;
+            border: none;
+            padding: 0px;
+            margin: 0px;
+        """)
+        tag_layout.addWidget(icon_label)
+
+        # 名称（仅名称部分可编辑）
+        tag_label = ElidedLabel(display_name)
+        tag_label.setFullText(display_name)
+        tag_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if is_empty_tag:
-            tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px; color: #8e8e93;")
+            tag_label.setStyleSheet("background: transparent; font-size: 13px; color: #8e8e93;")
         else:
-            tag_label.setStyleSheet("background: transparent; padding: 8px 10px; font-size: 13px;")
-        tag_layout.addWidget(tag_label)
+            tag_label.setStyleSheet("background: transparent; font-size: 13px;")
+        tag_layout.addWidget(tag_label, 1)
+
+        # 右侧：笔记数量
+        count_label = QLabel(str(count))
+        count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        count_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        count_label.setMinimumWidth(28)
+        count_label.setStyleSheet("""
+            font-size: 12px;
+            color: #9a9a9a;
+            background: transparent;
+        """)
+        tag_layout.addWidget(count_label)
 
         # 设置选中状态
         is_selected = (self.current_tag_id == tag['id'])
@@ -2919,7 +2952,8 @@ class MainWindow(QMainWindow):
 
         self.folder_list.addItem(tag_item)
         self.folder_list.setItemWidget(tag_item, tag_widget)
-        tag_item.setSizeHint(QSize(200, 40))
+        tag_widget.setFixedHeight(28)
+        tag_item.setSizeHint(QSize(200, 28))
 
     def _restore_selection(self, current_row: int, restore_last_state: bool = False):
         """恢复选中状态
@@ -3607,12 +3641,12 @@ class MainWindow(QMainWindow):
         
         from PyQt6.QtWidgets import QLineEdit
         
-        # 找到标签名称的 QLabel
+        # 找到标签名称的 ElidedLabel（图标之后的名称控件）
         name_widget = None
         name_index = -1
         for idx in range(layout.count()):
             w = layout.itemAt(idx).widget()
-            if isinstance(w, QLabel):
+            if isinstance(w, ElidedLabel):
                 name_widget = w
                 name_index = idx
                 break
@@ -3638,7 +3672,7 @@ class MainWindow(QMainWindow):
                 border: 1px solid #bdbdbd;
                 border-radius: 4px;
                 padding: 2px 24px 2px 6px;
-                margin: 0px 10px;
+                margin: 0px;
             }
         """)
         
@@ -3651,13 +3685,14 @@ class MainWindow(QMainWindow):
                 pass
             
             # 把 label 加回原位
-            layout.insertWidget(name_index, name_widget)
+            layout.insertWidget(name_index, name_widget, 1)
             name_widget.show()
             
             row_widget.setProperty("renaming", False)
             
             # 如果取消，直接恢复原显示
             if cancelled:
+                name_widget.setFullText(old_name)
                 return
             
             # 提交更新
@@ -3719,7 +3754,7 @@ class MainWindow(QMainWindow):
         
         # 隐藏原 label，插入编辑框
         name_widget.hide()
-        layout.insertWidget(name_index, editor)
+        layout.insertWidget(name_index, editor, 1)
         
         editor.setFocus()
         editor.selectAll()
