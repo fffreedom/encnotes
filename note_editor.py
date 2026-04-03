@@ -3040,7 +3040,61 @@ class PasteImageTextEdit(QTextEdit):
                             return
 
         # 默认处理
+        UNCHECKED = "○ "
+        CHECKED = "● "
+
+        # 检查粘贴内容是否包含核对清单行
+        paste_has_checklist = False
+        if source.hasText():
+            for line in source.text().splitlines():
+                if line.startswith(UNCHECKED) or line.startswith(CHECKED):
+                    paste_has_checklist = True
+                    break
+
+        if paste_has_checklist:
+            # 粘贴内容含核对清单时，先换行再粘贴，确保核对清单始终从新行开始
+            cursor = self.textCursor()
+            cursor_block_text = cursor.block().text()
+            cursor_in_block_pos = cursor.position() - cursor.block().position()
+            # 仅当当前行非空且光标不在行首时才换行（避免在空行或行首重复换行）
+            if cursor_block_text.strip() != "" and cursor_in_block_pos > 0:
+                cursor.insertBlock()
+                self.setTextCursor(cursor)
+
+        # 记录粘贴起始块位置
+        paste_start_block_pos = self.textCursor().block().position()
+
         super().insertFromMimeData(source)
+
+        if not paste_has_checklist:
+            return
+
+        # 粘贴后将所有核对清单前缀设为透明色，确保 paintEvent 绘制圆圈
+        invis_fmt = QTextCharFormat()
+        invis_fmt.setForeground(QColor(0, 0, 0, 0))
+        invis_fmt.setBackground(Qt.GlobalColor.transparent)
+
+        doc = self.document()
+        paste_end_pos = self.textCursor().position()
+        start_block = doc.findBlock(paste_start_block_pos)
+        if not start_block.isValid():
+            return
+
+        block = start_block
+        while block.isValid() and block.position() <= paste_end_pos:
+            text = block.text()
+            for prefix in (UNCHECKED, CHECKED):
+                if text.startswith(prefix):
+                    blk_cursor = QTextCursor(block)
+                    blk_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                    blk_cursor.movePosition(
+                        QTextCursor.MoveOperation.NextCharacter,
+                        QTextCursor.MoveMode.KeepAnchor, len(prefix))
+                    blk_cursor.mergeCharFormat(invis_fmt)
+                    break
+            if block.position() + block.length() > paste_end_pos:
+                break
+            block = block.next()
 
     def is_image_file(self, file_path):
         """检查是否是图片文件"""
@@ -3737,7 +3791,7 @@ class NoteEditor(QWidget):
         else:
             cursor.setBlockCharFormat(char_fmt)
             self.text_edit.setCurrentCharFormat(char_fmt)
-            self.text_edit._manual_format_pt = char_fmt.fontPointSize()
+            self.text_edit._manual_format_pt = int(char_fmt.fontPointSize())
 
     def _is_format_all_applied(self, cursor: QTextCursor, check_fn) -> bool:
         """检查选区内所有字符是否都已应用某种格式。
