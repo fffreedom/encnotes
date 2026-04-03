@@ -1532,6 +1532,12 @@ class MainWindow(QMainWindow):
             QWidget#folder_row_widget {
                 background: transparent;
             }
+            QWidget#folder_row_widget:hover {
+                background-color: #FFF4CC;
+                border-radius: 6px;
+                margin-left: 8px;
+                margin-right: 8px;
+            }
             QWidget#folder_row_widget[selected="true"] {
                 background-color: #FFE066;
                 border-radius: 6px;
@@ -1554,7 +1560,7 @@ class MainWindow(QMainWindow):
             }
 
             QListWidget::item:hover {
-                background-color: #FFF4CC;
+                background-color: transparent;
                 border: none;
                 outline: none;
             }
