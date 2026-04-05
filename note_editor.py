@@ -789,7 +789,9 @@ class PasteImageTextEdit(QTextEdit):
             print(f"打开附件失败: {e}")
             import traceback
             traceback.print_exc()
-    
+    # 窗口显示、被遮挡后重新显示、窗口大小变化、滚动内容、系统主题/DPI变化（系统外观变化导致控件需要重绘）、代码调用update()、repaint()
+    # 等情况时都触发重绘，在选择表格self.selected_table时会调用self.viewport().update()来触发重绘，在点击图片、取消选中、
+    # 编辑器内容变化、鼠标移动/滚动（Qt内部判断是否需要重绘）等情况时会触发重绘
     def paintEvent(self, event):
         """绘制事件 - 绘制选中图片的边界框，以及修正空行光标高度"""
         # import traceback
@@ -1034,6 +1036,23 @@ class PasteImageTextEdit(QTextEdit):
             fix_fmt.setForeground(QColor(0, 0, 0, 0))
             tmp_cursor.mergeCharFormat(fix_fmt)
 
+    def _fix_all_list_prefix_colors(self):
+        """加载笔记后一次性修复所有列表前缀颜色为透明。
+
+        此方法应在 setHtml 之后调用，而不是在 paintEvent 中调用，
+        避免在绘制期间修改文档内容导致无限重绘循环。
+        """
+        PREFIXES = ["\u2022 ", "\u25cb ", "\u25cf "]  # • ○ ●
+        from PyQt6.QtGui import QColor
+        doc = self.document()
+        block = doc.begin()
+        while block.isValid():
+            t = block.text()
+            prefix = next((p for p in PREFIXES if t.startswith(p)), None)
+            if prefix is not None:
+                self._ensure_prefix_transparent(block, prefix)
+            block = block.next()
+
     def _reset_transparent_cursor_fmt(self, prefixes):
         """若光标紧跟在列表前缀末尾且格式为透明色，重置为正常颜色，防止后续输入不可见"""
         from PyQt6.QtGui import QColor
@@ -1062,8 +1081,6 @@ class PasteImageTextEdit(QTextEdit):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         for block, char_rect, fm, prefix in self._iter_list_blocks([BULLET_PREFIX]):
-            self._ensure_prefix_transparent(block, prefix)
-
             # 圆点直径：字体高度的 38%，最小5px，最大10px
             font_height = fm.height()
             dot_size = max(5, min(10, int(font_height * 0.38)))
@@ -1104,7 +1121,6 @@ class PasteImageTextEdit(QTextEdit):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         for block, char_rect, fm, prefix in self._iter_list_blocks([UNCHECKED, CHECKED]):
-            self._ensure_prefix_transparent(block, prefix)
             font_height = fm.height()
             circle_size = min(font_height - 2, 16)  # 圆圈直径，最大16px
             circle_rect = self._calc_circle_rect(char_rect, fm, circle_size)
@@ -1746,13 +1762,29 @@ class PasteImageTextEdit(QTextEdit):
 
     def _update_cursor_for_hover(self, event):
         """更新鼠标悬停时的光标形状（未选中图片时）"""
-        # 检查是否悬停在图片上（使用像素位置检测）
-        image_format, _, _ = self.find_image_at_position(event.pos())
-        if image_format:
+        # 先用光标位置做局部检测，避免全文档遍历
+        # 通过鼠标位置获取光标，检查附近是否有图片字符（O(1) 而非 O(n)）
+        hover_cursor = self.cursorForPosition(event.pos())
+        is_on_image = False
+        # 检查光标位置及其前后各1个字符是否是图片字符
+        for offset in range(-1, 2):
+            check_pos = hover_cursor.position() + offset
+            if check_pos < 0:
+                continue
+            cf = _selected_char_format(self.document(), check_pos)
+            if cf and cf.isImageFormat():
+                # 进一步确认鼠标确实在图片矩形内
+                tmp_cursor = QTextCursor(self.document())
+                tmp_cursor.setPosition(check_pos)
+                img_rect = self.get_image_rect_at_cursor(tmp_cursor)
+                if img_rect and img_rect.contains(event.pos()):
+                    is_on_image = True
+                    break
+        if is_on_image:
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
         else:
             # 检查是否悬停在表格上
-            cursor = self.cursorForPosition(event.pos())
+            cursor = hover_cursor
             table = cursor.currentTable()
             if table:
                 # 检查是否悬停在表格边框上
@@ -3515,6 +3547,12 @@ class NoteEditor(QWidget):
             self._remark_attachment_blocks_after_load()
         except Exception as e:
             logger.exception("[attachment-remark] remark failed: %s", e)
+
+        # 修复旧数据中列表前缀颜色（确保前缀为透明色，避免在 paintEvent 中修改文档触发重绘循环）
+        try:
+            self.text_edit._fix_all_list_prefix_colors()
+        except Exception as e:
+            logger.exception("[fix-prefix-colors] failed: %s", e)
 
         # 重新渲染所有数学公式
         self.rerender_formulas()
