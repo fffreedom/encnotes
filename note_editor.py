@@ -2967,69 +2967,38 @@ class PasteImageTextEdit(QTextEdit):
         image_format = QTextImageFormat(self.selected_image)
         old_pos = self.selected_image_cursor.position()
 
-        # **关键修复**：使用同一个光标对象执行所有操作，确保在编辑块中
         cursor = QTextCursor(self.document())
-
-        # 开始编辑块
         cursor.beginEditBlock()
 
-        # 1. 删除原位置的图片
-        # **关键修复**：查找真正的图片字符位置（U+FFFC）
-        # 从 old_pos 开始，向右查找最多2个字符，找到真正的图片字符
+        # 1. 查找真正的图片字符位置（U+FFFC）
         real_image_pos = None
-        has_paragraph_separator = False
-
-        for offset in range(2):  # 检查当前位置和下一个位置
+        for offset in range(2):
             check_pos = old_pos + offset
-            cursor.setPosition(check_pos)
-
-            # 向右移动一个字符并选中
             if _select_char_at(cursor, check_pos):
                 selected_text = cursor.selectedText()
                 char_format = cursor.charFormat()
-
-                # 检查是否是真正的图片字符
                 if char_format.isImageFormat() and selected_text == '\ufffc':
                     real_image_pos = check_pos
-
-                    # 检查图片字符前面是否有段落分隔符
-                    if real_image_pos > 0:
-                        _select_char_at(cursor, real_image_pos - 1)
-                        prev_text = cursor.selectedText()
-                        prev_format = cursor.charFormat()
-
-                        if prev_format.isImageFormat() and prev_text == '\u2029':
-                            has_paragraph_separator = True
-
                     break
-
-            # 清除选区，继续查找
             cursor.clearSelection()
 
         if real_image_pos is None:
             cursor.endEditBlock()
             return
 
-        # **关键修复**：如果有段落分隔符，从段落分隔符位置开始删除
-        delete_start_pos = real_image_pos - 1 if has_paragraph_separator else real_image_pos
-        delete_count = 2 if has_paragraph_separator else 1
-
-        # 选中需要删除的字符范围（段落分隔符 + 图片字符，或只有图片字符）
-        _select_range(cursor, delete_start_pos, delete_start_pos + delete_count)
-
-        # 删除选中的内容
+        # 2. 只删除图片字符本身（1个字符），保持总行数不变
+        _select_range(cursor, real_image_pos, real_image_pos + 1)
         cursor.removeSelectedText()
 
-        # 调整目标位置（如果删除位置在目标位置之前）
+        # 3. 调整目标位置（删除操作在目标位置之前时，目标位置需要前移1）
         adjusted_target_pos = target_pos
-        if old_pos < target_pos:
+        if real_image_pos < target_pos:
             adjusted_target_pos = target_pos - 1
 
-        # 2. 在新位置插入图片
+        # 4. 在新位置插入图片字符
         cursor.setPosition(adjusted_target_pos)
         cursor.insertImage(image_format)
 
-        # 结束编辑块
         cursor.endEditBlock()
 
         # 更新选中状态
