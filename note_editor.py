@@ -266,7 +266,12 @@ class PasteImageTextEdit(QTextEdit):
         self.drag_start_pos = None
         self.drag_start_cursor_pos = None
         self.drag_preview_cursor = None  # 拖动预览光标位置
-        
+
+        # 表格拖动相关
+        self.table_dragging = False
+        self.table_drag_start_pos = None
+        self.table_drag_preview_cursor = None  # 表格拖动预览光标位置
+
         # 文本选择相关
         self.text_selecting = False
         self.mouse_pressed = False  # 跟踪鼠标按钮是否被按下
@@ -948,17 +953,27 @@ class PasteImageTextEdit(QTextEdit):
         from PyQt6.QtGui import QPainter, QPen, QColor, QPolygon
         from PyQt6.QtCore import QPoint
 
-        if not self.dragging or not self.drag_preview_cursor:
-            return
+        # 图片拖动预览：垂直虚线（行内插入位置）
+        if self.dragging and self.drag_preview_cursor:
+            self._paint_image_drop_indicator(self.drag_preview_cursor)
 
-        preview_rect = self.cursorRect(self.drag_preview_cursor)
+        # 表格拖动预览：水平虚线（块级插入位置）
+        if self.table_dragging and self.table_drag_preview_cursor:
+            self._paint_table_drop_indicator(self.table_drag_preview_cursor)
+
+    def _paint_image_drop_indicator(self, preview_cursor):
+        """绘制图片拖放指示器（垂直虚线 + 两端三角箭头）"""
+        from PyQt6.QtGui import QPainter, QPen, QColor, QPolygon
+        from PyQt6.QtCore import QPoint
+
+        preview_rect = self.cursorRect(preview_cursor)
         x = preview_rect.left()
         y_start = preview_rect.top() - 5
         y_end = preview_rect.bottom() + 5
 
         painter = QPainter(self.viewport())
 
-        # 绘制垂直虚线，表示图片将被插入的位置
+        # 绘制垂直虚线，表示图片将被插入的字符位置
         pen = QPen(QColor("#007AFF"), 2)
         pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(pen)
@@ -966,6 +981,7 @@ class PasteImageTextEdit(QTextEdit):
 
         # 在指示线两端绘制小三角形
         painter.setBrush(QColor("#007AFF"))
+        painter.setPen(Qt.PenStyle.NoPen)
         top_triangle = QPolygon([
             QPoint(x, y_start),
             QPoint(x - 4, y_start - 6),
@@ -979,6 +995,42 @@ class PasteImageTextEdit(QTextEdit):
             QPoint(x + 4, y_end + 6)
         ])
         painter.drawPolygon(bottom_triangle)
+
+        painter.end()
+
+    def _paint_table_drop_indicator(self, preview_cursor):
+        """绘制表格拖放指示器（水平虚线 + 左端三角箭头）"""
+        from PyQt6.QtGui import QPainter, QPen, QColor, QPolygon
+        from PyQt6.QtCore import QPoint
+
+        preview_rect = self.cursorRect(preview_cursor)
+        # 获取目标行的完整宽度范围
+        block = preview_cursor.block()
+        block_cursor = QTextCursor(block)
+        block_cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        block_start_rect = self.cursorRect(block_cursor)
+
+        y = preview_rect.top() - 2  # 在目标行上方绘制水平线
+        x_start = block_start_rect.left()
+        x_end = self.viewport().width() - 10
+
+        painter = QPainter(self.viewport())
+
+        # 绘制水平虚线，表示表格将被插入的行位置
+        pen = QPen(QColor("#007AFF"), 2)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawLine(QPoint(x_start, y), QPoint(x_end, y))
+
+        # 在指示线左端绘制小三角形（向右的箭头）
+        painter.setBrush(QColor("#007AFF"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        left_triangle = QPolygon([
+            QPoint(x_start, y),
+            QPoint(x_start - 6, y - 4),
+            QPoint(x_start - 6, y + 4)
+        ])
+        painter.drawPolygon(left_triangle)
 
         painter.end()
     
@@ -1447,7 +1499,7 @@ class PasteImageTextEdit(QTextEdit):
             self._start_cursor_blink()
 
     def _handle_table_border_click(self, table, cursor, event) -> bool:
-        """处理表格边框点击（选中整个表格）
+        """处理表格边框点击（选中整个表格，或开始拖动已选中的表格）
         
         Returns:
             如果处理了边框点击返回True，否则返回False
@@ -1455,6 +1507,15 @@ class PasteImageTextEdit(QTextEdit):
         if not self.is_click_on_table_border(event.pos(), table):
             return False
         
+        # 如果点击的是已选中的表格边框，开始拖动
+        if self.selected_table and self.selected_table == table:
+            self.table_dragging = True
+            self.table_drag_start_pos = event.pos()
+            self.table_drag_preview_cursor = None
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return True
+
         # 点击了边框，选中整个表格
         self.selected_table = table
         self.selected_table_cursor = cursor
@@ -1748,6 +1809,27 @@ class PasteImageTextEdit(QTextEdit):
         event.accept()
         return True
 
+    def _handle_table_dragging(self, event) -> bool:
+        """处理表格拖动移动
+
+        Returns:
+            如果正在拖动表格返回True，否则返回False
+        """
+        if not (self.table_dragging and self.table_drag_start_pos):
+            return False
+
+        # 更新预览光标位置
+        self.table_drag_preview_cursor = self.cursorForPosition(event.pos())
+
+        # 更新光标形状
+        self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+
+        # 触发重绘以显示预览指示器
+        self.viewport().update()
+
+        event.accept()
+        return True
+
     def _update_cursor_for_selected_image(self, event):
         """更新已选中图片的光标形状"""
         handle = self.get_handle_at_pos(event.pos())
@@ -1789,7 +1871,11 @@ class PasteImageTextEdit(QTextEdit):
             if table:
                 # 检查是否悬停在表格边框上
                 if self.is_click_on_table_border(event.pos(), table):
-                    self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                    # 如果是已选中的表格，显示移动光标
+                    if self.selected_table and self.selected_table == table:
+                        self.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
+                    else:
+                        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
                 else:
                     self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
             else:
@@ -1810,7 +1896,11 @@ class PasteImageTextEdit(QTextEdit):
         # 处理图片缩放
         if self._handle_image_resizing(event):
             return
-        
+
+        # 处理表格拖动移动
+        if self._handle_table_dragging(event):
+            return
+
         # 处理图片拖动移动
         if self._handle_image_dragging(event):
             return
@@ -1938,6 +2028,25 @@ class PasteImageTextEdit(QTextEdit):
             self.resize_handle = None
             self.resize_start_pos = None
             self.resize_start_size = None
+            event.accept()
+            return
+
+        if self.table_dragging:
+            # 计算鼠标移动的距离
+            delta = event.pos() - self.table_drag_start_pos
+
+            # 如果移动距离足够大，执行表格移动
+            if abs(delta.x()) > 5 or abs(delta.y()) > 5:
+                target_cursor = self.cursorForPosition(event.pos())
+                self.move_table_to_cursor(target_cursor)
+
+            # 重置拖动状态
+            self.table_dragging = False
+            self.table_drag_start_pos = None
+            self.table_drag_preview_cursor = None
+            self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            self.viewport().update()
+
             event.accept()
             return
         
@@ -3008,6 +3117,69 @@ class PasteImageTextEdit(QTextEdit):
         self.selected_image_rect = self.get_image_rect_at_cursor(cursor)
 
         # 刷新显示
+        self.viewport().update()
+
+    def move_table_to_cursor(self, target_cursor):
+        """移动表格到新的光标位置（目标光标所在行的前面）"""
+        if not self.selected_table:
+            return
+
+        table = self.selected_table
+        doc = self.document()
+
+        table_start = table.firstPosition()
+        table_end = table.lastPosition()
+
+        # 目标位置（目标光标所在 block 的起始位置）
+        target_block = target_cursor.block()
+        target_block_start = target_block.position()
+
+        # 如果目标位置在表格内部或紧邻表格，不移动
+        if table_start - 1 <= target_block_start <= table_end + 1:
+            return
+
+        cursor = QTextCursor(doc)
+        cursor.beginEditBlock()
+
+        # 1. 选中整个表格（包含 frame 边界字符），提取文档片段
+        cursor.setPosition(table_start - 1)
+        cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
+        fragment = cursor.selection()
+        table_html = fragment.toHtml()
+
+        # 2. 删除原表格（选中范围：frame前边界 到 frame后边界+1）
+        cursor.setPosition(table_start - 1)
+        cursor.setPosition(table_end + 1, QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+
+        # 3. 调整目标位置（如果表格在目标之前，目标位置需要前移）
+        delete_count = (table_end + 1) - (table_start - 1)  # 删除的字符数
+        adjusted_target_block_start = target_block_start
+        if (table_start - 1) < target_block_start:
+            adjusted_target_block_start = max(0, target_block_start - delete_count)
+
+        # 4. 在目标位置插入表格
+        cursor.setPosition(adjusted_target_block_start)
+        cursor.insertHtml(table_html)
+
+        cursor.endEditBlock()
+
+        # 重新查找插入后的表格，保持选中状态
+        cursor.setPosition(adjusted_target_block_start)
+        new_table = cursor.currentTable()
+        if not new_table:
+            # insertHtml 后光标可能在表格之后，向前查找
+            cursor.setPosition(adjusted_target_block_start + 1)
+            new_table = cursor.currentTable()
+
+        if new_table:
+            self.selected_table = new_table
+            self.selected_table_cursor = QTextCursor(doc)
+            self.selected_table_cursor.setPosition(new_table.firstPosition())
+        else:
+            self.selected_table = None
+            self.selected_table_cursor = None
+
         self.viewport().update()
 
     # 注释掉此函数以提升性能，需要调试时可以重新启用
