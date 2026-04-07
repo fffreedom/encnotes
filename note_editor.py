@@ -3170,12 +3170,10 @@ class PasteImageTextEdit(QTextEdit):
         cursor.endEditBlock()
 
         # 重新查找插入后的表格，保持选中状态
-        cursor.setPosition(adjusted_target_block_start)
+        # adjusted_target_block_start 对应内层表格 frame 前边界字符，属于外层表格
+        # 需要从 +1 位置开始查找，才能进入内层表格内部
+        cursor.setPosition(adjusted_target_block_start + 1)
         new_table = cursor.currentTable()
-        if not new_table:
-            # insertHtml 后光标可能在表格之后，向前查找
-            cursor.setPosition(adjusted_target_block_start + 1)
-            new_table = cursor.currentTable()
 
         if new_table:
             self.selected_table = new_table
