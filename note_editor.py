@@ -614,17 +614,22 @@ class PasteImageTextEdit(QTextEdit):
             top_left_cursor = top_left_cell.firstCursorPosition()
             top_left_rect = self.cursorRect(top_left_cursor)
             
-            # 获取右下角单元格的光标矩形（最后一个字符位置）
-            bottom_right_cursor = bottom_right_cell.lastCursorPosition()
-            bottom_right_rect = self.cursorRect(bottom_right_cursor)
-            
             # 计算表格边界
             border_width = table_format.border()
             cell_padding = table_format.cellPadding()
             
             left = top_left_rect.left() - border_width - cell_padding
             top = top_left_rect.top() - border_width - cell_padding
-            bottom = bottom_right_rect.bottom() + border_width + cell_padding
+            # 遍历最后一行所有单元格，取最大 bottom（避免嵌套表格撑高某列导致右下角单元格bottom偏小）
+            last_row = table.rows() - 1
+            raw_bottom = 0
+            for col in range(table.columns()):
+                cell = table.cellAt(last_row, col)
+                if cell.isValid():
+                    cell_last_rect = self.cursorRect(cell.lastCursorPosition())
+                    if cell_last_rect.bottom() > raw_bottom:
+                        raw_bottom = cell_last_rect.bottom()
+            bottom = raw_bottom + border_width + cell_padding
             # 计算右边界
             document = self.document()
             root_frame = document.rootFrame()
