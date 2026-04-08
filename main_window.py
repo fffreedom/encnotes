@@ -112,7 +112,6 @@ class FolderListWidget(QListWidget):
         pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
         target_item = self.itemAt(pos)
         target_folder_id = self._get_folder_id_from_item(target_item)
-        logger.debug(f"DragMove: pos={pos}, drag_type={drag_type}, source={event.source()}, source_type={type(event.source()).__name__}, target_item={target_item}, target_folder_id={target_folder_id}")
         # 根据拖动类型分发处理
         if drag_type == 'note':
             self._handle_note_drag_move(event, pos, target_item)
@@ -505,11 +504,6 @@ class FolderListWidget(QListWidget):
         self.main_window.load_folders()
         t_after_load_folders = time.time()
         logger.debug(f"[性能-笔记拖拽] load_folders()耗时: {(t_after_load_folders - t_before_load_folders)*1000:.2f}ms")
-        
-        t_before_load_notes = time.time()
-        self.main_window.load_notes()
-        t_after_load_notes = time.time()
-        logger.debug(f"[性能-笔记拖拽] load_notes()耗时: {(t_after_load_notes - t_before_load_notes)*1000:.2f}ms")
         
         t_before_ui_refresh = time.time()
         note_list.viewport().update()
