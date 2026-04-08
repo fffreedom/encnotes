@@ -502,6 +502,9 @@ class FolderListWidget(QListWidget):
         
         t_before_load_folders = time.time()
         self.main_window.load_folders()
+        # load_folders() 重建了所有 row_widget，新 widget 的 selected 属性默认为 False。
+        # on_folder_changed 因 current_folder_id 未变而跳过高亮恢复，需手动补调。
+        self.main_window._restore_current_item_highlight()
         t_after_load_folders = time.time()
         logger.debug(f"[性能-笔记拖拽] load_folders()耗时: {(t_after_load_folders - t_before_load_folders)*1000:.2f}ms")
         
