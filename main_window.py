@@ -93,6 +93,10 @@ class FolderListWidget(QListWidget):
         self._mouse_pressed_inside = False
         super().mouseReleaseEvent(event)
 
+    # _mouse_pressed_inside在mousePressEvent置True，mouseReleaseEvent置False
+    # 来确保只有鼠标真实按下在文件夹列表内部时才允许启动拖拽。这样笔记拖拽经过文件夹列表时，由于
+    # mousePressEvent从未在FolderListWidget上触发，_mouse_pressed_inside为False，
+    # startDrag直接返回，不会误触发文件夹拖拽
     def startDrag(self, supported_actions):
         """只允许从本 widget 内部真实 mousePress 发起的拖拽"""
         if not self._mouse_pressed_inside:
