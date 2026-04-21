@@ -4,6 +4,7 @@
 笔记管理器 - 使用SQLite数据库存储笔记
 """
 
+import os
 import sqlite3
 import uuid
 import logging
@@ -21,7 +22,6 @@ class NoteManager:
     
     def __init__(self):
         # 数据存储路径 - 模仿macOS备忘录的存储位置
-        import os
         _test_dir = os.environ.get("ENCNOTES_TEST_DATA_DIR")
         if _test_dir:
             self.data_dir = Path(_test_dir)
