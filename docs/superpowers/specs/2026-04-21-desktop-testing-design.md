@@ -47,6 +47,32 @@ tests/
 
 ---
 
+## 核心原则：测试数据完全隔离
+
+**所有测试必须与真实用户数据零接触。** 应用数据目前硬编码在：
+```
+~/Library/Group Containers/group.com.encnotes/NoteStore.sqlite
+```
+
+三层测试的隔离方案各不同：
+
+### 单元 & 集成测试（pytest）
+在 `conftest.py` 中使用 `unittest.mock.patch` 将 `NoteManager.data_dir` 和 `EncryptionManager.config_dir` 重定向到 pytest 的 `tmp_path`（每次测试后自动删除）：
+
+```python
+@pytest.fixture
+def isolated_note_manager(tmp_path, monkeypatch):
+    monkeypatch.setattr(NoteManager, "__init__", patched_init(tmp_path))
+    return NoteManager()
+```
+
+加密测试额外 mock 掉系统钥匙串（`keyring`），使用内存字典替代，避免写入真实钥匙串。
+
+### 端到端测试（computer-use-mcp）
+通过环境变量 `ENCNOTES_TEST_DATA_DIR` 指定测试专用数据目录（如 `/tmp/encnotes_test`）。应用启动前清空该目录，测试结束后删除。需在 `note_manager.py` 和 `encryption_manager.py` 中添加对此环境变量的支持（读取优先于默认路径）。
+
+---
+
 ## 工具栈
 
 | 层级 | 工具 | 用途 |
