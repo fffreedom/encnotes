@@ -37,7 +37,11 @@ class EncryptionManager:
         self.is_unlocked = False
         
         # 配置文件路径
-        self.config_dir = Path.home() / "Library" / "Group Containers" / "group.com.encnotes"
+        _test_dir = os.environ.get("ENCNOTES_TEST_DATA_DIR")
+        if _test_dir:
+            self.config_dir = Path(_test_dir)
+        else:
+            self.config_dir = Path.home() / "Library" / "Group Containers" / "group.com.encnotes"
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.config_dir / "encryption_config.json"
         
