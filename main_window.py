@@ -509,6 +509,15 @@ class FolderListWidget(QListWidget):
         # load_folders() 重建了所有 row_widget，新 widget 的 selected 属性默认为 False。
         # on_folder_changed 因 current_folder_id 未变而跳过高亮恢复，需手动补调。
         self.main_window._restore_current_item_highlight()
+        # 拖拽结束后鼠标仍停在目标文件夹位置，新建的 FolderRowWidget 的 enterEvent 会
+        # 立即触发，将 hovered 属性设为 True。调用 clear_hover() 手动清除 hover 高亮。
+        fl = self.main_window.folder_list
+        for i in range(fl.count()):
+            item = fl.item(i)
+            if item:
+                w = fl.itemWidget(item)
+                if isinstance(w, FolderRowWidget):
+                    w.clear_hover()
         t_after_load_folders = time.time()
         logger.debug(f"[性能-笔记拖拽] load_folders()耗时: {(t_after_load_folders - t_before_load_folders)*1000:.2f}ms")
         
@@ -1215,6 +1224,36 @@ class NoteListWidget(QListWidget):
             menu.addAction(empty)
 
 
+class FolderRowWidget(QWidget):
+    """文件夹列表行 widget，用自定义 hovered 属性替代 CSS :hover，
+    使拖拽结束后可通过 clear_hover() 手动清除 hover 高亮。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("folder_row_widget")
+        self.setProperty("selected", False)
+        self.setProperty("hovered", False)
+
+    def enterEvent(self, event):
+        self.setProperty("hovered", True)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.setProperty("hovered", False)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        super().leaveEvent(event)
+
+    def clear_hover(self):
+        """拖拽结束后手动清除 hover 状态"""
+        self.setProperty("hovered", False)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+
 class FolderTwisty(QLabel):
     """文件夹展开/折叠小箭头（可点击）"""
 
@@ -1568,7 +1607,7 @@ class MainWindow(QMainWindow):
             QWidget#folder_row_widget {
                 background: transparent;
             }
-            QWidget#folder_row_widget:hover {
+            QWidget#folder_row_widget[hovered="true"] {
                 background-color: #FFF4CC;
                 border-radius: 6px;
                 margin-left: 8px;
@@ -2779,6 +2818,10 @@ class MainWindow(QMainWindow):
         # 恢复选中状态
         self._restore_selection(current_row, restore_last_state)
         
+        # load_folders() 重建了所有 row_widget，新 widget 的 selected 属性默认为 False。
+        # _handle_item_selection 因 current_folder_id 未变而跳过高亮恢复，需手动补调。
+        self._restore_current_item_highlight()
+        
         # 强制刷新UI
         self.folder_list.viewport().update()
         self.folder_list.update()
@@ -2915,8 +2958,7 @@ class MainWindow(QMainWindow):
         tag_item.setData(Qt.ItemDataRole.UserRole, ("tag", tag['id']))
 
         # 创建自定义widget以支持高亮显示
-        tag_widget = QWidget()
-        tag_widget.setObjectName("folder_row_widget")
+        tag_widget = FolderRowWidget()
         tag_layout = QHBoxLayout(tag_widget)
         tag_layout.setContentsMargins(0, 0, 10, 0)
         tag_layout.setSpacing(6)
@@ -3135,11 +3177,9 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, ("folder", folder_id))
 
-            row_widget = QWidget()
-            row_widget.setObjectName("folder_row_widget")
-            row_widget.setProperty("selected", False)
+            row_widget = FolderRowWidget()
             row_layout = QHBoxLayout(row_widget)
-            # 左移：让折叠箭头列的最左侧与“🏷️ 标签”等普通文本项的图标最左侧对齐
+            # 左移：让折叠箭头列的最左侧与"🏷️ 标签"等普通文本项的图标最左侧对齐
             row_layout.setContentsMargins(0, 0, 10, 0)
 
             row_layout.setSpacing(6)
@@ -3254,11 +3294,9 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        row_widget = QWidget()
-        row_widget.setObjectName("folder_row_widget")
-        row_widget.setProperty("selected", False)
+        row_widget = FolderRowWidget()
         row_layout = QHBoxLayout(row_widget)
-        # 左移：与“🏷️ 标签”等普通文本项的图标最左侧对齐
+        # 左移：与"🏷️ 标签"等普通文本项的图标最左侧对齐
         row_layout.setContentsMargins(0, 0, 10, 0)
 
         row_layout.setSpacing(6)
@@ -4517,12 +4555,15 @@ class MainWindow(QMainWindow):
             
     def _set_row_widget_selected(self, row_widget: QWidget | None, selected: bool):
         """设置行 widget 的选中状态"""
+        logger.debug(f"[DEBUG _set_row_widget_selected] row_widget={row_widget}, type={type(row_widget).__name__ if row_widget else None}, objectName={row_widget.objectName() if row_widget else None}, selected={selected}")
         if not row_widget or row_widget.objectName() != "folder_row_widget":
+            logger.debug(f"[DEBUG _set_row_widget_selected] 跳过：row_widget为None或objectName不匹配")
             return
         row_widget.setProperty("selected", selected)
         row_widget.style().unpolish(row_widget)
         row_widget.style().polish(row_widget)
         row_widget.update()
+        logger.debug(f"[DEBUG _set_row_widget_selected] 完成：selected属性已设置为{selected}, property读取={row_widget.property('selected')}")
 
     def _find_row_widget_by_payload(self, item_type: str, item_id: str):
         """根据 payload 类型和 ID 查找对应的 row widget"""
@@ -4712,6 +4753,7 @@ class MainWindow(QMainWindow):
             
             # 设置当前行选中
             cur_widget = self.folder_list.itemWidget(cur_item) if cur_item else None
+            logger.debug(f"[DEBUG _handle_item_selection] cur_item={cur_item}, cur_widget={cur_widget}, type={type(cur_widget).__name__ if cur_widget else None}")
             self._set_row_widget_selected(cur_widget, True)
             
             # 根据类型更新对应的当前选中ID
