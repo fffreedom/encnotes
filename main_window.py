@@ -1231,6 +1231,9 @@ class FolderRowWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("folder_row_widget")
+        # WA_StyledBackground 让 Qt 知道此 widget 有独立的背景样式，
+        # 使父控件 QListWidget 的 QSS 属性选择器（[selected="true"]）能正确触发重绘。
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setProperty("selected", False)
         self.setProperty("hovered", False)
 
@@ -1238,12 +1241,14 @@ class FolderRowWidget(QWidget):
         self.setProperty("hovered", True)
         self.style().unpolish(self)
         self.style().polish(self)
+        self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self.setProperty("hovered", False)
         self.style().unpolish(self)
         self.style().polish(self)
+        self.update()
         super().leaveEvent(event)
 
     def clear_hover(self):
