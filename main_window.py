@@ -3865,7 +3865,7 @@ class MainWindow(QMainWindow):
 
     def _select_note_in_list(self, note_id):
         """在笔记列表中选中指定笔记
-        
+
         Args:
             note_id: 笔记ID
         """
@@ -3873,6 +3873,13 @@ class MainWindow(QMainWindow):
             item = self.note_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == note_id:
                 self.note_list.setCurrentItem(item)
+                # Update selected_note_rows to reflect the newly selected row.
+                # Without this, selected_note_rows stays stale after create_new_note()
+                # calls load_notes() (which selects the previously-visible note) and then
+                # calls _select_note_in_list() for the new note.  The stale row causes
+                # _handle_normal_click to treat the old note as "in multi-select" and
+                # refuse to switch to it when the user clicks back on it.
+                self.selected_note_rows = {i}
                 break
 
     def _refresh_folders_and_restore_selection(self):
@@ -5043,7 +5050,7 @@ class MainWindow(QMainWindow):
 
     def _load_and_display_note(self, note_id):
         """加载并显示笔记内容
-        
+
         Args:
             note_id: str 笔记ID
         """
