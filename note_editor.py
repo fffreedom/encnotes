@@ -293,6 +293,10 @@ class PasteImageTextEdit(QTextEdit):
         # Qt中事件由Qt事件系统直接调用，通过重写事件处理函数来处理，如focusInEvent等，不受blockSignals()影响
         self.cursorPositionChanged.connect(self.update_title_and_input_format)
 
+        # setCursorPosition 已调用 update_title_and_input_format 后，用此标志阻止
+        # focusInEvent 重复调用（setFocus() 在焦点变化时会触发 focusInEvent）
+        self._skip_focus_in_format_update = False
+
         # 自定义光标闪烁控制（用于空行大字体时绘制正确高度的光标）
         from PyQt6.QtCore import QTimer
         self._cursor_blink_visible = True  # 当前闪烁状态：True=显示，False=隐藏
@@ -382,52 +386,17 @@ class PasteImageTextEdit(QTextEdit):
         format_name = "标题" if is_title_format else "正文"
         block_text = current_block.text()
 
-        # 如果当前行为空，插入零宽度空格让光标有正确的格式依附
+        # 如果当前行为空，设置光标输入格式，使下一个输入字符具有正确格式（标题或正文）
         if block_text == "":
-            # 立即设置后续输入字符格式（不修改文档，不会影响回车操作）
             self.setCurrentCharFormat(fmt)
             logger.debug(f"[set_input_format] >>> 调用 setCurrentCharFormat({format_name}格式)，"
                          f"currentCharFormat font size={self.currentCharFormat().font().pointSize()}pt")
-
-            # setBlockFormat 和 setBlockCharFormat 会修改文档，如果在 cursorPositionChanged 信号处理函数里
-            # 同步调用，会导致 Qt 内部撤销正在进行的回车操作（换行丢失）。
-            # 使用 QTimer.singleShot(0) 延迟到当前事件处理完成后再执行，避免干扰回车操作。
-            from PyQt6.QtCore import QTimer
-            from PyQt6.QtGui import QFontMetrics
-            _font = fmt.font()
-            if _font.pointSize() <= 0 and _font.pixelSize() <= 0:
-                _font = self.document().defaultFont()
-            _line_height = QFontMetrics(_font).height()
-            _fmt_copy = QTextCharFormat(fmt)
-            _block_number = current_block.blockNumber()
-
-            def _apply_block_format():
-                c = self.textCursor()
-                b = c.block()
-                doc_block_count = self.document().blockCount()
-                logger.debug(f"[_apply_block_format] 延迟回调触发: 当前block_number={b.blockNumber()}, "
-                             f"期望block_number={_block_number}, block_text={repr(b.text())}, "
-                             f"文档总行数={doc_block_count}, cursor_pos={c.position()}")
-                # 只在光标仍在同一块且块仍为空时才应用格式，避免误操作
-                if b.blockNumber() == _block_number and b.text() == "":
-                    block_fmt = QTextBlockFormat()
-                    block_fmt.setLineHeight(_line_height, QTextBlockFormat.LineHeightTypes.MinimumHeight.value)
-                    logger.debug(f"[_apply_block_format] 条件满足，执行 setBlockFormat，_line_height={_line_height}")
-                    self.blockSignals(True)
-                    c.setBlockFormat(block_fmt)
-                    c.setBlockCharFormat(_fmt_copy)
-                    self.setTextCursor(c)
-                    self.setCurrentCharFormat(_fmt_copy)
-                    self.blockSignals(False)
-                    logger.debug(f"[_apply_block_format] 执行完毕，文档总行数={self.document().blockCount()}, "
-                                 f"cursor_pos={self.textCursor().position()}")
-                else:
-                    logger.debug(f"[_apply_block_format] 条件不满足，跳过格式设置: "
-                                 f"block_number={b.blockNumber()} vs {_block_number}, "
-                                 f"block_text={repr(b.text())}, 文档总行数={doc_block_count}")
-
-            QTimer.singleShot(0, _apply_block_format)
-            logger.debug(f"[set_input_format] {format_name}行为空，已设置输入格式，延迟执行 setBlockFormat，"
+            # 同步设置 blockCharFormat：使空块在视觉上以正确字号渲染（影响光标高度绘制）
+            self.blockSignals(True)
+            current_cursor.setBlockCharFormat(fmt)
+            self.setTextCursor(current_cursor)
+            self.blockSignals(False)
+            logger.debug(f"[set_input_format] {format_name}行为空，已设置输入格式，"
                          f"block_text={repr(block_text)}")
         else:
             logger.debug(f"[set_input_format] {format_name}行不为空，不需要真正设置格式， "
@@ -455,13 +424,21 @@ class PasteImageTextEdit(QTextEdit):
         cursor = self.textCursor()
         cursor.setPosition(safe_position)
 
-        # 这儿设置光标，如果位置发生变化，会触发cursorPositionChanged事件，调用update_title_and_input_format函数
-
+        # blockSignals(True) 阻止 cursorPositionChanged 信号，避免在笔记切换时触发
+        # 旧笔记的格式逻辑（此时文档内容还未更新/已更新为新笔记内容）。
         self.blockSignals(True)
         self.setTextCursor(cursor)
         self.blockSignals(False)
-        
-        # 应用光标并设置焦点，不设置焦点光标不会闪烁，会触发focusInEvent事件，调用update_title_and_input_format函数
+
+        # 直接调用格式更新，不依赖 setFocus() 触发 focusInEvent。
+        # 原因：setFocus() 只在焦点实际发生变化时才触发 focusInEvent；
+        # 当笔记列表被点击时编辑器可能已经有焦点，导致 focusInEvent 不触发，
+        # 进而 update_title_and_input_format 也不被调用，新笔记的标题格式无法正确应用。
+        self.update_title_and_input_format()
+
+        # 设置标志，阻止 focusInEvent 重复调用 update_title_and_input_format
+        self._skip_focus_in_format_update = True
+        # 设置焦点确保光标可见（闪烁），如果焦点有变化还会触发 focusInEvent
         logger.debug(f"[setCursorPosition] 设置光标焦点")
         self.setFocus()
     # 1. cursorPositionChanged事件处理函数，设置光位位置或者键盘、鼠标输入事件触发
@@ -1360,7 +1337,7 @@ class PasteImageTextEdit(QTextEdit):
     def focusInEvent(self, event):
         """焦点获得事件：验证笔记状态并恢复标题格式"""
         logger.debug("[focusInEvent] 焦点获得事件触发")
-        
+
         # 验证是否允许获得焦点
         if not self._can_accept_focus():
             logger.debug("[focusInEvent] 拒绝焦点：没有打开的笔记")
@@ -1370,8 +1347,13 @@ class PasteImageTextEdit(QTextEdit):
         # 调用父类处理
         super().focusInEvent(event)
 
-        # 如果光标在空的第一行，恢复标题格式
-        self.update_title_and_input_format()
+        # 如果 setCursorPosition 已调用 update_title_and_input_format，跳过此次重复调用
+        if self._skip_focus_in_format_update:
+            logger.debug("[focusInEvent] 跳过 update_title_and_input_format（setCursorPosition 已调用）")
+            self._skip_focus_in_format_update = False
+        else:
+            # 如果光标在空的第一行，恢复标题格式
+            self.update_title_and_input_format()
 
         # 启动自定义光标闪烁
         self._start_cursor_blink()
@@ -2722,6 +2704,44 @@ class PasteImageTextEdit(QTextEdit):
             cur = cur.next()
         cursor.endEditBlock()
 
+    def _handle_return_on_minimum_height_block(self) -> bool:
+        """当前块带有 MinimumHeight/FixedHeight 格式、或空块含显式 blockCharFormat 字体大小时，
+        直接插入新段落并返回 True，绕过 Qt 的两种"清除格式"缺陷。
+
+        缺陷一：当 QTextBlockFormat.lineHeightType() 为 MinimumHeight（1）或 FixedHeight（3）时，
+        Qt 的 keyPressEvent(Return) 将其解读为"清除段落格式"而非"插入新段落"。
+
+        缺陷二：当光标位于空块（block.text() == ""）且该块的 blockCharFormat.fontPointSize() > 0
+        （由 setHtml 加载笔记时设置）时，Qt 的 keyPressEvent(Return) 同样产生 delta=0——
+        它仅清除 charFmt 而不插入新段落。
+
+        解决方案：两种情况均绕过 Qt 的 keyPressEvent，直接调用 cursor.insertBlock() 插入新段落。
+
+        Returns:
+            bool: 已处理（插入了新块）返回 True，否则返回 False
+        """
+        cursor = self.textCursor()
+        # 有选区时不干预，交给默认处理
+        if cursor.hasSelection():
+            return False
+
+        fmt = cursor.blockFormat()
+        # 缺陷一：lineHeightType: 1 == MinimumHeight, 3 == FixedHeight（均会触发相同问题）
+        if fmt.lineHeightType() in (1, 3):
+            new_fmt = QTextBlockFormat(fmt)
+            new_fmt.setLineHeight(0, 0)  # 0 == SingleHeight（默认行高类型）
+            cursor.insertBlock(new_fmt)
+            self.setTextCursor(cursor)
+            return True
+
+        # 缺陷二：空块且 blockCharFormat.fontPointSize() > 0（HTML 加载后的状态）
+        if cursor.block().text() == "" and cursor.blockCharFormat().fontPointSize() > 0:
+            cursor.insertBlock()
+            self.setTextCursor(cursor)
+            return True
+
+        return False
+
     def _handle_return_key_press(self, event) -> bool:
         """处理回车键：在列表行尾按回车时，新行自动延续相同的列表格式。
         若当前行只有列表前缀而无正文内容，则退出列表格式（清除前缀）。
@@ -2860,12 +2880,16 @@ class PasteImageTextEdit(QTextEdit):
             # 处理列表行回车：自动延续列表格式
             _pre_block_count = self.document().blockCount()
             _pre_cursor = self.textCursor()
-            logger.debug(f"[keyPressEvent] 回车键按下: 回车前文档总行数={_pre_block_count}, "
-                         f"cursor_pos={_pre_cursor.position()}, block_number={_pre_cursor.block().blockNumber()}")
             if self._handle_return_key_press(event):
                 self._start_cursor_blink()
                 return
             # 非列表行回车，走默认处理
+            # 防御性修复：当前块若带有 MinimumHeight（lineHeightType==1 或 3），
+            # Qt 的 keyPressEvent(Return) 会将其解读为"清除段落格式"而非"插入新段落"，
+            # 导致连续按两次回车只产生一个新行。直接用 insertBlock 插入新段落，绕过 Qt 缺陷。
+            if self._handle_return_on_minimum_height_block():
+                self._start_cursor_blink()
+                return
         else:
             # 恢复光标显示并清除表格选中状态
             logger.debug("[keyPressEvent] 恢复光标显示并清除表格选中状态")
@@ -2875,19 +2899,6 @@ class PasteImageTextEdit(QTextEdit):
         # 从而调用update_title_and_input_format进行格式化处理
         logger.debug("[keyPressEvent] 调用父类方法处理按键事件")
         super().keyPressEvent(event)
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            _post_block_count = self.document().blockCount()
-            _post_cursor = self.textCursor()
-            logger.debug(f"[keyPressEvent] 回车键处理完毕: 回车后文档总行数={_post_block_count}, "
-                         f"cursor_pos={_post_cursor.position()}, block_number={_post_cursor.block().blockNumber()}, "
-                         f"行数变化={_post_block_count - _pre_block_count}")
-            # 如果回车后行数没有增加，说明 Qt 只清除了段落格式而没有新增段落（通常发生在有自定义
-            # line-height 的空行上按回车时）。此时手动插入换行，确保回车操作正常生效。
-            if _post_block_count == _pre_block_count:
-                logger.debug("[keyPressEvent] 行数未增加，手动插入换行")
-                cursor = self.textCursor()
-                cursor.insertBlock()
-                self.setTextCursor(cursor)
         # 删除键处理后，检查光标是否紧跟在 BULLET_PREFIX 之后（即删除内容后光标回到 • 后面）
         # 若是，则重置字符格式为正常前景色，避免后续输入的文字继承透明色而不可见
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):

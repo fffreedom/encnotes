@@ -949,7 +949,7 @@ class NoteListWidget(QListWidget):
         else:
             # 普通点击：单选或保持多选（用于拖动）
             self._handle_normal_click(clicked_row, event.pos())
-        
+
         # 5. 调用父类方法以支持拖动功能
         super().mousePressEvent(event)
 
@@ -5026,10 +5026,7 @@ class MainWindow(QMainWindow):
         # 这儿必须要设置光标位置，否则光标会不闪烁
         self.editor.text_edit.setCursorPosition(cursor_position)
         logger.debug(f"[_set_editor_cursor_to_position] 初始光标位置: {initial_position}, 最终光标位置: {cursor_position}")
-        # 如果cursor位置没有变化（文档为空时），需要手动触发标题格式设置，因为前面的setCursorPosition在position位置
-        # 相同的情况下不会触发cursorPositionChanged信号
-        if initial_position == cursor_position:
-            self.editor.text_edit.update_title_and_input_format()
+        # setCursorPosition 现在总是直接调用 update_title_and_input_format，无需在此再次手动触发
 
     def _set_editor_cursor_to_title_end(self):
         """将编辑器光标移动到标题末尾，标题格式通过cursorPositionChanged信号处理"""
@@ -5042,11 +5039,7 @@ class MainWindow(QMainWindow):
         # 这儿为了简单起见，直接设置光标位置，如果title为空，不设置也是可以的（在后面设置标题格式的时候会插入零宽度空格来变相设置光标位置）
         self.editor.text_edit.setCursorPosition(final_position)
         logger.debug(f"[_set_editor_cursor_to_title_end] 初始光标位置: {initial_position}, 最终光标位置: {final_position}")
-
-        # 如果cursor位置没有变化（文档为空时），需要手动触发标题格式设置，因为前面的setCursorPosition在position位置
-        # 相同的情况下不会触发cursorPositionChanged信号
-        if initial_position == final_position:
-            self.editor.text_edit.update_title_and_input_format()
+        # setCursorPosition 现在总是直接调用 update_title_and_input_format，无需在此再次手动触发
 
     def _load_and_display_note(self, note_id):
         """加载并显示笔记内容
@@ -5070,7 +5063,15 @@ class MainWindow(QMainWindow):
         self.editor.blockSignals(True)
         self.editor.setHtml(note['content'])
         self.editor.blockSignals(False)
-        
+
+        # 兼容旧数据：旧版代码在保存时会将 setBlockFormat(MinimumHeight) 写入 HTML。
+        # 加载后清除 block 0 / block 1 上残留的 MinimumHeight，
+        # 否则在这些块上按回车时 Qt 会把它识别为"清除段落格式"而非"插入新段落"。
+        try:
+            self._clear_legacy_minimum_height()
+        except Exception as _e:
+            logger.warning(f"[_load_and_display_note] 清理旧版 MinimumHeight 失败: {_e}")
+
         # 验证加载后的内容
         loaded_plain_text = self.editor.toPlainText()
         logger.info(f"[_load_and_display_note] 笔记内容已加载到编辑器: plain_text_length={len(loaded_plain_text)}")
@@ -5081,7 +5082,49 @@ class MainWindow(QMainWindow):
         # 标记编辑器已初始化（已加载过内容）
         self._editor_initialized = True
         logger.debug(f"[_load_and_display_note] 编辑器已初始化: note_id={note_id}")
-    
+
+    def _clear_legacy_minimum_height(self):
+        """清除旧版 HTML 数据中残留的 MinimumHeight QTextBlockFormat。
+
+        旧版代码（fix 前）在 _apply_block_format 里对 block 0 / block 1 调用了
+        setBlockFormat(MinimumHeight)，该格式被序列化到了 HTML。
+        每次在带有 MinimumHeight 的块上按回车，新块会继承该格式，
+        新块同样被保存进 HTML，导致所有后续块也携带 MinimumHeight。
+        新版代码不再写入该格式，但已保存的笔记里仍然存在于任意块。
+        加载后必须清除，否则在这些块上按回车时 Qt 会将其识别为"清除段落格式"
+        而非"插入新段落"，重新引入双回车 bug。
+        """
+        from PyQt6.QtGui import QTextBlockFormat
+        text_edit = self.editor.text_edit
+        doc = text_edit.document()
+        # 遍历所有块，清除任意位置残留的 MinimumHeight
+        for block_number in range(doc.blockCount()):
+            block = doc.findBlockByNumber(block_number)
+            if not block.isValid():
+                continue
+            fmt = block.blockFormat()
+            # QTextBlockFormat.LineHeightTypes.MinimumHeight == 1
+            # （旧代码写入的是 type=1；序列化后重新加载可能变为 type=3 FixedHeight）
+            if fmt.lineHeightType() in (1, 3):
+                logger.debug(
+                    f"[_clear_legacy_minimum_height] 清除 block {block_number} 的 MinimumHeight "
+                    f"(lineHeightType={fmt.lineHeightType()}, lineHeight={fmt.lineHeight()})"
+                )
+                cursor = text_edit.textCursor()
+                cursor.setPosition(block.position())
+                # 选中整个块，使 mergeBlockFormat 只作用于该块
+                cursor.select(cursor.SelectionType.BlockUnderCursor)
+                new_fmt = QTextBlockFormat()
+                # setLineHeight(0, 0) == 还原为默认行高类型 (SingleHeight = 0)
+                new_fmt.setLineHeight(0, 0)
+                text_edit.blockSignals(True)
+                cursor.mergeBlockFormat(new_fmt)
+                text_edit.blockSignals(False)
+                logger.debug(
+                    f"[_clear_legacy_minimum_height] block {block_number} 已清除 MinimumHeight, "
+                    f"新 lineHeightType={doc.findBlockByNumber(block_number).blockFormat().lineHeightType()}"
+                )
+
     def _clear_editor(self):
         """清空编辑器"""
         self._set_current_note_id(None)
@@ -5103,8 +5146,9 @@ class MainWindow(QMainWindow):
         current_note_id = current.data(Qt.ItemDataRole.UserRole) if current else None
         previous_note_id = previous.data(Qt.ItemDataRole.UserRole) if previous else None
         
+        import traceback
         logger.debug(f"🔵 [DEBUG] on_note_selected called - current_note_id: {current_note_id}, previous_note_id: {previous_note_id}")
-        
+
         # 1. 处理之前笔记的清理工作
         logger.debug(f"🔵 [DEBUG] on_note_selected - Step 1: Handling previous note cleanup (previous_note_id: {previous_note_id})")
         self._handle_previous_note_cleanup(previous)
@@ -5138,29 +5182,32 @@ class MainWindow(QMainWindow):
 
     def select_single_note(self, row):
         """单选笔记"""
+        logger.debug(f"[select_single_note] ENTER: row={row}, current_note_id={self._get_current_note_id()}")
         # 清除之前的多选状态
         self._clear_all_selections()
-        
+
         # 选中指定行
         self.selected_note_rows = {row}
         self._update_visual_selection()
-        
+
         # 加载笔记到编辑器
         item = self.note_list.item(row)
         if item:
             # 保存之前的笔记（包括光标位置）
             if self._get_current_note_id():
                 self.save_current_note()  # 保存笔记内容（包括光标位置）
-            
+
             # 阻止信号，避免触发on_note_selected，如果不阻塞，此操作会触发currentItemChanged 信号，导致调用on_note_selected
             self.note_list.blockSignals(True)
             self.note_list.setCurrentItem(item)
             self.note_list.blockSignals(False)
-            
+
             # 加载新笔记
             note_id = item.data(Qt.ItemDataRole.UserRole)
+            logger.debug(f"[select_single_note] loading note_id={note_id}")
             self._set_current_note_id(note_id)
             self._load_and_display_note(note_id)
+        logger.debug(f"[select_single_note] EXIT: row={row}, current_note_id={self._get_current_note_id()}")
     
     def toggle_note_selection(self, row):
         """切换笔记的选中状态（Command键跳选）"""
