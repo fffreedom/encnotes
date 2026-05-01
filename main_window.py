@@ -328,7 +328,7 @@ class FolderListWidget(QListWidget):
             # 从数据库查询父文件夹ID
             try:
                 cursor = self.main_window.note_manager.conn.cursor()
-                cursor.execute("SELECT ZPARENTFOLDERID FROM ZFOLDER WHERE Z_PK = ?", (child_folder_id,))
+                cursor.execute("SELECT ZPARENTFOLDERID FROM enc_folder WHERE Z_PK = ?", (child_folder_id,))
                 row = cursor.fetchone()
                 if row and row[0] == folder_id:
                     return True
@@ -361,7 +361,7 @@ class FolderListWidget(QListWidget):
                         try:
                             cursor = self.main_window.note_manager.conn.cursor()
                             next_folder_id = next_data[1]
-                            cursor.execute("SELECT ZPARENTFOLDERID FROM ZFOLDER WHERE Z_PK = ?", (next_folder_id,))
+                            cursor.execute("SELECT ZPARENTFOLDERID FROM enc_folder WHERE Z_PK = ?", (next_folder_id,))
                             row = cursor.fetchone()
                             if row and row[0] == parent_folder_id:
                                 return next_item
@@ -2842,7 +2842,7 @@ class MainWindow(QMainWindow):
             # 所有笔记（未删除）
             cur.execute('''
                 SELECT COUNT(*) as cnt
-                FROM ZNOTE
+                FROM enc_note
                 WHERE ZISDELETED = 0
             ''')
             row = cur.fetchone()
@@ -2854,7 +2854,7 @@ class MainWindow(QMainWindow):
             # 最近删除
             cur.execute('''
                 SELECT COUNT(*) as cnt
-                FROM ZNOTE
+                FROM enc_note
                 WHERE ZISDELETED = 1
             ''')
             row = cur.fetchone()
@@ -2866,7 +2866,7 @@ class MainWindow(QMainWindow):
             # 自定义文件夹：folder_id -> 笔记数量（未删除，且属于某文件夹）
             cur.execute('''
                 SELECT ZFOLDERID as folder_id, COUNT(*) as cnt
-                FROM ZNOTE
+                FROM enc_note
                 WHERE ZISDELETED = 0 AND ZFOLDERID IS NOT NULL
                 GROUP BY ZFOLDERID
             ''')

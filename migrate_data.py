@@ -74,7 +74,7 @@ def migrate_json_to_sqlite():
             # 插入数据
             cursor = note_manager.conn.cursor()
             cursor.execute('''
-                INSERT INTO ZNOTE (
+                INSERT INTO enc_note (
                     ZIDENTIFIER, ZTITLE, ZCONTENT,
                     ZCREATIONDATE, ZMODIFICATIONDATE,
                     ZISFAVORITE, ZISDELETED
