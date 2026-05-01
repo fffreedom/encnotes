@@ -5064,14 +5064,6 @@ class MainWindow(QMainWindow):
         self.editor.setHtml(note['content'])
         self.editor.blockSignals(False)
 
-        # 兼容旧数据：旧版代码在保存时会将 setBlockFormat(MinimumHeight) 写入 HTML。
-        # 加载后清除 block 0 / block 1 上残留的 MinimumHeight，
-        # 否则在这些块上按回车时 Qt 会把它识别为"清除段落格式"而非"插入新段落"。
-        try:
-            self._clear_legacy_minimum_height()
-        except Exception as _e:
-            logger.warning(f"[_load_and_display_note] 清理旧版 MinimumHeight 失败: {_e}")
-
         # 验证加载后的内容
         loaded_plain_text = self.editor.toPlainText()
         logger.info(f"[_load_and_display_note] 笔记内容已加载到编辑器: plain_text_length={len(loaded_plain_text)}")
@@ -5082,48 +5074,6 @@ class MainWindow(QMainWindow):
         # 标记编辑器已初始化（已加载过内容）
         self._editor_initialized = True
         logger.debug(f"[_load_and_display_note] 编辑器已初始化: note_id={note_id}")
-
-    def _clear_legacy_minimum_height(self):
-        """清除旧版 HTML 数据中残留的 MinimumHeight QTextBlockFormat。
-
-        旧版代码（fix 前）在 _apply_block_format 里对 block 0 / block 1 调用了
-        setBlockFormat(MinimumHeight)，该格式被序列化到了 HTML。
-        每次在带有 MinimumHeight 的块上按回车，新块会继承该格式，
-        新块同样被保存进 HTML，导致所有后续块也携带 MinimumHeight。
-        新版代码不再写入该格式，但已保存的笔记里仍然存在于任意块。
-        加载后必须清除，否则在这些块上按回车时 Qt 会将其识别为"清除段落格式"
-        而非"插入新段落"，重新引入双回车 bug。
-        """
-        from PyQt6.QtGui import QTextBlockFormat
-        text_edit = self.editor.text_edit
-        doc = text_edit.document()
-        # 遍历所有块，清除任意位置残留的 MinimumHeight
-        for block_number in range(doc.blockCount()):
-            block = doc.findBlockByNumber(block_number)
-            if not block.isValid():
-                continue
-            fmt = block.blockFormat()
-            # QTextBlockFormat.LineHeightTypes.MinimumHeight == 1
-            # （旧代码写入的是 type=1；序列化后重新加载可能变为 type=3 FixedHeight）
-            if fmt.lineHeightType() in (1, 3):
-                logger.debug(
-                    f"[_clear_legacy_minimum_height] 清除 block {block_number} 的 MinimumHeight "
-                    f"(lineHeightType={fmt.lineHeightType()}, lineHeight={fmt.lineHeight()})"
-                )
-                cursor = text_edit.textCursor()
-                cursor.setPosition(block.position())
-                # 选中整个块，使 mergeBlockFormat 只作用于该块
-                cursor.select(cursor.SelectionType.BlockUnderCursor)
-                new_fmt = QTextBlockFormat()
-                # setLineHeight(0, 0) == 还原为默认行高类型 (SingleHeight = 0)
-                new_fmt.setLineHeight(0, 0)
-                text_edit.blockSignals(True)
-                cursor.mergeBlockFormat(new_fmt)
-                text_edit.blockSignals(False)
-                logger.debug(
-                    f"[_clear_legacy_minimum_height] block {block_number} 已清除 MinimumHeight, "
-                    f"新 lineHeightType={doc.findBlockByNumber(block_number).blockFormat().lineHeightType()}"
-                )
 
     def _clear_editor(self):
         """清空编辑器"""

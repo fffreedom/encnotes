@@ -34,8 +34,7 @@ import traceback
 logger = logging.getLogger(__name__)
 
 # ── 编辑器字体大小常量 ──────────────────────────────────────────────────────────
-FONT_SIZE_NOTE_TITLE = 28   # 笔记第一行标题（自动应用）
-FONT_SIZE_HEADING1   = 22   # 格式菜单：标题
+FONT_SIZE_HEADING1   = 22   # 格式菜单：标题（也用于笔记第一行自动应用）
 FONT_SIZE_HEADING2   = 18   # 格式菜单：小标题
 FONT_SIZE_HEADING3   = 15   # 格式菜单：副标题
 FONT_SIZE_BODY       = 14   # 正文
@@ -361,9 +360,9 @@ class PasteImageTextEdit(QTextEdit):
         return None
 
     def _create_title_format(self):
-        """创建标题字符格式（28号粗体）"""
+        """创建标题字符格式（22号粗体，与格式菜单标题一致）"""
         title_fmt = QTextCharFormat()
-        title_fmt.setFontPointSize(FONT_SIZE_NOTE_TITLE)
+        title_fmt.setFontPointSize(FONT_SIZE_HEADING1)
         title_fmt.setFontWeight(QFont.Weight.Bold)
         return title_fmt
     
@@ -1403,12 +1402,6 @@ class PasteImageTextEdit(QTextEdit):
     #     """
     #     return text == "" or text == "\u200B"
     
-    # def _apply_title_format(self):
-    #     """应用标题格式（28pt + 粗体）"""
-    #     char_fmt = QTextCharFormat()
-    #     char_fmt.setFontPointSize(28)  # 标题字号
-    #     char_fmt.setFontWeight(QFont.Weight.Bold)  # 粗体
-    #     self.setCurrentCharFormat(char_fmt)
 
     def _handle_checklist_click(self, event) -> bool:
         """检测鼠标是否点击了核对清单行首的复选框字符，如果是则切换选中状态
@@ -2781,7 +2774,7 @@ class PasteImageTextEdit(QTextEdit):
             else:
                 # 检查当前行是否有标题格式（apply_heading 设置的格式）
                 # 如果有，换行后将新行重置为正文格式
-                heading_sizes = {FONT_SIZE_NOTE_TITLE, FONT_SIZE_HEADING1, FONT_SIZE_HEADING2, FONT_SIZE_HEADING3}  # 笔记标题、标题、小标题、副标题
+                heading_sizes = {FONT_SIZE_HEADING1, FONT_SIZE_HEADING2, FONT_SIZE_HEADING3}  # 标题、小标题、副标题
                 cur_fmt = cursor.charFormat()
                 cur_size = cur_fmt.fontPointSize()
                 cur_bold = cur_fmt.fontWeight() == QFont.Weight.Bold
@@ -2957,12 +2950,6 @@ class PasteImageTextEdit(QTextEdit):
     #     block_text = block.text()
     #     return block_text == "" or block_text == "\u200B"
     #
-    # def _apply_title_format_to_cursor(self):
-    #     """为当前光标应用标题格式"""
-    #     title_fmt = self.currentCharFormat()
-    #     title_fmt.setFontPointSize(28)
-    #     title_fmt.setFontWeight(QFont.Weight.Bold)
-    #     self.setCurrentCharFormat(title_fmt)
 
     def update_image_size(self, new_width, new_height):
         """更新图片尺寸"""
@@ -3400,7 +3387,7 @@ class NoteEditor(QWidget):
         # 设置字体：优先使用系统默认字体，避免缺失字体导致Qt在启动时耗时做字体别名填充
         font = self.font()
         try:
-            font.setPointSize(14)
+            font.setPointSize(FONT_SIZE_BODY)
         except Exception:
             pass
         self.text_edit.setFont(font)
@@ -3930,9 +3917,9 @@ class NoteEditor(QWidget):
         # 获取光标
         cursor = self.text_edit.textCursor()
 
-        # 创建标题字符格式
+        # 创建标题字符格式（与格式菜单标题一致）
         title_char_fmt = QTextCharFormat()
-        title_char_fmt.setFontPointSize(FONT_SIZE_NOTE_TITLE)
+        title_char_fmt.setFontPointSize(FONT_SIZE_HEADING1)
         title_char_fmt.setFontWeight(QFont.Weight.Bold)
 
         # 关键：插入一个零宽度空格，这样块格式才能生效
