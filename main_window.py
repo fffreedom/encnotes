@@ -377,15 +377,20 @@ class FolderListWidget(QListWidget):
         if not self._drop_indicator_position or not self._drop_indicator_rect:
             return
         
-        from PyQt6.QtGui import QPainter, QPen, QColor
-        from PyQt6.QtCore import Qt
-        
+        from PyQt6.QtGui import QPainter, QPen, QColor, QPainterPath
+        from PyQt6.QtCore import Qt, QRectF
+
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
+
         if self._drop_indicator_position == 'on':
-            # 拖到文件夹上：绘制淡黄色背景
-            painter.fillRect(self._drop_indicator_rect, QColor(255, 252, 220, 180))
+            # 拖到文件夹上：绘制淡黄色圆角背景
+            # 使用与 FolderRowWidget 样式一致的内缩矩形（margin-left/right: 8px,
+            # border-radius: 6px），使拖放高亮与真实选中/悬浮高亮形状完全对齐。
+            adjusted_rect = self._drop_indicator_rect.adjusted(8, 0, -8, 0)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(adjusted_rect), 6, 6)
+            painter.fillPath(path, QColor(255, 252, 220, 180))
         else:
             # 拖到文件夹之间：绘制蓝色插入线
             pen = QPen(QColor(0, 122, 255), 2)  # macOS蓝色
