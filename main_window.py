@@ -434,15 +434,17 @@ class FolderListWidget(QListWidget):
         # 笔记拖拽
         if drag_source == note_list:
             src_note_ids = []
-            
+
             # 检查多选笔记
             if hasattr(self.main_window, 'selected_note_rows') and self.main_window.selected_note_rows:
-                for row in self.main_window.selected_note_rows:
+                for row in sorted(self.main_window.selected_note_rows):
                     item = note_list.item(row)
                     if item:
                         note_id = item.data(Qt.ItemDataRole.UserRole)
                         if note_id:
                             src_note_ids.append(note_id)
+                    else:
+                        logger.debug(f"[笔记拖拽] 行号 {row} 无对应列表项（超出范围）")
             else:
                 # 单选笔记
                 note_current_item = note_list.currentItem()
@@ -450,7 +452,7 @@ class FolderListWidget(QListWidget):
                     note_data = note_current_item.data(Qt.ItemDataRole.UserRole)
                     if note_data:
                         src_note_ids = [note_data]
-            
+
             return (True, src_note_ids, None) if src_note_ids else None
         
         # 文件夹拖拽
@@ -590,7 +592,9 @@ class FolderListWidget(QListWidget):
         logger.debug(f"[笔记拖拽] 移动 {len(src_note_ids)} 个笔记到文件夹: {target_folder_id}")
         
         # 批量更新笔记所属文件夹
-        for note_id in src_note_ids:
+        # 倒序迭代：视觉上排第一的笔记最后移动，获得最新的 enc_modified_at 时间戳，
+        # 从而在 ORDER BY enc_modified_at DESC 中排在最前面，保持原始视觉顺序。
+        for note_id in reversed(src_note_ids):
             self.main_window.note_manager.move_note_to_folder(note_id, target_folder_id)
         
         t_after_db = time.time()
