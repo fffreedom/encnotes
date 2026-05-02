@@ -328,7 +328,7 @@ class FolderListWidget(QListWidget):
             # 从数据库查询父文件夹ID
             try:
                 cursor = self.main_window.note_manager.conn.cursor()
-                cursor.execute("SELECT ZPARENTFOLDERID FROM enc_folder WHERE Z_PK = ?", (child_folder_id,))
+                cursor.execute("SELECT enc_parent_folder_id FROM enc_folder WHERE enc_pk = ?", (child_folder_id,))
                 row = cursor.fetchone()
                 if row and row[0] == folder_id:
                     return True
@@ -361,7 +361,7 @@ class FolderListWidget(QListWidget):
                         try:
                             cursor = self.main_window.note_manager.conn.cursor()
                             next_folder_id = next_data[1]
-                            cursor.execute("SELECT ZPARENTFOLDERID FROM enc_folder WHERE Z_PK = ?", (next_folder_id,))
+                            cursor.execute("SELECT enc_parent_folder_id FROM enc_folder WHERE enc_pk = ?", (next_folder_id,))
                             row = cursor.fetchone()
                             if row and row[0] == parent_folder_id:
                                 return next_item
@@ -1593,7 +1593,7 @@ class MainWindow(QMainWindow):
         try:
             from PyQt6.QtWidgets import QAbstractItemView
             # 注意：不要用 InternalMove。InternalMove 会执行"列表内重排"，看起来只改变位置不改变层级。
-            # 我们把 Drop 交给 eventFilter 处理：写入 ZPARENTFOLDERID 后再 load_folders() 重新渲染层级树。
+            # 我们把 Drop 交给 eventFilter 处理：写入 enc_parent_folder_id 后再 load_folders() 重新渲染层级树。
             self.folder_list.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         except Exception:
             pass
@@ -2843,7 +2843,7 @@ class MainWindow(QMainWindow):
             cur.execute('''
                 SELECT COUNT(*) as cnt
                 FROM enc_note
-                WHERE ZISDELETED = 0
+                WHERE enc_is_deleted = 0
             ''')
             row = cur.fetchone()
             try:
@@ -2855,7 +2855,7 @@ class MainWindow(QMainWindow):
             cur.execute('''
                 SELECT COUNT(*) as cnt
                 FROM enc_note
-                WHERE ZISDELETED = 1
+                WHERE enc_is_deleted = 1
             ''')
             row = cur.fetchone()
             try:
@@ -2865,10 +2865,10 @@ class MainWindow(QMainWindow):
 
             # 自定义文件夹：folder_id -> 笔记数量（未删除，且属于某文件夹）
             cur.execute('''
-                SELECT ZFOLDERID as folder_id, COUNT(*) as cnt
+                SELECT enc_folder_id as folder_id, COUNT(*) as cnt
                 FROM enc_note
-                WHERE ZISDELETED = 0 AND ZFOLDERID IS NOT NULL
-                GROUP BY ZFOLDERID
+                WHERE enc_is_deleted = 0 AND enc_folder_id IS NOT NULL
+                GROUP BY enc_folder_id
             ''')
             for row in cur.fetchall():
                 try:

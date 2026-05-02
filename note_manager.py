@@ -91,6 +91,73 @@ class NoteManager:
         self.conn.commit()
         logger.info("数据库表名迁移完成")
 
+    def _migrate_column_names(self, cursor):
+        """一次性迁移：将Z前缀列名重命名为enc_前缀小写列名。
+
+        检测到 enc_note 表中存在旧列名 ZIDENTIFIER 时触发迁移：先备份数据库
+        文件，然后对所有6张表逐列执行 ALTER TABLE … RENAME COLUMN。
+        """
+        cursor.execute("PRAGMA table_info(enc_note)")
+        cols = {row[1] for row in cursor.fetchall()}
+        if 'ZIDENTIFIER' not in cols:
+            return  # 已迁移或全新数据库，跳过
+
+        # 迁移前先备份
+        import shutil
+        backup = self.db_path.parent / (
+            f"NoteStore.sqlite.colbak_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        )
+        shutil.copy2(self.db_path, backup)
+        logger.info("列迁移前备份: %s", backup)
+
+        renames = {
+            'enc_note': [
+                ('Z_PK', 'enc_pk'), ('Z_ENT', 'enc_ent'), ('Z_OPT', 'enc_opt'),
+                ('ZIDENTIFIER', 'enc_identifier'), ('ZFOLDERID', 'enc_folder_id'),
+                ('ZTITLE', 'enc_title'), ('ZCONTENT', 'enc_content'),
+                ('ZCREATIONDATE', 'enc_created_at'), ('ZMODIFICATIONDATE', 'enc_modified_at'),
+                ('ZISFAVORITE', 'enc_is_favorite'), ('ZISDELETED', 'enc_is_deleted'),
+                ('ZISPINNED', 'enc_is_pinned'), ('ZCURSORPOSITION', 'enc_cursor_position'),
+                ('ZCKRECORDID', 'enc_ck_record_id'), ('ZCKRECORDCHANGETAG', 'enc_ck_change_tag'),
+                ('ZCKRECORDSYSTEMFIELDS', 'enc_ck_system_fields'),
+            ],
+            'enc_folder': [
+                ('Z_PK', 'enc_pk'), ('Z_ENT', 'enc_ent'), ('Z_OPT', 'enc_opt'),
+                ('ZIDENTIFIER', 'enc_identifier'), ('ZNAME', 'enc_name'),
+                ('ZPARENTFOLDERID', 'enc_parent_folder_id'),
+                ('ZCREATIONDATE', 'enc_created_at'), ('ZMODIFICATIONDATE', 'enc_modified_at'),
+                ('ZORDERINDEX', 'enc_order_index'), ('ZLASTNOTEID', 'enc_last_note_id'),
+            ],
+            'enc_tag': [
+                ('Z_PK', 'enc_pk'), ('Z_ENT', 'enc_ent'), ('Z_OPT', 'enc_opt'),
+                ('ZIDENTIFIER', 'enc_identifier'), ('ZNAME', 'enc_name'),
+                ('ZCREATIONDATE', 'enc_created_at'), ('ZMODIFICATIONDATE', 'enc_modified_at'),
+            ],
+            'enc_note_tag': [
+                ('Z_PK', 'enc_pk'), ('ZNOTEID', 'enc_note_id'), ('ZTAGID', 'enc_tag_id'),
+            ],
+            'enc_ck_metadata': [
+                ('Z_PK', 'enc_pk'), ('ZKEY', 'enc_key'), ('ZVALUE', 'enc_value'),
+            ],
+            'enc_app_state': [
+                ('Z_PK', 'enc_pk'), ('ZKEY', 'enc_key'), ('ZVALUE', 'enc_value'),
+                ('ZMODIFICATIONDATE', 'enc_modified_at'),
+            ],
+        }
+        for table, pairs in renames.items():
+            # Only rename columns that actually exist (handles partial migrations)
+            cursor.execute(f"PRAGMA table_info({table})")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            for old_col, new_col in pairs:
+                if old_col in existing_cols:
+                    cursor.execute(
+                        f'ALTER TABLE "{table}" RENAME COLUMN "{old_col}" TO "{new_col}"'
+                    )
+                    logger.info("列重命名: %s.%s -> %s", table, old_col, new_col)
+
+        self.conn.commit()
+        logger.info("数据库列名迁移完成")
+
     def init_database(self):
         """初始化数据库，创建表结构"""
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
@@ -101,199 +168,202 @@ class NoteManager:
         # 迁移旧的Z前缀表名（历史数据库一次性操作）
         self._migrate_table_names(cursor)
 
+        # 迁移旧的Z前缀列名（历史数据库一次性操作）
+        self._migrate_column_names(cursor)
+
         # 创建文件夹表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS enc_folder (
-                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
-                Z_ENT INTEGER DEFAULT 2,
-                Z_OPT INTEGER DEFAULT 1,
-                ZIDENTIFIER TEXT UNIQUE NOT NULL,
-                ZNAME TEXT NOT NULL,
-                ZPARENTFOLDERID TEXT,
-                ZCREATIONDATE REAL,
-                ZMODIFICATIONDATE REAL,
-                ZORDERINDEX INTEGER DEFAULT 0,
-                FOREIGN KEY (ZPARENTFOLDERID) REFERENCES enc_folder(ZIDENTIFIER)
+                enc_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                enc_ent INTEGER DEFAULT 2,
+                enc_opt INTEGER DEFAULT 1,
+                enc_identifier TEXT UNIQUE NOT NULL,
+                enc_name TEXT NOT NULL,
+                enc_parent_folder_id TEXT,
+                enc_created_at REAL,
+                enc_modified_at REAL,
+                enc_order_index INTEGER DEFAULT 0,
+                FOREIGN KEY (enc_parent_folder_id) REFERENCES enc_folder(enc_identifier)
             )
         ''')
 
         # 创建笔记表 - 模仿备忘录的表结构
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS enc_note (
-                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
-                Z_ENT INTEGER DEFAULT 1,
-                Z_OPT INTEGER DEFAULT 1,
-                ZIDENTIFIER TEXT UNIQUE NOT NULL,
-                ZFOLDERID TEXT,
-                ZTITLE TEXT,
-                ZCONTENT TEXT,
-                ZCREATIONDATE REAL,
-                ZMODIFICATIONDATE REAL,
-                ZISFAVORITE INTEGER DEFAULT 0,
-                ZISDELETED INTEGER DEFAULT 0,
-                ZISPINNED INTEGER DEFAULT 0,
-                ZCURSORPOSITION INTEGER DEFAULT 0,
-                ZCKRECORDID TEXT,
-                ZCKRECORDCHANGETAG TEXT,
-                ZCKRECORDSYSTEMFIELDS BLOB,
-                FOREIGN KEY (ZFOLDERID) REFERENCES enc_folder(ZIDENTIFIER)
+                enc_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                enc_ent INTEGER DEFAULT 1,
+                enc_opt INTEGER DEFAULT 1,
+                enc_identifier TEXT UNIQUE NOT NULL,
+                enc_folder_id TEXT,
+                enc_title TEXT,
+                enc_content TEXT,
+                enc_created_at REAL,
+                enc_modified_at REAL,
+                enc_is_favorite INTEGER DEFAULT 0,
+                enc_is_deleted INTEGER DEFAULT 0,
+                enc_is_pinned INTEGER DEFAULT 0,
+                enc_cursor_position INTEGER DEFAULT 0,
+                enc_ck_record_id TEXT,
+                enc_ck_change_tag TEXT,
+                enc_ck_system_fields BLOB,
+                FOREIGN KEY (enc_folder_id) REFERENCES enc_folder(enc_identifier)
             )
         ''')
 
         # 创建索引以提高查询性能
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_note_identifier_idx
-            ON enc_note(ZIDENTIFIER)
+            ON enc_note(enc_identifier)
         ''')
 
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_note_moddate_idx
-            ON enc_note(ZMODIFICATIONDATE DESC)
+            ON enc_note(enc_modified_at DESC)
         ''')
 
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_note_favorite_idx
-            ON enc_note(ZISFAVORITE)
+            ON enc_note(enc_is_favorite)
         ''')
 
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_note_deleted_idx
-            ON enc_note(ZISDELETED)
+            ON enc_note(enc_is_deleted)
         ''')
 
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_note_folderid_idx
-            ON enc_note(ZFOLDERID)
+            ON enc_note(enc_folder_id)
         ''')
 
         # 创建文件夹索引
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_folder_identifier_idx
-            ON enc_folder(ZIDENTIFIER)
+            ON enc_folder(enc_identifier)
         ''')
 
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_folder_orderindex_idx
-            ON enc_folder(ZORDERINDEX)
+            ON enc_folder(enc_order_index)
         ''')
 
         # 创建CloudKit同步元数据表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS enc_ck_metadata (
-                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
-                ZKEY TEXT UNIQUE NOT NULL,
-                ZVALUE TEXT
+                enc_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                enc_key TEXT UNIQUE NOT NULL,
+                enc_value TEXT
             )
         ''')
 
         # 创建应用状态表（用于替代QSettings）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS enc_app_state (
-                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
-                ZKEY TEXT UNIQUE NOT NULL,
-                ZVALUE TEXT,
-                ZMODIFICATIONDATE REAL
+                enc_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                enc_key TEXT UNIQUE NOT NULL,
+                enc_value TEXT,
+                enc_modified_at REAL
             )
         ''')
 
         # 创建标签表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS enc_tag (
-                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
-                Z_ENT INTEGER DEFAULT 3,
-                Z_OPT INTEGER DEFAULT 1,
-                ZIDENTIFIER TEXT UNIQUE NOT NULL,
-                ZNAME TEXT NOT NULL,
-                ZCREATIONDATE REAL,
-                ZMODIFICATIONDATE REAL
+                enc_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                enc_ent INTEGER DEFAULT 3,
+                enc_opt INTEGER DEFAULT 1,
+                enc_identifier TEXT UNIQUE NOT NULL,
+                enc_name TEXT NOT NULL,
+                enc_created_at REAL,
+                enc_modified_at REAL
             )
         ''')
 
         # 创建笔记-标签关联表（多对多关系）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS enc_note_tag (
-                Z_PK INTEGER PRIMARY KEY AUTOINCREMENT,
-                ZNOTEID TEXT NOT NULL,
-                ZTAGID TEXT NOT NULL,
-                FOREIGN KEY (ZNOTEID) REFERENCES enc_note(ZIDENTIFIER),
-                FOREIGN KEY (ZTAGID) REFERENCES enc_tag(ZIDENTIFIER),
-                UNIQUE(ZNOTEID, ZTAGID)
+                enc_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                enc_note_id TEXT NOT NULL,
+                enc_tag_id TEXT NOT NULL,
+                FOREIGN KEY (enc_note_id) REFERENCES enc_note(enc_identifier),
+                FOREIGN KEY (enc_tag_id) REFERENCES enc_tag(enc_identifier),
+                UNIQUE(enc_note_id, enc_tag_id)
             )
         ''')
 
         # 创建标签索引
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_tag_identifier_idx
-            ON enc_tag(ZIDENTIFIER)
+            ON enc_tag(enc_identifier)
         ''')
 
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_note_tag_noteid_idx
-            ON enc_note_tag(ZNOTEID)
+            ON enc_note_tag(enc_note_id)
         ''')
 
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS enc_note_tag_tagid_idx
-            ON enc_note_tag(ZTAGID)
+            ON enc_note_tag(enc_tag_id)
         ''')
 
-        # 数据库迁移：为现有数据库添加ZPARENTFOLDERID字段
+        # 数据库迁移：为现有数据库添加enc_parent_folder_id字段
         try:
-            # 检查enc_folder表是否已有ZPARENTFOLDERID字段
+            # 检查enc_folder表是否已有enc_parent_folder_id字段
             cursor.execute("PRAGMA table_info(enc_folder)")
             columns = [column[1] for column in cursor.fetchall()]
 
-            if 'ZPARENTFOLDERID' not in columns:
-                # 添加ZPARENTFOLDERID字段
+            if 'enc_parent_folder_id' not in columns:
+                # 添加enc_parent_folder_id字段
                 cursor.execute('''
-                    ALTER TABLE enc_folder ADD COLUMN ZPARENTFOLDERID TEXT
+                    ALTER TABLE enc_folder ADD COLUMN enc_parent_folder_id TEXT
                 ''')
-                print("数据库迁移：已添加ZPARENTFOLDERID字段")
+                print("数据库迁移：已添加enc_parent_folder_id字段")
         except Exception as e:
             print(f"数据库迁移警告: {e}")
 
-        # 数据库迁移：为现有数据库添加ZISPINNED字段
+        # 数据库迁移：为现有数据库添加enc_is_pinned字段
         try:
-            # 检查enc_note表是否已有ZISPINNED字段
+            # 检查enc_note表是否已有enc_is_pinned字段
             cursor.execute("PRAGMA table_info(enc_note)")
             columns = [column[1] for column in cursor.fetchall()]
 
-            if 'ZISPINNED' not in columns:
-                # 添加ZISPINNED字段
+            if 'enc_is_pinned' not in columns:
+                # 添加enc_is_pinned字段
                 cursor.execute('''
-                    ALTER TABLE enc_note ADD COLUMN ZISPINNED INTEGER DEFAULT 0
+                    ALTER TABLE enc_note ADD COLUMN enc_is_pinned INTEGER DEFAULT 0
                 ''')
-                print("数据库迁移：已添加ZISPINNED字段")
+                print("数据库迁移：已添加enc_is_pinned字段")
         except Exception as e:
             print(f"数据库迁移警告: {e}")
 
-        # 数据库迁移：为现有数据库添加ZCURSORPOSITION字段
+        # 数据库迁移：为现有数据库添加enc_cursor_position字段
         try:
-            # 检查enc_note表是否已有ZCURSORPOSITION字段
+            # 检查enc_note表是否已有enc_cursor_position字段
             cursor.execute("PRAGMA table_info(enc_note)")
             columns = [column[1] for column in cursor.fetchall()]
 
-            if 'ZCURSORPOSITION' not in columns:
-                # 添加ZCURSORPOSITION字段
+            if 'enc_cursor_position' not in columns:
+                # 添加enc_cursor_position字段
                 cursor.execute('''
-                    ALTER TABLE enc_note ADD COLUMN ZCURSORPOSITION INTEGER DEFAULT 0
+                    ALTER TABLE enc_note ADD COLUMN enc_cursor_position INTEGER DEFAULT 0
                 ''')
-                print("数据库迁移：已添加ZCURSORPOSITION字段")
+                print("数据库迁移：已添加enc_cursor_position字段")
         except Exception as e:
             print(f"数据库迁移警告: {e}")
 
-        # 数据库迁移：为现有数据库添加ZLASTNOTEID字段
+        # 数据库迁移：为现有数据库添加enc_last_note_id字段
         try:
-            # 检查enc_folder表是否已有ZLASTNOTEID字段
+            # 检查enc_folder表是否已有enc_last_note_id字段
             cursor.execute("PRAGMA table_info(enc_folder)")
             columns = [column[1] for column in cursor.fetchall()]
 
-            if 'ZLASTNOTEID' not in columns:
-                # 添加ZLASTNOTEID字段
+            if 'enc_last_note_id' not in columns:
+                # 添加enc_last_note_id字段
                 cursor.execute('''
-                    ALTER TABLE enc_folder ADD COLUMN ZLASTNOTEID TEXT
+                    ALTER TABLE enc_folder ADD COLUMN enc_last_note_id TEXT
                 ''')
-                print("数据库迁移：已添加ZLASTNOTEID字段")
+                print("数据库迁移：已添加enc_last_note_id字段")
         except Exception as e:
             print(f"数据库迁移警告: {e}")
 
@@ -325,9 +395,9 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT INTO enc_note (
-                ZIDENTIFIER, ZFOLDERID, ZTITLE, ZCONTENT, 
-                ZCREATIONDATE, ZMODIFICATIONDATE,
-                ZISFAVORITE, ZISDELETED
+                enc_identifier, enc_folder_id, enc_title, enc_content, 
+                enc_created_at, enc_modified_at,
+                enc_is_favorite, enc_is_deleted
             ) VALUES (?, ?, ?, ?, ?, ?, 0, 0)
         ''', (note_id, folder_id, title, encrypted_content, cocoa_time, cocoa_time))
         
@@ -340,7 +410,7 @@ class NoteManager:
         # logger.debug(f"[get_note] 调用堆栈:\n{''.join(traceback.format_stack()[:-1])}")
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT * FROM enc_note WHERE ZIDENTIFIER = ?
+            SELECT * FROM enc_note WHERE enc_identifier = ?
         ''', (note_id,))
         
         row = cursor.fetchone()
@@ -373,26 +443,26 @@ class NoteManager:
         params = []
         
         if title is not None:
-            fields.append("ZTITLE = ?")
+            fields.append("enc_title = ?")
             params.append(title)
         
         if content is not None:
-            fields.append("ZCONTENT = ?")
+            fields.append("enc_content = ?")
             params.append(self._encrypt_content(content))
         
         if cursor_position is not None:
-            fields.append("ZCURSORPOSITION = ?")
+            fields.append("enc_cursor_position = ?")
             params.append(cursor_position)
         
         # 始终更新修改时间
-        fields.append("ZMODIFICATIONDATE = ?")
+        fields.append("enc_modified_at = ?")
         params.append(self._timestamp_to_cocoa(datetime.now()))
         
         params.append(note_id)
         
         cursor = self.conn.cursor()
         cursor.execute(
-            f"UPDATE enc_note SET {', '.join(fields)} WHERE ZIDENTIFIER = ?",
+            f"UPDATE enc_note SET {', '.join(fields)} WHERE enc_identifier = ?",
             params
         )
         
@@ -410,8 +480,8 @@ class NoteManager:
         
         cursor.execute('''
             UPDATE enc_note 
-            SET ZISDELETED = 1, ZMODIFICATIONDATE = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_is_deleted = 1, enc_modified_at = ?
+            WHERE enc_identifier = ?
         ''', (cocoa_time, note_id))
         
         self.conn.commit()
@@ -422,7 +492,7 @@ class NoteManager:
         
         # 获取当前置顶状态
         cursor.execute('''
-            SELECT ZISPINNED FROM enc_note WHERE ZIDENTIFIER = ?
+            SELECT enc_is_pinned FROM enc_note WHERE enc_identifier = ?
         ''', (note_id,))
         
         row = cursor.fetchone()
@@ -435,8 +505,8 @@ class NoteManager:
         # 更新置顶状态
         cursor.execute('''
             UPDATE enc_note 
-            SET ZISPINNED = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_is_pinned = ?
+            WHERE enc_identifier = ?
         ''', (new_pinned, note_id))
         
         self.conn.commit()
@@ -446,7 +516,7 @@ class NoteManager:
         """检查笔记是否已置顶"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT ZISPINNED FROM enc_note WHERE ZIDENTIFIER = ?
+            SELECT enc_is_pinned FROM enc_note WHERE enc_identifier = ?
         ''', (note_id,))
         
         row = cursor.fetchone()
@@ -456,7 +526,7 @@ class NoteManager:
         """永久删除笔记"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            DELETE FROM enc_note WHERE ZIDENTIFIER = ?
+            DELETE FROM enc_note WHERE enc_identifier = ?
         ''', (note_id,))
         
         self.conn.commit()
@@ -467,18 +537,18 @@ class NoteManager:
         
         # 获取当前状态
         cursor.execute('''
-            SELECT ZISFAVORITE FROM enc_note WHERE ZIDENTIFIER = ?
+            SELECT enc_is_favorite FROM enc_note WHERE enc_identifier = ?
         ''', (note_id,))
         
         row = cursor.fetchone()
         if row:
-            new_state = 0 if row['ZISFAVORITE'] else 1
+            new_state = 0 if row['enc_is_favorite'] else 1
             cocoa_time = self._timestamp_to_cocoa(datetime.now())
             
             cursor.execute('''
                 UPDATE enc_note 
-                SET ZISFAVORITE = ?, ZMODIFICATIONDATE = ?
-                WHERE ZIDENTIFIER = ?
+                SET enc_is_favorite = ?, enc_modified_at = ?
+                WHERE enc_identifier = ?
             ''', (new_state, cocoa_time, note_id))
             
             self.conn.commit()
@@ -488,8 +558,8 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM enc_note 
-            WHERE ZISDELETED = 0
-            ORDER BY ZISPINNED DESC, ZMODIFICATIONDATE DESC
+            WHERE enc_is_deleted = 0
+            ORDER BY enc_is_pinned DESC, enc_modified_at DESC
         ''')
         
         return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -499,8 +569,8 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM enc_note 
-            WHERE ZISFAVORITE = 1 AND ZISDELETED = 0
-            ORDER BY ZMODIFICATIONDATE DESC
+            WHERE enc_is_favorite = 1 AND enc_is_deleted = 0
+            ORDER BY enc_modified_at DESC
         ''')
         
         return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -510,8 +580,8 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM enc_note 
-            WHERE ZISDELETED = 1
-            ORDER BY ZMODIFICATIONDATE DESC
+            WHERE enc_is_deleted = 1
+            ORDER BY enc_modified_at DESC
         ''')
         
         return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -521,8 +591,8 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM enc_note 
-            WHERE ZFOLDERID = ? AND ZISDELETED = 0
-            ORDER BY ZISPINNED DESC, ZMODIFICATIONDATE DESC
+            WHERE enc_folder_id = ? AND enc_is_deleted = 0
+            ORDER BY enc_is_pinned DESC, enc_modified_at DESC
         ''', (folder_id,))
         
         return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -532,8 +602,8 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM enc_note 
-            WHERE ZMODIFICATIONDATE > ?
-            ORDER BY ZMODIFICATIONDATE ASC
+            WHERE enc_modified_at > ?
+            ORDER BY enc_modified_at ASC
         ''', (timestamp,))
         
         return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -544,30 +614,30 @@ class NoteManager:
             return None
             
         # 转换为旧格式以保持兼容性
-        created_at = self._cocoa_to_datetime(row['ZCREATIONDATE'])
-        updated_at = self._cocoa_to_datetime(row['ZMODIFICATIONDATE'])
+        created_at = self._cocoa_to_datetime(row['enc_created_at'])
+        updated_at = self._cocoa_to_datetime(row['enc_modified_at'])
         
         # 解密内容
-        encrypted_content = row['ZCONTENT'] or ''
+        encrypted_content = row['enc_content'] or ''
         decrypted_content = self._decrypt_content(encrypted_content)
         
         return {
-            'id': row['ZIDENTIFIER'],
-            'folder_id': row['ZFOLDERID'],
-            'title': row['ZTITLE'] or '无标题',
+            'id': row['enc_identifier'],
+            'folder_id': row['enc_folder_id'],
+            'title': row['enc_title'] or '无标题',
             'content': decrypted_content,
             'created_at': created_at.isoformat(),
             'updated_at': updated_at.isoformat(),
-            'is_favorite': bool(row['ZISFAVORITE']),
-            'is_deleted': bool(row['ZISDELETED']),
-            'cursor_position': row['ZCURSORPOSITION'] if row['ZCURSORPOSITION'] is not None else 0,
+            'is_favorite': bool(row['enc_is_favorite']),
+            'is_deleted': bool(row['enc_is_deleted']),
+            'cursor_position': row['enc_cursor_position'] if row['enc_cursor_position'] is not None else 0,
             # CloudKit字段
-            'ck_record_id': row['ZCKRECORDID'],
-            'ck_change_tag': row['ZCKRECORDCHANGETAG'],
+            'ck_record_id': row['enc_ck_record_id'],
+            'ck_change_tag': row['enc_ck_change_tag'],
             # 数据库内部字段
-            '_pk': row['Z_PK'],
-            '_cocoa_created': row['ZCREATIONDATE'],
-            '_cocoa_modified': row['ZMODIFICATIONDATE']
+            '_pk': row['enc_pk'],
+            '_cocoa_created': row['enc_created_at'],
+            '_cocoa_modified': row['enc_modified_at']
         }
         
     def update_cloudkit_metadata(self, note_id: str, record_id: str, 
@@ -576,8 +646,8 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             UPDATE enc_note 
-            SET ZCKRECORDID = ?, ZCKRECORDCHANGETAG = ?, ZCKRECORDSYSTEMFIELDS = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_ck_record_id = ?, enc_ck_change_tag = ?, enc_ck_system_fields = ?
+            WHERE enc_identifier = ?
         ''', (record_id, change_tag, system_fields, note_id))
         
         self.conn.commit()
@@ -586,17 +656,17 @@ class NoteManager:
         """获取同步元数据"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT ZVALUE FROM enc_ck_metadata WHERE ZKEY = ?
+            SELECT enc_value FROM enc_ck_metadata WHERE enc_key = ?
         ''', (key,))
         
         row = cursor.fetchone()
-        return row['ZVALUE'] if row else None
+        return row['enc_value'] if row else None
         
     def set_sync_metadata(self, key: str, value: str):
         """设置同步元数据"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO enc_ck_metadata (ZKEY, ZVALUE)
+            INSERT OR REPLACE INTO enc_ck_metadata (enc_key, enc_value)
             VALUES (?, ?)
         ''', (key, value))
         
@@ -613,11 +683,11 @@ class NoteManager:
         """
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT ZVALUE FROM enc_app_state WHERE ZKEY = ?
+            SELECT enc_value FROM enc_app_state WHERE enc_key = ?
         ''', (key,))
         
         row = cursor.fetchone()
-        return row['ZVALUE'] if row else None
+        return row['enc_value'] if row else None
     
     def set_app_state(self, key: str, value: str):
         """设置应用状态
@@ -630,7 +700,7 @@ class NoteManager:
         cocoa_time = self._timestamp_to_cocoa(datetime.now())
         
         cursor.execute('''
-            INSERT OR REPLACE INTO enc_app_state (ZKEY, ZVALUE, ZMODIFICATIONDATE)
+            INSERT OR REPLACE INTO enc_app_state (enc_key, enc_value, enc_modified_at)
             VALUES (?, ?, ?)
         ''', (key, value, cocoa_time))
         
@@ -644,7 +714,7 @@ class NoteManager:
         """
         cursor = self.conn.cursor()
         cursor.execute('''
-            DELETE FROM enc_app_state WHERE ZKEY = ?
+            DELETE FROM enc_app_state WHERE enc_key = ?
         ''', (key,))
         
         self.conn.commit()
@@ -673,14 +743,14 @@ class NoteManager:
         cursor = self.conn.cursor()
         
         # 获取当前最大的排序索引
-        cursor.execute('SELECT MAX(ZORDERINDEX) FROM enc_folder')
+        cursor.execute('SELECT MAX(enc_order_index) FROM enc_folder')
         max_order = cursor.fetchone()[0]
         order_index = (max_order or 0) + 1
         
         cursor.execute('''
             INSERT INTO enc_folder (
-                ZIDENTIFIER, ZNAME, ZPARENTFOLDERID, ZCREATIONDATE, 
-                ZMODIFICATIONDATE, ZORDERINDEX
+                enc_identifier, enc_name, enc_parent_folder_id, enc_created_at, 
+                enc_modified_at, enc_order_index
             ) VALUES (?, ?, ?, ?, ?, ?)
         ''', (folder_id, name, parent_folder_id, cocoa_time, cocoa_time, order_index))
         
@@ -691,7 +761,7 @@ class NoteManager:
         """获取文件夹"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT * FROM enc_folder WHERE ZIDENTIFIER = ?
+            SELECT * FROM enc_folder WHERE enc_identifier = ?
         ''', (folder_id,))
         
         row = cursor.fetchone()
@@ -704,7 +774,7 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM enc_folder 
-            ORDER BY ZORDERINDEX ASC
+            ORDER BY enc_order_index ASC
         ''')
         
         return [self._folder_row_to_dict(row) for row in cursor.fetchall()]
@@ -716,8 +786,8 @@ class NoteManager:
         
         cursor.execute('''
             UPDATE enc_folder 
-            SET ZNAME = ?, ZMODIFICATIONDATE = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_name = ?, enc_modified_at = ?
+            WHERE enc_identifier = ?
         ''', (name, cocoa_time, folder_id))
         
         self.conn.commit()
@@ -774,8 +844,8 @@ class NoteManager:
         cursor.execute(
             '''
             UPDATE enc_folder
-            SET ZPARENTFOLDERID = ?, ZMODIFICATIONDATE = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_parent_folder_id = ?, enc_modified_at = ?
+            WHERE enc_identifier = ?
             ''',
             (parent_folder_id, cocoa_time, folder_id),
         )
@@ -832,8 +902,8 @@ class NoteManager:
         cocoa_time = self._timestamp_to_cocoa(datetime.now())
         cursor.execute('''
             UPDATE enc_folder
-            SET ZORDERINDEX = ?, ZMODIFICATIONDATE = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_order_index = ?, enc_modified_at = ?
+            WHERE enc_identifier = ?
         ''', (new_order, cocoa_time, folder_id))
         
         print(f"[调整顺序] 成功：将文件夹 {folder_id} 的order_index从 {src_folder.get('order_index')} 改为 {new_order}")
@@ -851,17 +921,17 @@ class NoteManager:
         
         # 按当前order_index排序，重新分配连续的整数
         cursor.execute('''
-            SELECT ZIDENTIFIER FROM enc_folder
-            ORDER BY ZORDERINDEX ASC, ZCREATIONDATE ASC
+            SELECT enc_identifier FROM enc_folder
+            ORDER BY enc_order_index ASC, enc_created_at ASC
         ''')
         
         folders = cursor.fetchall()
         for idx, row in enumerate(folders):
-            folder_id = row[0] if isinstance(row, tuple) else row['ZIDENTIFIER']
+            folder_id = row[0] if isinstance(row, tuple) else row['enc_identifier']
             cursor.execute('''
                 UPDATE enc_folder
-                SET ZORDERINDEX = ?
-                WHERE ZIDENTIFIER = ?
+                SET enc_order_index = ?
+                WHERE enc_identifier = ?
             ''', (idx + 1, folder_id))
         
         self.conn.commit()
@@ -874,26 +944,26 @@ class NoteManager:
         # 将文件夹中的笔记移到无文件夹
         cursor.execute('''
             UPDATE enc_note 
-            SET ZFOLDERID = NULL
-            WHERE ZFOLDERID = ?
+            SET enc_folder_id = NULL
+            WHERE enc_folder_id = ?
         ''', (folder_id,))
         
         # 删除文件夹
         cursor.execute('''
-            DELETE FROM enc_folder WHERE ZIDENTIFIER = ?
+            DELETE FROM enc_folder WHERE enc_identifier = ?
         ''', (folder_id,))
         
         self.conn.commit()
         
     def restore_note(self, note_id: str):
-        """从“最近删除”恢复笔记（ZISDELETED=0）。"""
+        """从“最近删除”恢复笔记（enc_is_deleted=0）。"""
         cursor = self.conn.cursor()
         cocoa_time = self._timestamp_to_cocoa(datetime.now())
         cursor.execute(
             '''
             UPDATE enc_note
-            SET ZISDELETED = 0, ZMODIFICATIONDATE = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_is_deleted = 0, enc_modified_at = ?
+            WHERE enc_identifier = ?
             ''',
             (cocoa_time, note_id),
         )
@@ -903,17 +973,17 @@ class NoteManager:
         """将笔记移动到文件夹。
 
         约定：
-        - “最近删除”由 `ZISDELETED=1` 表示。
+        - “最近删除”由 `enc_is_deleted=1` 表示。
         - 如果一条已删除笔记被移动到“所有笔记/任意文件夹”，则视为“恢复并移动”。
         """
         cursor = self.conn.cursor()
         cocoa_time = self._timestamp_to_cocoa(datetime.now())
 
         # 先恢复（如果它在最近删除里）
-        cursor.execute('SELECT ZISDELETED FROM enc_note WHERE ZIDENTIFIER = ?', (note_id,))
+        cursor.execute('SELECT enc_is_deleted FROM enc_note WHERE enc_identifier = ?', (note_id,))
         row = cursor.fetchone()
         try:
-            is_deleted = bool(row['ZISDELETED']) if row is not None else False
+            is_deleted = bool(row['enc_is_deleted']) if row is not None else False
         except Exception:
             is_deleted = bool(row[0]) if row is not None else False
 
@@ -921,8 +991,8 @@ class NoteManager:
             cursor.execute(
                 '''
                 UPDATE enc_note
-                SET ZISDELETED = 0, ZMODIFICATIONDATE = ?
-                WHERE ZIDENTIFIER = ?
+                SET enc_is_deleted = 0, enc_modified_at = ?
+                WHERE enc_identifier = ?
                 ''',
                 (cocoa_time, note_id),
             )
@@ -931,8 +1001,8 @@ class NoteManager:
         cursor.execute(
             '''
             UPDATE enc_note
-            SET ZFOLDERID = ?, ZMODIFICATIONDATE = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_folder_id = ?, enc_modified_at = ?
+            WHERE enc_identifier = ?
             ''',
             (folder_id, cocoa_time, note_id),
         )
@@ -945,26 +1015,26 @@ class NoteManager:
         if not row:
             return None
             
-        created_at = self._cocoa_to_datetime(row['ZCREATIONDATE'])
-        updated_at = self._cocoa_to_datetime(row['ZMODIFICATIONDATE'])
+        created_at = self._cocoa_to_datetime(row['enc_created_at'])
+        updated_at = self._cocoa_to_datetime(row['enc_modified_at'])
         
-        # 安全获取ZLASTNOTEID字段（可能不存在于旧数据库）
+        # 安全获取enc_last_note_id字段（可能不存在于旧数据库）
         try:
-            last_note_id = row['ZLASTNOTEID'] if row['ZLASTNOTEID'] else None
+            last_note_id = row['enc_last_note_id'] if row['enc_last_note_id'] else None
         except (KeyError, IndexError):
             last_note_id = None
         
         return {
-            'id': row['ZIDENTIFIER'],
-            'name': row['ZNAME'],
-            'parent_folder_id': row['ZPARENTFOLDERID'] if row['ZPARENTFOLDERID'] else None,
+            'id': row['enc_identifier'],
+            'name': row['enc_name'],
+            'parent_folder_id': row['enc_parent_folder_id'] if row['enc_parent_folder_id'] else None,
             'last_note_id': last_note_id,
             'created_at': created_at.isoformat(),
             'updated_at': updated_at.isoformat(),
-            'order_index': row['ZORDERINDEX'],
-            '_pk': row['Z_PK'],
-            '_cocoa_created': row['ZCREATIONDATE'],
-            '_cocoa_modified': row['ZMODIFICATIONDATE']
+            'order_index': row['enc_order_index'],
+            '_pk': row['enc_pk'],
+            '_cocoa_created': row['enc_created_at'],
+            '_cocoa_modified': row['enc_modified_at']
         }
     
     # ========== 标签管理方法 ==========
@@ -978,7 +1048,7 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT INTO enc_tag (
-                ZIDENTIFIER, ZNAME, ZCREATIONDATE, ZMODIFICATIONDATE
+                enc_identifier, enc_name, enc_created_at, enc_modified_at
             ) VALUES (?, ?, ?, ?)
         ''', (tag_id, name, cocoa_time, cocoa_time))
         
@@ -989,7 +1059,7 @@ class NoteManager:
         """获取标签"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT * FROM enc_tag WHERE ZIDENTIFIER = ?
+            SELECT * FROM enc_tag WHERE enc_identifier = ?
         ''', (tag_id,))
         
         row = cursor.fetchone()
@@ -1002,7 +1072,7 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT * FROM enc_tag 
-            ORDER BY ZNAME ASC
+            ORDER BY enc_name ASC
         ''')
         
         return [self._tag_row_to_dict(row) for row in cursor.fetchall()]
@@ -1014,8 +1084,8 @@ class NoteManager:
         
         cursor.execute('''
             UPDATE enc_tag 
-            SET ZNAME = ?, ZMODIFICATIONDATE = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_name = ?, enc_modified_at = ?
+            WHERE enc_identifier = ?
         ''', (name, cocoa_time, tag_id))
         
         self.conn.commit()
@@ -1026,12 +1096,12 @@ class NoteManager:
         
         # 删除笔记-标签关联
         cursor.execute('''
-            DELETE FROM enc_note_tag WHERE ZTAGID = ?
+            DELETE FROM enc_note_tag WHERE enc_tag_id = ?
         ''', (tag_id,))
         
         # 删除标签
         cursor.execute('''
-            DELETE FROM enc_tag WHERE ZIDENTIFIER = ?
+            DELETE FROM enc_tag WHERE enc_identifier = ?
         ''', (tag_id,))
         
         self.conn.commit()
@@ -1041,7 +1111,7 @@ class NoteManager:
         cursor = self.conn.cursor()
         try:
             cursor.execute('''
-                INSERT INTO enc_note_tag (ZNOTEID, ZTAGID)
+                INSERT INTO enc_note_tag (enc_note_id, enc_tag_id)
                 VALUES (?, ?)
             ''', (note_id, tag_id))
             self.conn.commit()
@@ -1054,7 +1124,7 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             DELETE FROM enc_note_tag 
-            WHERE ZNOTEID = ? AND ZTAGID = ?
+            WHERE enc_note_id = ? AND enc_tag_id = ?
         ''', (note_id, tag_id))
         
         self.conn.commit()
@@ -1064,9 +1134,9 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT t.* FROM enc_tag t
-            INNER JOIN enc_note_tag nt ON t.ZIDENTIFIER = nt.ZTAGID
-            WHERE nt.ZNOTEID = ?
-            ORDER BY t.ZNAME ASC
+            INNER JOIN enc_note_tag nt ON t.enc_identifier = nt.enc_tag_id
+            WHERE nt.enc_note_id = ?
+            ORDER BY t.enc_name ASC
         ''', (note_id,))
         
         return [self._tag_row_to_dict(row) for row in cursor.fetchall()]
@@ -1076,9 +1146,9 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT n.* FROM enc_note n
-            INNER JOIN enc_note_tag nt ON n.ZIDENTIFIER = nt.ZNOTEID
-            WHERE nt.ZTAGID = ? AND n.ZISDELETED = 0
-            ORDER BY n.ZMODIFICATIONDATE DESC
+            INNER JOIN enc_note_tag nt ON n.enc_identifier = nt.enc_note_id
+            WHERE nt.enc_tag_id = ? AND n.enc_is_deleted = 0
+            ORDER BY n.enc_modified_at DESC
         ''', (tag_id,))
         
         return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -1088,8 +1158,8 @@ class NoteManager:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT COUNT(*) as count FROM enc_note_tag nt
-            INNER JOIN enc_note n ON nt.ZNOTEID = n.ZIDENTIFIER
-            WHERE nt.ZTAGID = ? AND n.ZISDELETED = 0
+            INNER JOIN enc_note n ON nt.enc_note_id = n.enc_identifier
+            WHERE nt.enc_tag_id = ? AND n.enc_is_deleted = 0
         ''', (tag_id,))
         
         row = cursor.fetchone()
@@ -1100,17 +1170,17 @@ class NoteManager:
         if not row:
             return None
             
-        created_at = self._cocoa_to_datetime(row['ZCREATIONDATE'])
-        updated_at = self._cocoa_to_datetime(row['ZMODIFICATIONDATE'])
+        created_at = self._cocoa_to_datetime(row['enc_created_at'])
+        updated_at = self._cocoa_to_datetime(row['enc_modified_at'])
         
         return {
-            'id': row['ZIDENTIFIER'],
-            'name': row['ZNAME'],
+            'id': row['enc_identifier'],
+            'name': row['enc_name'],
             'created_at': created_at.isoformat(),
             'updated_at': updated_at.isoformat(),
-            '_pk': row['Z_PK'],
-            '_cocoa_created': row['ZCREATIONDATE'],
-            '_cocoa_modified': row['ZMODIFICATIONDATE']
+            '_pk': row['enc_pk'],
+            '_cocoa_created': row['enc_created_at'],
+            '_cocoa_modified': row['enc_modified_at']
         }
     
     def _encrypt_content(self, content: str) -> str:
@@ -1198,12 +1268,12 @@ class NoteManager:
                 
                 # 更新数据库
                 cursor.execute('''
-                    UPDATE enc_note SET ZCONTENT = ? WHERE ZIDENTIFIER = ?
+                    UPDATE enc_note SET enc_content = ? WHERE enc_identifier = ?
                 ''', (encrypted_content, note['id']))
                 
                 count += 1
             except Exception as e:
-                print(f"重新加密笔记失败 {row['ZIDENTIFIER']}: {e}")
+                print(f"重新加密笔记失败 {row['enc_identifier']}: {e}")
                 
         self.conn.commit()
         return count
@@ -1242,7 +1312,7 @@ class NoteManager:
         return result
 
     def delete_notes_in_folders(self, folder_ids: List[str]):
-        """将指定folder_ids下的所有笔记移到回收站（ZISDELETED=1）。"""
+        """将指定folder_ids下的所有笔记移到回收站（enc_is_deleted=1）。"""
         if not folder_ids:
             return
 
@@ -1253,8 +1323,8 @@ class NoteManager:
         cursor.execute(
             f"""
             UPDATE enc_note
-            SET ZISDELETED = 1, ZMODIFICATIONDATE = ?
-            WHERE ZISDELETED = 0 AND ZFOLDERID IN ({placeholders})
+            SET enc_is_deleted = 1, enc_modified_at = ?
+            WHERE enc_is_deleted = 0 AND enc_folder_id IN ({placeholders})
             """,
             (cocoa_time, *folder_ids),
         )
@@ -1264,7 +1334,7 @@ class NoteManager:
         """删除文件夹：将该文件夹（含子文件夹）下的笔记全部移入"最近删除"，然后删除文件夹本身。
 
         说明：
-        - "最近删除"在本项目里由笔记字段 `ZISDELETED=1` 表示，而不是一个真实文件夹。
+        - "最近删除"在本项目里由笔记字段 `enc_is_deleted=1` 表示，而不是一个真实文件夹。
         - 文件夹删除后，其子文件夹也会一并删除。
         """
         if not folder_id:
@@ -1281,7 +1351,7 @@ class NoteManager:
         # 3) 删除文件夹子树（先删子后删父）
         cursor = self.conn.cursor()
         for fid in reversed(folder_ids):
-            cursor.execute('DELETE FROM enc_folder WHERE ZIDENTIFIER = ?', (fid,))
+            cursor.execute('DELETE FROM enc_folder WHERE enc_identifier = ?', (fid,))
         self.conn.commit()
     
     def get_folder_last_note_id(self, folder_id: str) -> Optional[str]:
@@ -1298,13 +1368,13 @@ class NoteManager:
             
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT ZLASTNOTEID FROM enc_folder WHERE ZIDENTIFIER = ?
+            SELECT enc_last_note_id FROM enc_folder WHERE enc_identifier = ?
         ''', (folder_id,))
         
         row = cursor.fetchone()
         if row:
             try:
-                return row['ZLASTNOTEID'] if row['ZLASTNOTEID'] else None
+                return row['enc_last_note_id'] if row['enc_last_note_id'] else None
             except (KeyError, IndexError):
                 return None
         return None
@@ -1324,8 +1394,8 @@ class NoteManager:
         
         cursor.execute('''
             UPDATE enc_folder
-            SET ZLASTNOTEID = ?, ZMODIFICATIONDATE = ?
-            WHERE ZIDENTIFIER = ?
+            SET enc_last_note_id = ?, enc_modified_at = ?
+            WHERE enc_identifier = ?
         ''', (note_id, cocoa_time, folder_id))
         
         self.conn.commit()

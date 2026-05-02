@@ -24,7 +24,7 @@ def _count_notes():
     if not os.path.exists(db):
         return 0
     conn = sqlite3.connect(db)
-    cur = conn.execute("SELECT COUNT(*) FROM enc_note WHERE ZISDELETED = 0")
+    cur = conn.execute("SELECT COUNT(*) FROM enc_note WHERE enc_is_deleted = 0")
     count = cur.fetchone()[0]
     conn.close()
     return count
