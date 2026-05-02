@@ -183,6 +183,7 @@ class NoteManager:
                 enc_created_at REAL,
                 enc_modified_at REAL,
                 enc_order_index INTEGER DEFAULT 0,
+                enc_last_note_id TEXT,
                 FOREIGN KEY (enc_parent_folder_id) REFERENCES enc_folder(enc_identifier)
             )
         ''')
@@ -306,66 +307,6 @@ class NoteManager:
             CREATE INDEX IF NOT EXISTS enc_note_tag_tagid_idx
             ON enc_note_tag(enc_tag_id)
         ''')
-
-        # 数据库迁移：为现有数据库添加enc_parent_folder_id字段
-        try:
-            # 检查enc_folder表是否已有enc_parent_folder_id字段
-            cursor.execute("PRAGMA table_info(enc_folder)")
-            columns = [column[1] for column in cursor.fetchall()]
-
-            if 'enc_parent_folder_id' not in columns:
-                # 添加enc_parent_folder_id字段
-                cursor.execute('''
-                    ALTER TABLE enc_folder ADD COLUMN enc_parent_folder_id TEXT
-                ''')
-                print("数据库迁移：已添加enc_parent_folder_id字段")
-        except Exception as e:
-            print(f"数据库迁移警告: {e}")
-
-        # 数据库迁移：为现有数据库添加enc_is_pinned字段
-        try:
-            # 检查enc_note表是否已有enc_is_pinned字段
-            cursor.execute("PRAGMA table_info(enc_note)")
-            columns = [column[1] for column in cursor.fetchall()]
-
-            if 'enc_is_pinned' not in columns:
-                # 添加enc_is_pinned字段
-                cursor.execute('''
-                    ALTER TABLE enc_note ADD COLUMN enc_is_pinned INTEGER DEFAULT 0
-                ''')
-                print("数据库迁移：已添加enc_is_pinned字段")
-        except Exception as e:
-            print(f"数据库迁移警告: {e}")
-
-        # 数据库迁移：为现有数据库添加enc_cursor_position字段
-        try:
-            # 检查enc_note表是否已有enc_cursor_position字段
-            cursor.execute("PRAGMA table_info(enc_note)")
-            columns = [column[1] for column in cursor.fetchall()]
-
-            if 'enc_cursor_position' not in columns:
-                # 添加enc_cursor_position字段
-                cursor.execute('''
-                    ALTER TABLE enc_note ADD COLUMN enc_cursor_position INTEGER DEFAULT 0
-                ''')
-                print("数据库迁移：已添加enc_cursor_position字段")
-        except Exception as e:
-            print(f"数据库迁移警告: {e}")
-
-        # 数据库迁移：为现有数据库添加enc_last_note_id字段
-        try:
-            # 检查enc_folder表是否已有enc_last_note_id字段
-            cursor.execute("PRAGMA table_info(enc_folder)")
-            columns = [column[1] for column in cursor.fetchall()]
-
-            if 'enc_last_note_id' not in columns:
-                # 添加enc_last_note_id字段
-                cursor.execute('''
-                    ALTER TABLE enc_folder ADD COLUMN enc_last_note_id TEXT
-                ''')
-                print("数据库迁移：已添加enc_last_note_id字段")
-        except Exception as e:
-            print(f"数据库迁移警告: {e}")
 
         self.conn.commit()
         
