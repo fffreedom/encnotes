@@ -585,7 +585,10 @@ class FolderListWidget(QListWidget):
         
         # 展开目标文件夹及其祖先
         self._expand_folder_ancestors(target_folder_id)
-        
+
+        # 清除拖放指示器，防止目标文件夹残留淡黄色高亮背景
+        self._clear_drop_indicator()
+
         # 延迟刷新UI
         note_list = self.main_window.note_list
         folder_list = self
