@@ -385,9 +385,17 @@ class FolderListWidget(QListWidget):
 
         if self._drop_indicator_position == 'on':
             # 拖到文件夹上：绘制淡黄色圆角背景
-            # 使用与 FolderRowWidget 样式一致的内缩矩形（margin-left/right: 8px,
-            # border-radius: 6px），使拖放高亮与真实选中/悬浮高亮形状完全对齐。
-            adjusted_rect = self._drop_indicator_rect.adjusted(8, 0, -8, 0)
+            # 使用 row_widget.geometry()（而非 visualItemRect）作为基础矩形，
+            # 因为 QListWidget::item 有 padding: 6px 10px，导致 itemWidget 的实际
+            # viewport 坐标（x=10, w=192）与 visualItemRect（x=0, w=212）不同。
+            # 再在 left/right 各缩进 8px（对应 FolderRowWidget 样式 margin-left/right: 8px）
+            # 并使用 border-radius: 6px，使拖放高亮与真实选中/悬浮高亮形状完全对齐。
+            row_widget = self.itemWidget(self._drop_target_item)
+            if row_widget:
+                base_rect = row_widget.geometry()
+            else:
+                base_rect = self._drop_indicator_rect
+            adjusted_rect = base_rect.adjusted(8, 0, -8, 0)
             path = QPainterPath()
             path.addRoundedRect(QRectF(adjusted_rect), 6, 6)
             painter.fillPath(path, QColor(255, 252, 220, 180))
