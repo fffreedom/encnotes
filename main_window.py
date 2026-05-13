@@ -887,7 +887,7 @@ class NoteListWidget(QListWidget):
         """
         if not self.main_window:
             return False
-        return clicked_row in self.main_window.selected_note_rows
+        return clicked_row in self.selected_rows
     
     def _keep_multi_select_for_drag(self, clicked_row, event_pos):
         """保持多选状态用于拖动
@@ -906,7 +906,7 @@ class NoteListWidget(QListWidget):
         self.blockSignals(False)
         
         # 强制刷新视觉选中状态，确保所有选中项都正确显示
-        self.main_window._update_visual_selection()
+        self.update_visual_selection()
     
     def _handle_normal_click(self, clicked_row, event_pos):
         """处理普通点击（单选或保持多选用于拖动）
@@ -982,7 +982,7 @@ class NoteListWidget(QListWidget):
                      "Right" if event.button() == Qt.MouseButton.RightButton else "Other"
         logger.debug(f"[mouseReleaseEvent] Button: {button_name}, "
               f"press_pos: {self.press_pos}, "
-              f"selected_note_rows count: {len(self.main_window.selected_note_rows) if self.main_window else 'N/A'}")
+              f"selected_rows count: {len(self.selected_rows)}")
     
     def _is_click_not_drag(self, release_pos, threshold=5):
         """判断是点击还是拖动
@@ -1026,7 +1026,7 @@ class NoteListWidget(QListWidget):
         # 2. 只处理左键释放事件，右键用于显示菜单，不应该影响选中状态
         if event.button() == Qt.MouseButton.LeftButton:
             # 3. 检查是否在多选状态下点击
-            if self.press_pos is not None and self.main_window and len(self.main_window.selected_note_rows) > 1:
+            if self.press_pos is not None and len(self.selected_rows) > 1:
                 # 4. 判断是点击还是拖动
                 if self._is_click_not_drag(event.pos()):
                     # 5. 如果是点击，取消多选状态，只选中当前点击的笔记
@@ -1077,12 +1077,12 @@ class NoteListWidget(QListWidget):
         clicked_row = self.row(clicked_item)
         
         # 如果点击的笔记不在选中集合中，则只选中当前笔记
-        if clicked_row not in self.main_window.selected_note_rows:
+        if clicked_row not in self.selected_rows:
             self.main_window.select_single_note(clicked_row)
         
         # 获取所有选中的笔记ID
         selected_note_ids = []
-        for row in sorted(self.main_window.selected_note_rows):
+        for row in sorted(self.selected_rows):
             item = self.item(row)
             if item:
                 selected_note_ids.append(item.data(Qt.ItemDataRole.UserRole))
