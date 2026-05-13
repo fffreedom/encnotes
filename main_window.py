@@ -782,7 +782,7 @@ class NoteListWidget(QListWidget):
         self.last_selected_row = None  # 记录上次选中的行，用于Shift多选
         self.press_pos = None  # 记录鼠标按下的位置
         self.press_row = None  # 记录鼠标按下时的行号
-        self.was_in_multi_select = False  # 记录按下时是否处于多选状态
+        self.selected_rows: set = set()  # 当前选中的笔记行号集合
         
         # 启用右键菜单
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
@@ -899,7 +899,6 @@ class NoteListWidget(QListWidget):
         # 记录点击信息，用于在mouseReleaseEvent中判断是否发生了拖动
         self.press_pos = event_pos
         self.press_row = clicked_row
-        self.was_in_multi_select = len(self.main_window.selected_note_rows) > 1
         
         # 保持多选状态，但需要设置currentItem以支持拖动
         self.blockSignals(True)
@@ -983,7 +982,7 @@ class NoteListWidget(QListWidget):
                      "Right" if event.button() == Qt.MouseButton.RightButton else "Other"
         logger.debug(f"[mouseReleaseEvent] Button: {button_name}, "
               f"press_pos: {self.press_pos}, "
-              f"was_in_multi_select: {self.was_in_multi_select}")
+              f"selected_note_rows count: {len(self.main_window.selected_note_rows) if self.main_window else 'N/A'}")
     
     def _is_click_not_drag(self, release_pos, threshold=5):
         """判断是点击还是拖动
@@ -1013,7 +1012,6 @@ class NoteListWidget(QListWidget):
         """清除记录的按下信息"""
         self.press_pos = None
         self.press_row = None
-        self.was_in_multi_select = False
     
     def mouseReleaseEvent(self, event):
         """处理鼠标释放事件，如果是点击而非拖动，则取消多选状态
@@ -1028,7 +1026,7 @@ class NoteListWidget(QListWidget):
         # 2. 只处理左键释放事件，右键用于显示菜单，不应该影响选中状态
         if event.button() == Qt.MouseButton.LeftButton:
             # 3. 检查是否在多选状态下点击
-            if self.press_pos is not None and self.was_in_multi_select:
+            if self.press_pos is not None and self.main_window and len(self.main_window.selected_note_rows) > 1:
                 # 4. 判断是点击还是拖动
                 if self._is_click_not_drag(event.pos()):
                     # 5. 如果是点击，取消多选状态，只选中当前点击的笔记
@@ -1242,6 +1240,32 @@ class NoteListWidget(QListWidget):
             empty = QAction("（暂无文件夹）", self)
             empty.setEnabled(False)
             menu.addAction(empty)
+
+    def clear_selection(self):
+        """清除所有选中状态的视觉效果"""
+        for row in self.selected_rows:
+            item = self.item(row)
+            if item:
+                widget = self.itemWidget(item)
+                if widget and widget.objectName() == "note_item_widget":
+                    widget.setProperty("selected", False)
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+                    widget.update()
+        self.selected_rows.clear()
+
+    def update_visual_selection(self):
+        """更新所有笔记项的视觉选中状态"""
+        for i in range(self.count()):
+            item = self.item(i)
+            if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
+                widget = self.itemWidget(item)
+                if widget and widget.objectName() == "note_item_widget":
+                    is_selected = i in self.selected_rows
+                    widget.setProperty("selected", is_selected)
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+                    widget.update()
 
 
 class FolderRowWidget(QWidget):
@@ -4980,10 +5004,14 @@ class MainWindow(QMainWindow):
         current_note_id = self._get_current_note_id()
         logger.debug(f"[_handle_previous_note_cleanup] 📝 准备保存之前的笔记 - prev_note_id: {prev_note_id}, current_note_id: {current_note_id}")
         
-        # 确保 current_note_id 和 prev_note_id 一致，否则说明时序有问题
+        # 确保 current_note_id 和 prev_note_id 一致，否则编辑器内容属于另一篇笔记
         if current_note_id != prev_note_id:
-            logger.warning(f"[_handle_previous_note_cleanup] ⚠️ 警告：current_note_id ({current_note_id}) != prev_note_id ({prev_note_id})，使用 prev_note_id 保存以避免覆盖错误")
-        
+            logger.warning(
+                f"[_handle_previous_note_cleanup] ⚠️ current_note_id ({current_note_id}) != "
+                f"prev_note_id ({prev_note_id})，编辑器内容属于另一篇笔记，跳过保存以避免内容污染"
+            )
+            return  # 编辑器内容已属于 current_note_id，由 on_folder_changed 负责保存，此处不应保存 prev_note_id
+
         # 直接传递 prev_note_id，避免使用 _get_current_note_id() 导致的时序问题
         self.save_current_note(note_id=prev_note_id)
         logger.debug(f"[_handle_previous_note_cleanup] ✅ 之前的笔记已保存")
@@ -5111,7 +5139,11 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    # note_list.clear()会触发这个事件
+    # note_list.clear()、currentItemChanged信号这两个地方会触发这个事件，使用场景：
+    # 1. 在文件夹切换时，调用load_notes->note_list.clear()会触发这个事件，用于清空编辑器
+    # 2. 在空文件夹下点击编辑器触发创建新笔记后，选中这个笔记时触发
+    # 3. 在文件夹下使用菜单创建笔记时，创建完成后，选中这个笔记时触发
+    # 4. 在文件夹下使用菜单创建笔记时，发现已经有空笔记，选中这个笔记时触发
     def on_note_selected(self, current, previous):
         """笔记选中事件
         
