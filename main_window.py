@@ -782,7 +782,7 @@ class NoteListWidget(QListWidget):
         self.last_selected_row = None  # 记录上次选中的行，用于Shift多选
         self.press_pos = None  # 记录鼠标按下的位置
         self.press_row = None  # 记录鼠标按下时的行号
-        self.selected_rows: set = set()  # 当前选中的笔记行号集合
+        self.selected_rows: set[int] = set()  # 当前选中的笔记行号集合
         
         # 启用右键菜单
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
@@ -1242,7 +1242,7 @@ class NoteListWidget(QListWidget):
             menu.addAction(empty)
 
     def clear_selection(self):
-        """清除所有选中状态的视觉效果"""
+        """清除所有选中项的视觉高亮，并清空 selected_rows 集合。"""
         for row in self.selected_rows:
             item = self.item(row)
             if item:
