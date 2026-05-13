@@ -885,8 +885,6 @@ class NoteListWidget(QListWidget):
         Returns:
             bool: 是否在多选集合中
         """
-        if not self.main_window:
-            return False
         return clicked_row in self.selected_rows
     
     def _keep_multi_select_for_drag(self, clicked_row, event_pos):
