@@ -436,8 +436,8 @@ class FolderListWidget(QListWidget):
             src_note_ids = []
 
             # 检查多选笔记
-            if hasattr(self.main_window, 'selected_note_rows') and self.main_window.selected_note_rows:
-                for row in sorted(self.main_window.selected_note_rows):
+            if hasattr(self.main_window, 'note_list') and self.main_window.note_list.selected_rows:
+                for row in sorted(self.main_window.note_list.selected_rows):
                     item = note_list.item(row)
                     if item:
                         note_id = item.data(Qt.ItemDataRole.UserRole)
