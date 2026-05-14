@@ -3912,8 +3912,8 @@ class MainWindow(QMainWindow):
             item = self.note_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == note_id:
                 self.note_list.setCurrentItem(item)
-                # Update selected_note_rows to reflect the newly selected row.
-                # Without this, selected_note_rows stays stale after create_new_note()
+                # Update selected_rows to reflect the newly selected row.
+                # Without this, selected_rows stays stale after create_new_note()
                 # calls load_notes() (which selects the previously-visible note) and then
                 # calls _select_note_in_list() for the new note.  The stale row causes
                 # _handle_normal_click to treat the old note as "in multi-select" and
@@ -4450,7 +4450,7 @@ class MainWindow(QMainWindow):
                     self.note_manager.delete_note(note_id)
             
             # 清除多选状态
-            self.note_list.selected_rows.clear()
+            self.note_list.clear_selection()
 
             # 重新加载笔记列表
             self.load_notes()
@@ -4478,7 +4478,7 @@ class MainWindow(QMainWindow):
             self.note_manager.move_note_to_folder(note_id, target_folder_id)
         
         # 清除多选状态
-        self.note_list.selected_rows.clear()
+        self.note_list.clear_selection()
 
         # 重新加载笔记列表和文件夹列表
         self.load_notes()
@@ -4504,7 +4504,7 @@ class MainWindow(QMainWindow):
                 self.note_manager.toggle_pin_note(note_id)
         
         # 清除多选状态
-        self.note_list.selected_rows.clear()
+        self.note_list.clear_selection()
 
         # 重新加载笔记列表
         self.load_notes()
@@ -4519,7 +4519,7 @@ class MainWindow(QMainWindow):
             self.note_manager.add_tag_to_note(note_id, tag_id)
 
         # 清除多选状态
-        self.note_list.selected_rows.clear()
+        self.note_list.clear_selection()
 
         # 重新加载笔记列表和文件夹列表（更新标签数字）
         self.load_notes()
@@ -4542,7 +4542,7 @@ class MainWindow(QMainWindow):
             action_text = "添加"
 
         # 清除多选状态
-        self.note_list.selected_rows.clear()
+        self.note_list.clear_selection()
 
         # 重新加载笔记列表和文件夹列表（更新标签数字）
         self.load_notes()
