@@ -231,7 +231,7 @@ class NoteListWidget(QListWidget):
               f"press_pos: {self.press_pos}, "
               f"selected_rows count: {len(self.selected_rows)}")
 
-    def _moved_within_threshold(self, release_pos):
+    def _is_within_click_threshold(self, release_pos):
         """判断释放位置是否在按下位置的点击阈值内（即未发生拖动）
 
         Args:
@@ -271,7 +271,7 @@ class NoteListWidget(QListWidget):
             # 3. 检查是否在多选状态下点击
             if self.press_pos is not None and len(self.selected_rows) > 1:
                 # 4. 判断是点击还是拖动
-                if self._moved_within_threshold(event.pos()):
+                if self._is_within_click_threshold(event.pos()):
                     # 5. 如果是点击，取消多选状态，只选中当前点击的笔记
                     self._handle_click_in_multi_select()
 
