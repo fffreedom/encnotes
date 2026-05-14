@@ -28,6 +28,7 @@ from folder_list_widget import FolderListWidget, FolderRowWidget, FolderTwisty
 
 logger = logging.getLogger(__name__)
 
+
 # 宽度不足时自动显示省略号的Label（用于setItemWidget场景），elide是省略的意思
 class ElidedLabel(QLabel):
     """宽度不足时自动显示省略号的Label（用于setItemWidget场景）"""
