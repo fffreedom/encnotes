@@ -24,6 +24,8 @@ class NoteListWidget(QListWidget):
     _SEP_LEFT_ROLE = Qt.ItemDataRole.UserRole + 2
     _SEP_RIGHT_ROLE = Qt.ItemDataRole.UserRole + 3
 
+    CLICK_THRESHOLD = 5  # 点击与拖动的移动距离阈值（像素）
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = None  # 将在MainWindow中设置
@@ -229,22 +231,18 @@ class NoteListWidget(QListWidget):
               f"press_pos: {self.press_pos}, "
               f"selected_rows count: {len(self.selected_rows)}")
 
-    def _is_click_not_drag(self, release_pos, threshold=5):
-        """判断是点击还是拖动
+    def _moved_within_threshold(self, release_pos):
+        """判断释放位置是否在按下位置的点击阈值内（即未发生拖动）
 
         Args:
             release_pos: QPoint 鼠标释放位置
-            threshold: int 判断阈值（像素），默认5像素
 
         Returns:
-            bool: True表示是点击，False表示是拖动
+            bool: True 表示未发生拖动，False 表示发生了拖动
         """
-        if self.press_pos is None:
-            return False
-
         move_distance = (release_pos - self.press_pos).manhattanLength()
         logger.debug(f"[mouseReleaseEvent] Move distance: {move_distance}")
-        return move_distance < threshold
+        return move_distance < self.CLICK_THRESHOLD
 
     def _handle_click_in_multi_select(self):
         """处理多选状态下的点击事件（取消多选，只选中当前笔记）"""
@@ -273,7 +271,7 @@ class NoteListWidget(QListWidget):
             # 3. 检查是否在多选状态下点击
             if self.press_pos is not None and len(self.selected_rows) > 1:
                 # 4. 判断是点击还是拖动
-                if self._is_click_not_drag(event.pos()):
+                if self._moved_within_threshold(event.pos()):
                     # 5. 如果是点击，取消多选状态，只选中当前点击的笔记
                     self._handle_click_in_multi_select()
 
