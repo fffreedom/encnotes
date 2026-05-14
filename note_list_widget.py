@@ -110,7 +110,7 @@ class NoteListWidget(QListWidget):
             clicked_row: int 点击的行号
         """
         if self.main_window:
-            self.main_window.toggle_note_selection(clicked_row)
+            self.toggle_note_selection(clicked_row)
         self.last_selected_row = clicked_row
 
     def _handle_shift_press(self, clicked_row):
@@ -120,7 +120,7 @@ class NoteListWidget(QListWidget):
             clicked_row: int 点击的行号
         """
         if self.main_window and self.last_selected_row is not None:
-            self.main_window.select_note_range(self.last_selected_row, clicked_row)
+            self.select_note_range(self.last_selected_row, clicked_row)
 
     def _is_item_in_multi_select(self, clicked_row):
         """判断点击的item是否在多选集合中
@@ -176,7 +176,7 @@ class NoteListWidget(QListWidget):
         else:
             # 点击的是未选中的笔记，执行单选
             logger.debug(f"🔵 [DEBUG] _handle_normal_press - Item not in multi-select, selecting single note at row: {clicked_row}")
-            self.main_window.select_single_note(clicked_row)
+            self.select_single_note(clicked_row)
 
         self.last_selected_row = clicked_row
         logger.debug(f"🔵 [DEBUG] _handle_normal_press completed - last_selected_row set to: {clicked_row}")
@@ -251,7 +251,7 @@ class NoteListWidget(QListWidget):
         if self.main_window and self.press_row is not None:
             logger.debug(f"[mouseReleaseEvent] Canceling multi-select, "
                   f"selecting single note: {self.press_row}")
-            self.main_window.select_single_note(self.press_row)
+            self.select_single_note(self.press_row)
 
     def _clear_press_info(self):
         """清除记录的按下信息"""
@@ -304,6 +304,99 @@ class NoteListWidget(QListWidget):
         menu = self._create_note_context_menu(selected_note_ids)
         menu.exec(event.globalPos())
 
+    def select_single_note(self, row):
+        """单选笔记"""
+        logger.debug(f"[select_single_note] ENTER: row={row}, current_note_id={self.main_window._get_current_note_id()}")
+        # 清除之前的多选状态
+        self.clear_selection()
+
+        # 选中指定行
+        self.selected_rows = {row}
+        self.update_visual_selection()
+
+        # 加载笔记到编辑器
+        item = self.item(row)
+        if item:
+            # 保存之前的笔记（包括光标位置）
+            if self.main_window._get_current_note_id():
+                self.main_window.save_current_note()
+
+            # 阻止信号，避免触发on_note_selected
+            self.blockSignals(True)
+            self.setCurrentItem(item)
+            self.blockSignals(False)
+
+            # 加载新笔记
+            note_id = item.data(Qt.ItemDataRole.UserRole)
+            logger.debug(f"[select_single_note] loading note_id={note_id}")
+            self.main_window._set_current_note_id(note_id)
+            self.main_window._load_and_display_note(note_id)
+        logger.debug(f"[select_single_note] EXIT: row={row}, current_note_id={self.main_window._get_current_note_id()}")
+
+    def toggle_note_selection(self, row):
+        """切换笔记的选中状态（Command键跳选）"""
+        if row in self.selected_rows:
+            # 如果已选中，则取消选中
+            self.selected_rows.discard(row)
+            if not self.selected_rows:
+                # 如果没有选中项了，保存当前笔记，然后清空编辑器
+                if self.main_window._get_current_note_id():
+                    self.main_window.save_current_note()
+                self.main_window._set_current_note_id(None)
+                self.main_window.editor.clear()
+        else:
+            # 如果未选中，则添加到选中集合
+            # 先保存当前笔记
+            if self.main_window._get_current_note_id():
+                self.main_window.save_current_note()
+
+            self.selected_rows.add(row)
+            # 将最后选中的项设为当前项
+            item = self.item(row)
+            if item:
+                self.blockSignals(True)
+                self.setCurrentItem(item)
+                self.blockSignals(False)
+                # 加载这个笔记到编辑器
+                note_id = item.data(Qt.ItemDataRole.UserRole)
+                self.main_window._set_current_note_id(note_id)
+                self.main_window._load_and_display_note(note_id)
+
+        self.update_visual_selection()
+
+    def select_note_range(self, start_row, end_row):
+        """范围选择笔记（Shift键）"""
+        # 清除之前的选择
+        self.clear_selection()
+
+        # 确定范围
+        min_row = min(start_row, end_row)
+        max_row = max(start_row, end_row)
+
+        # 选中范围内所有可选中的笔记项
+        for row in range(min_row, max_row + 1):
+            item = self.item(row)
+            if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
+                self.selected_rows.add(row)
+
+        # 设置最后点击的项为当前项
+        if self.selected_rows:
+            item = self.item(end_row)
+            if item:
+                self.blockSignals(True)
+                self.setCurrentItem(item)
+                self.blockSignals(False)
+                # 加载这个笔记到编辑器
+                note_id = item.data(Qt.ItemDataRole.UserRole)
+                self.main_window._set_current_note_id(note_id)
+                note = self.main_window.note_manager.get_note(note_id)
+                if note:
+                    self.main_window.editor.blockSignals(True)
+                    self.main_window.editor.setHtml(note['content'])
+                    self.main_window.editor.blockSignals(False)
+
+        self.update_visual_selection()
+
     def _show_blank_area_menu(self, global_pos):
         """显示空白区域的右键菜单（仅包含新建笔记）"""
         menu = QMenu(self)
@@ -323,7 +416,7 @@ class NoteListWidget(QListWidget):
 
         # 如果点击的笔记不在选中集合中，则只选中当前笔记
         if clicked_row not in self.selected_rows:
-            self.main_window.select_single_note(clicked_row)
+            self.select_single_note(clicked_row)
 
         # 获取所有选中的笔记ID
         selected_note_ids = []
