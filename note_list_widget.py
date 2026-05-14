@@ -143,8 +143,7 @@ class NoteListWidget(QListWidget):
             event_pos: QPoint 点击位置
         """
         # 记录点击信息，用于在mouseReleaseEvent中判断是否发生了拖动
-        self.press_pos = event_pos
-        self.press_row = clicked_row
+        self._set_press_info(clicked_row, event_pos)
 
         # 保持多选状态，但需要设置currentItem以支持拖动
         self.blockSignals(True)
@@ -250,6 +249,11 @@ class NoteListWidget(QListWidget):
             logger.debug(f"[mouseReleaseEvent] Canceling multi-select, "
                   f"selecting single note: {self.press_row}")
             self.select_single_note(self.press_row)
+
+    def _set_press_info(self, row, pos):
+        """记录鼠标按下时的位置和行号"""
+        self.press_pos = pos
+        self.press_row = row
 
     def _clear_press_info(self):
         """清除记录的按下信息"""
