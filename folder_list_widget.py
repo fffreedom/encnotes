@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import TYPE_CHECKING
+import time
 
-from PyQt6.QtWidgets import QListWidget, QWidget, QLabel
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtWidgets import QListWidget, QWidget, QLabel, QApplication
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF
+from PyQt6.QtGui import QPainter, QPen, QColor, QPainterPath
 import logging
 
 if TYPE_CHECKING:
     from main_window import MainWindow
 
 logger = logging.getLogger(__name__)
+
+
 class FolderListWidget(QListWidget):
     """支持文件夹层级拖拽的自定义列表控件"""
     
@@ -315,9 +319,6 @@ class FolderListWidget(QListWidget):
         
         if not self._drop_indicator_position or not self._drop_indicator_rect:
             return
-        
-        from PyQt6.QtGui import QPainter, QPen, QColor, QPainterPath
-        from PyQt6.QtCore import Qt, QRectF
 
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -424,7 +425,6 @@ class FolderListWidget(QListWidget):
     
     def _expand_folder_ancestors(self, folder_id):
         """展开指定文件夹及其所有祖先文件夹"""
-        import time
         t_start = time.time()
         
         self.main_window._folder_expanded[folder_id] = True
@@ -446,9 +446,6 @@ class FolderListWidget(QListWidget):
     
     def _delayed_refresh_note_ui(self, note_list, folder_list):
         """延迟刷新笔记拖拽后的UI"""
-        import time
-        from PyQt6.QtWidgets import QApplication
-        
         t_refresh_start = time.time()
         
         try:
@@ -489,9 +486,6 @@ class FolderListWidget(QListWidget):
     
     def _delayed_refresh_folder_ui(self, src_folder_id):
         """延迟刷新文件夹拖拽后的UI"""
-        import time
-        from PyQt6.QtWidgets import QApplication
-        
         t_refresh_start = time.time()
         
         try:
@@ -524,8 +518,7 @@ class FolderListWidget(QListWidget):
         if not target_folder_id:
             logger.debug("[笔记拖拽] 拖到空白处，不处理")
             return
-        import time
-        
+
         t_before_db = time.time()
         logger.debug(f"[性能-笔记拖拽] 准备阶段耗时: {(t_before_db - t_start)*1000:.2f}ms")
         logger.debug(f"[笔记拖拽] 移动 {len(src_note_ids)} 个笔记到文件夹: {target_folder_id}")
@@ -555,8 +548,6 @@ class FolderListWidget(QListWidget):
     
     def _handle_folder_drop_on(self, src_folder_id, target_folder_id, t_before_db):
         """处理文件夹拖到另一个文件夹上（改变父文件夹）"""
-        import time
-        
         self.main_window.note_manager.update_folder_parent(src_folder_id, target_folder_id)
         t_after_db = time.time()
         logger.debug(f"[性能] 数据库更新(改变父文件夹)耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
@@ -567,8 +558,6 @@ class FolderListWidget(QListWidget):
     
     def _handle_folder_drop_between(self, src_folder_id, target_folder_id, insert_before, t_before_db):
         """处理文件夹拖到两个文件夹之间（调整顺序）"""
-        import time
-        
         # 获取目标文件夹的父文件夹ID
         target_folder_info = self.main_window.note_manager.get_folder(target_folder_id)
         if not target_folder_info:
@@ -600,16 +589,12 @@ class FolderListWidget(QListWidget):
     
     def _handle_folder_drop_blank(self, src_folder_id, t_before_db):
         """处理文件夹拖到空白处（移到顶级）"""
-        import time
-        
         self.main_window.note_manager.update_folder_parent(src_folder_id, None)
         t_after_db = time.time()
         logger.debug(f"[性能] 数据库更新(移到顶级)耗时: {(t_after_db - t_before_db)*1000:.2f}ms")
     
     def _handle_folder_drop(self, src_folder_id, target_folder_id, t_start):
         """处理文件夹拖拽"""
-        import time
-        
         t_before_db = time.time()
         logger.debug(f"[性能] 准备阶段耗时: {(t_before_db - t_start)*1000:.2f}ms")
         
@@ -639,7 +624,6 @@ class FolderListWidget(QListWidget):
 
     def _reselect_folder(self, folder_id):
         """重新选中指定的文件夹"""
-        import time
         t_start = time.time()
         
         for i in range(self.count()):
@@ -662,7 +646,6 @@ class FolderListWidget(QListWidget):
     def dropEvent(self, event):
         """处理拖拽放下事件：支持文件夹拖拽和笔记拖拽"""
         try:
-            import time
             t_start = time.time()
             
             # 1. 验证拖拽数据格式
@@ -683,7 +666,7 @@ class FolderListWidget(QListWidget):
             target_folder_id = self._get_drop_target_folder(event)
             pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
             target_item = self.itemAt(pos)
-            logger.debug(f"🔵 [DEBUG] dropEvent triggered, source={event.source()}, source_type={type(event.source()).__name__}, target_item={target_item}, target_folder_id={target_folder_id}")
+            logger.debug(f"dropEvent triggered, source={event.source()}, source_type={type(event.source()).__name__}, target_item={target_item}, target_folder_id={target_folder_id}")
             if not target_folder_id:
                 # 拖到了非文件夹项
                 event.ignore()
@@ -738,7 +721,6 @@ class FolderRowWidget(QWidget):
         self.style().unpolish(self)
         self.style().polish(self)
         self.update()
-
 
 
 class FolderTwisty(QLabel):
