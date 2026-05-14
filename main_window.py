@@ -3892,40 +3892,27 @@ class MainWindow(QMainWindow):
         # 获取笔记ID用于日志
         current_note_id = current.data(Qt.ItemDataRole.UserRole) if current else None
         previous_note_id = previous.data(Qt.ItemDataRole.UserRole) if previous else None
-        
-        import traceback
-        logger.debug(f"🔵 [DEBUG] on_note_selected called - current_note_id: {current_note_id}, previous_note_id: {previous_note_id}")
 
         # 1. 处理之前笔记的清理工作
-        logger.debug(f"🔵 [DEBUG] on_note_selected - Step 1: Handling previous note cleanup (previous_note_id: {previous_note_id})")
         self._handle_previous_note_cleanup(previous)
-        
+
         # 2. 处理当前选中的笔记
         if current:
-            logger.debug(f"🔵 [DEBUG] on_note_selected - Step 2: Processing current note (note_id: {current_note_id})")
-            
             # 更新选中状态
-            logger.debug(f"🔵 [DEBUG] on_note_selected - Updating item widget selection for note_id: {current_note_id}")
             self._update_item_widget_selection(current, True)
-            
+
             # 设置当前笔记ID
-            logger.debug(f"🔵 [DEBUG] on_note_selected - Setting current note ID to: {current_note_id}")
             note_id = current.data(Qt.ItemDataRole.UserRole)
             self._set_current_note_id(note_id)
-            
+
             # 加载并显示笔记
-            logger.debug(f"🔵 [DEBUG] on_note_selected - Loading and displaying note: {note_id}")
             self._load_and_display_note(note_id)
         else:
             # 没有选中任何笔记，清空编辑器
-            logger.debug(f"🔵 [DEBUG] on_note_selected - No note selected, clearing editor")
             self._clear_editor()
-        
+
         # 3. 刷新"新建笔记"按钮的可用状态
-        logger.debug(f"🔵 [DEBUG] on_note_selected - Step 3: Updating new note action enabled state")
         self._update_new_note_action_enabled()
-        
-        logger.debug(f"🔵 [DEBUG] on_note_selected completed - final current_note_id: {self._get_current_note_id()}")
 
     def on_text_changed(self):
         """文本变化事件"""

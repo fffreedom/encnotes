@@ -140,11 +140,8 @@ class NoteListWidget(QListWidget):
 
         Args:
             clicked_row: int 点击的行号
-            event_pos: QPoint 点击位置
+            event_pos: QPoint 点击位置（由 mousePressEvent 统一记录，此处参数保留兼容签名）
         """
-        # 记录点击信息，用于在mouseReleaseEvent中判断是否发生了拖动
-        self._set_press_info(clicked_row, event_pos)
-
         # 保持多选状态，但需要设置currentItem以支持拖动
         self.blockSignals(True)
         self.setCurrentRow(clicked_row)
@@ -153,7 +150,7 @@ class NoteListWidget(QListWidget):
         # 强制刷新视觉选中状态，确保所有选中项都正确显示
         self.update_visual_selection()
 
-    # mousePressEvent，正常鼠标按下事件处理函数
+
     def _handle_normal_press(self, clicked_row, event_pos):
         """处理普通点击（单选或保持多选用于拖动）
 
@@ -161,26 +158,19 @@ class NoteListWidget(QListWidget):
             clicked_row: int 点击的行号
             event_pos: QPoint 点击位置
         """
-        logger.debug(f"🔵 [DEBUG] _handle_normal_press called - clicked_row: {clicked_row}, event_pos: ({event_pos.x()}, {event_pos.y()})")
-
         if not self.main_window:
-            logger.debug(f"🔵 [DEBUG] _handle_normal_press - main_window is None, returning")
             return
 
         # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动）
         is_in_multi_select = self._is_item_in_multi_select(clicked_row)
-        logger.debug(f"🔵 [DEBUG] _handle_normal_press - is_in_multi_select: {is_in_multi_select}")
 
         if is_in_multi_select:
-            logger.debug(f"🔵 [DEBUG] _handle_normal_press - Item already in multi-select, keeping multi-select for drag")
             self._keep_multi_select_for_drag(clicked_row, event_pos)
         else:
             # 点击的是未选中的笔记，执行单选
-            logger.debug(f"🔵 [DEBUG] _handle_normal_press - Item not in multi-select, selecting single note at row: {clicked_row}")
             self.select_single_note(clicked_row)
 
         self.last_selected_row = clicked_row
-        logger.debug(f"🔵 [DEBUG] _handle_normal_press completed - last_selected_row set to: {clicked_row}")
 
     def mousePressEvent(self, event):
         """处理鼠标按下事件，支持多选
@@ -188,7 +178,6 @@ class NoteListWidget(QListWidget):
         Args:
             event: QMouseEvent 鼠标事件
         """
-        logger.debug("🟡 [DEBUG] NoteListWidget mousePressEvent triggered")
         # 1. 获取并验证点击的item
         item = self.itemAt(event.pos())
         if not self._is_valid_selectable_item(item):
@@ -204,7 +193,16 @@ class NoteListWidget(QListWidget):
         clicked_row = self.row(item)
         modifiers = event.modifiers()
 
-        # 4. 根据修饰键处理不同的点击逻辑
+        # 4. 先调用父类方法，让Qt记录按下位置以支持拖动（必须在选择逻辑之前，否则单选时拖动失败）
+        # 阻止信号避免 on_note_selected 提前加载笔记，稍后由选择逻辑负责加载
+        self.blockSignals(True)
+        super().mousePressEvent(event)
+        self.blockSignals(False)
+
+        # 5. 无条件记录按下位置，供 mouseReleaseEvent 判断点击还是拖动
+        self._set_press_info(clicked_row, event.pos())
+
+        # 6. 根据修饰键处理不同的点击逻辑
         if self._is_command_or_ctrl_pressed(modifiers):
             # Command/Ctrl键：跳选（添加/移除单个项）
             self._handle_command_press(clicked_row)
@@ -214,21 +212,6 @@ class NoteListWidget(QListWidget):
         else:
             # 普通点击：单选或保持多选（用于拖动）
             self._handle_normal_press(clicked_row, event.pos())
-
-        # 5. 调用父类方法以支持拖动功能
-        super().mousePressEvent(event)
-
-    def _log_mouse_release(self, event):
-        """记录鼠标释放事件的调试日志
-
-        Args:
-            event: QMouseEvent 鼠标事件
-        """
-        button_name = "Left" if event.button() == Qt.MouseButton.LeftButton else \
-                     "Right" if event.button() == Qt.MouseButton.RightButton else "Other"
-        logger.debug(f"[mouseReleaseEvent] Button: {button_name}, "
-              f"press_pos: {self.press_pos}, "
-              f"selected_rows count: {len(self.selected_rows)}")
 
     def _is_within_click_threshold(self, release_pos):
         """判断释放位置是否在按下位置的点击阈值内（即未发生拖动）
@@ -240,14 +223,11 @@ class NoteListWidget(QListWidget):
             bool: True 表示未发生拖动，False 表示发生了拖动
         """
         move_distance = (release_pos - self.press_pos).manhattanLength()
-        logger.debug(f"[mouseReleaseEvent] Move distance: {move_distance}")
         return move_distance < self.CLICK_THRESHOLD
 
     def _handle_click_in_multi_select(self):
         """处理多选状态下的点击事件（取消多选，只选中当前笔记）"""
         if self.main_window and self.press_row is not None:
-            logger.debug(f"[mouseReleaseEvent] Canceling multi-select, "
-                  f"selecting single note: {self.press_row}")
             self.select_single_note(self.press_row)
 
     def _set_press_info(self, row, pos):
@@ -266,8 +246,6 @@ class NoteListWidget(QListWidget):
         Args:
             event: QMouseEvent 鼠标事件
         """
-        logger.debug("🟢 [DEBUG] mouseReleaseEvent triggered")
-        self._log_mouse_release(event)
         super().mouseReleaseEvent(event)
 
         # 只处理左键释放，右键用于显示菜单
@@ -275,7 +253,8 @@ class NoteListWidget(QListWidget):
             return
 
         # 多选状态下松开鼠标：判断是点击还是拖动
-        if self.press_pos is not None and len(self.selected_rows) > 1:
+        # press_pos 在 mousePressEvent 中无条件设置，此处无需 None 守卫
+        if len(self.selected_rows) > 1:
             if self._is_within_click_threshold(event.pos()):
                 self._handle_click_in_multi_select()
 
@@ -304,7 +283,6 @@ class NoteListWidget(QListWidget):
 
     def select_single_note(self, row):
         """单选笔记"""
-        logger.debug(f"[select_single_note] ENTER: row={row}, current_note_id={self.main_window._get_current_note_id()}")
         # 清除之前的多选状态
         self.clear_selection()
 
@@ -326,10 +304,8 @@ class NoteListWidget(QListWidget):
 
             # 加载新笔记
             note_id = item.data(Qt.ItemDataRole.UserRole)
-            logger.debug(f"[select_single_note] loading note_id={note_id}")
             self.main_window._set_current_note_id(note_id)
             self.main_window._load_and_display_note(note_id)
-        logger.debug(f"[select_single_note] EXIT: row={row}, current_note_id={self.main_window._get_current_note_id()}")
 
     def toggle_note_selection(self, row):
         """切换笔记的选中状态（Command键跳选）"""
