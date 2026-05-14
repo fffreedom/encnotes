@@ -3884,7 +3884,7 @@ class MainWindow(QMainWindow):
     # 4. 在文件夹下使用菜单创建笔记时，发现已经有空笔记，选中这个笔记时触发
     def on_note_selected(self, current, previous):
         """笔记选中事件
-        
+
         Args:
             current: QListWidgetItem 当前选中的列表项
             previous: QListWidgetItem 之前选中的列表项
@@ -4072,15 +4072,20 @@ class MainWindow(QMainWindow):
                         return item, widget, layout
         return None, None, None
     
-    def _update_note_list_display(self, title, plain_text):
+    def _update_note_list_display(self, title, plain_text, note_id=None):
         """更新笔记列表中的显示（标题和预览）
-        
+
         Args:
             title: 笔记标题
             plain_text: 笔记的纯文本内容
+            note_id: 要更新的笔记ID。如果提供则使用该ID定位列表项，
+                     否则回退到 _get_current_note_id()（保持向后兼容）。
+                     应始终传入正在保存的 note_id，避免视图切换期间
+                     _get_current_note_id() 返回不同笔记导致标题错乱。
         """
         logger.debug(f"[_update_note_list_display] 更新列表显示: title={title}")
-        item, widget, layout = self._find_note_list_item_by_id(self._get_current_note_id())
+        current_id = note_id if note_id is not None else self._get_current_note_id()
+        item, widget, layout = self._find_note_list_item_by_id(current_id)
         if layout:
             # 更新标题
             self._update_note_list_item_title(layout, title)
@@ -4137,9 +4142,10 @@ class MainWindow(QMainWindow):
         )
         
         logger.info(f"[save_current_note] 笔记保存完成: note_id={note_id}")
-        
-        # 5. 更新列表中的显示
-        self._update_note_list_display(title, plain_text)
+
+        # 5. 更新列表中的显示（传入 note_id 确保更新正确的列表项，
+        #    避免 _get_current_note_id() 在视图切换后指向不同笔记）
+        self._update_note_list_display(title, plain_text, note_id=note_id)
 
     def insert_image(self):
         """插入图片"""
