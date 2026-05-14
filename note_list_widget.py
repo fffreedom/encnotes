@@ -263,23 +263,19 @@ class NoteListWidget(QListWidget):
             event: QMouseEvent 鼠标事件
         """
         logger.debug("🟢 [DEBUG] mouseReleaseEvent triggered")
-        # 1. 记录调试日志
         self._log_mouse_release(event)
-
-        # 2. 只处理左键释放事件，右键用于显示菜单，不应该影响选中状态
-        if event.button() == Qt.MouseButton.LeftButton:
-            # 3. 检查是否在多选状态下点击
-            if self.press_pos is not None and len(self.selected_rows) > 1:
-                # 4. 判断是点击还是拖动
-                if self._is_within_click_threshold(event.pos()):
-                    # 5. 如果是点击，取消多选状态，只选中当前点击的笔记
-                    self._handle_click_in_multi_select()
-
-            # 6. 清除记录的点击信息
-            self._clear_press_info()
-
-        # 7. 调用父类方法
         super().mouseReleaseEvent(event)
+
+        # 只处理左键释放，右键用于显示菜单
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        # 多选状态下松开鼠标：判断是点击还是拖动
+        if self.press_pos is not None and len(self.selected_rows) > 1:
+            if self._is_within_click_threshold(event.pos()):
+                self._handle_click_in_multi_select()
+
+        self._clear_press_info()
 
     def contextMenuEvent(self, event):
         """处理右键菜单事件（融合单选和多选功能）"""
