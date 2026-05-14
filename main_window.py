@@ -5277,32 +5277,6 @@ class MainWindow(QMainWindow):
         
         self.note_list.update_visual_selection()
 
-    def _clear_all_selections(self):
-        """清除所有选中状态的视觉效果"""
-        for row in self.note_list.selected_rows:
-            item = self.note_list.item(row)
-            if item:
-                widget = self.note_list.itemWidget(item)
-                if widget and widget.objectName() == "note_item_widget":
-                    widget.setProperty("selected", False)
-                    widget.style().unpolish(widget)
-                    widget.style().polish(widget)
-                    widget.update()
-        self.note_list.selected_rows.clear()
-
-    def _update_visual_selection(self):
-        """更新所有笔记项的视觉选中状态"""
-        for i in range(self.note_list.count()):
-            item = self.note_list.item(i)
-            if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
-                widget = self.note_list.itemWidget(item)
-                if widget and widget.objectName() == "note_item_widget":
-                    is_selected = i in self.note_list.selected_rows
-                    widget.setProperty("selected", is_selected)
-                    widget.style().unpolish(widget)
-                    widget.style().polish(widget)
-                    widget.update()
-
     def on_text_changed(self):
         """文本变化事件"""
         logger.debug("[on_text_changed] 文本变化事件触发")
