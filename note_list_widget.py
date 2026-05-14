@@ -2,8 +2,8 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QMenu
-from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import QListWidget, QMenu
+from PyQt6.QtGui import QAction, QPainter, QPen, QColor
 from PyQt6.QtCore import Qt
 import logging
 
@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from main_window import MainWindow
 
 logger = logging.getLogger(__name__)
+
+
 class NoteListWidget(QListWidget):
     """支持笔记拖拽到文件夹的自定义列表控件
 
@@ -35,8 +37,6 @@ class NoteListWidget(QListWidget):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-
-        from PyQt6.QtGui import QPainter, QPen, QColor
 
         painter = QPainter(self.viewport())
         pen = QPen(QColor(0xE0, 0xE0, 0xE0), 1)
@@ -510,5 +510,3 @@ class NoteListWidget(QListWidget):
                     widget.style().unpolish(widget)
                     widget.style().polish(widget)
                     widget.update()
-
-
