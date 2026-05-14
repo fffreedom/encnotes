@@ -6,7 +6,7 @@ Unit tests for _select_note_in_list updating selected_note_rows.
 Bug: after create_new_note(), _select_note_in_list() selects the new note in
 the Qt list widget but does NOT update selected_note_rows.  As a result,
 selected_note_rows still holds the row of the previously-selected note.
-When the user later clicks that old row, _handle_normal_click sees
+When the user later clicks that old row, _handle_normal_press sees
 is_in_multi_select=True and calls _keep_multi_select_for_drag instead of
 select_single_note, so the editor content is never switched.
 
@@ -55,7 +55,7 @@ def _make_list_widget(note_ids):
 def _stub_mw(note_list, selected_note_rows):
     """
     Build a minimal stub that has exactly the attributes _select_note_in_list
-    and _handle_normal_click (via NoteListWidget) need from MainWindow.
+    and _handle_normal_press (via NoteListWidget) need from MainWindow.
     """
     mw = MagicMock()
     mw.note_list = note_list
@@ -70,7 +70,7 @@ def _stub_mw(note_list, selected_note_rows):
 class TestSelectNoteInListUpdatesSelectedNoteRows:
     """
     _select_note_in_list must update selected_note_rows to the row of the
-    newly selected note so that _handle_normal_click does NOT misidentify the
+    newly selected note so that _handle_normal_press does NOT misidentify the
     old row as "in multi-select".
     """
 
@@ -100,7 +100,7 @@ class TestSelectNoteInListUpdatesSelectedNoteRows:
             f"selected_note_rows still contains old row {old_row} after "
             f"_select_note_in_list selected NEW_NOTE_ID. "
             f"Actual selected_note_rows={mw.selected_note_rows!r}. "
-            f"This causes _handle_normal_click to treat the old row as "
+            f"This causes _handle_normal_press to treat the old row as "
             f"'in multi-select' and refuse to switch notes."
         )
 
@@ -132,7 +132,7 @@ class TestSelectNoteInListUpdatesSelectedNoteRows:
         create_new_note), _is_item_in_multi_select must return False for the
         previously-selected note's row.
 
-        This is the direct predicate tested by _handle_normal_click.  Before
+        This is the direct predicate tested by _handle_normal_press.  Before
         the fix, _is_item_in_multi_select(old_row) returns True (because
         selected_note_rows still holds the old row), triggering the bug.
         After the fix it returns False, allowing select_single_note to be called.
@@ -157,7 +157,7 @@ class TestSelectNoteInListUpdatesSelectedNoteRows:
         assert not is_multi, (
             f"selected_note_rows still contains old row {old_row} "
             f"(selected_note_rows={mw.selected_note_rows!r}), so "
-            f"_handle_normal_click would keep multi-select and refuse to switch notes. "
+            f"_handle_normal_press would keep multi-select and refuse to switch notes. "
             f"This is the create_new_note click-back bug."
         )
 

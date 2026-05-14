@@ -2659,7 +2659,7 @@ class MainWindow(QMainWindow):
                 # Without this, selected_rows stays stale after create_new_note()
                 # calls load_notes() (which selects the previously-visible note) and then
                 # calls _select_note_in_list() for the new note.  The stale row causes
-                # _handle_normal_click to treat the old note as "in multi-select" and
+                # _handle_normal_press to treat the old note as "in multi-select" and
                 # refuse to switch to it when the user clicks back on it.
                 self.note_list.selected_rows = {i}
                 break

@@ -103,7 +103,7 @@ class NoteListWidget(QListWidget):
         return bool(modifiers & Qt.KeyboardModifier.ControlModifier or
                    modifiers & Qt.KeyboardModifier.MetaModifier)
 
-    def _handle_command_click(self, clicked_row):
+    def _handle_command_press(self, clicked_row):
         """处理 Command/Ctrl 键点击（跳选：添加/移除单个项）
 
         Args:
@@ -113,7 +113,7 @@ class NoteListWidget(QListWidget):
             self.main_window.toggle_note_selection(clicked_row)
         self.last_selected_row = clicked_row
 
-    def _handle_shift_click(self, clicked_row):
+    def _handle_shift_press(self, clicked_row):
         """处理 Shift 键点击（范围选择）
 
         Args:
@@ -152,33 +152,34 @@ class NoteListWidget(QListWidget):
         # 强制刷新视觉选中状态，确保所有选中项都正确显示
         self.update_visual_selection()
 
-    def _handle_normal_click(self, clicked_row, event_pos):
+    # mousePressEvent，正常鼠标按下事件处理函数
+    def _handle_normal_press(self, clicked_row, event_pos):
         """处理普通点击（单选或保持多选用于拖动）
 
         Args:
             clicked_row: int 点击的行号
             event_pos: QPoint 点击位置
         """
-        logger.debug(f"🔵 [DEBUG] _handle_normal_click called - clicked_row: {clicked_row}, event_pos: ({event_pos.x()}, {event_pos.y()})")
+        logger.debug(f"🔵 [DEBUG] _handle_normal_press called - clicked_row: {clicked_row}, event_pos: ({event_pos.x()}, {event_pos.y()})")
 
         if not self.main_window:
-            logger.debug(f"🔵 [DEBUG] _handle_normal_click - main_window is None, returning")
+            logger.debug(f"🔵 [DEBUG] _handle_normal_press - main_window is None, returning")
             return
 
         # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动）
         is_in_multi_select = self._is_item_in_multi_select(clicked_row)
-        logger.debug(f"🔵 [DEBUG] _handle_normal_click - is_in_multi_select: {is_in_multi_select}")
+        logger.debug(f"🔵 [DEBUG] _handle_normal_press - is_in_multi_select: {is_in_multi_select}")
 
         if is_in_multi_select:
-            logger.debug(f"🔵 [DEBUG] _handle_normal_click - Item already in multi-select, keeping multi-select for drag")
+            logger.debug(f"🔵 [DEBUG] _handle_normal_press - Item already in multi-select, keeping multi-select for drag")
             self._keep_multi_select_for_drag(clicked_row, event_pos)
         else:
             # 点击的是未选中的笔记，执行单选
-            logger.debug(f"🔵 [DEBUG] _handle_normal_click - Item not in multi-select, selecting single note at row: {clicked_row}")
+            logger.debug(f"🔵 [DEBUG] _handle_normal_press - Item not in multi-select, selecting single note at row: {clicked_row}")
             self.main_window.select_single_note(clicked_row)
 
         self.last_selected_row = clicked_row
-        logger.debug(f"🔵 [DEBUG] _handle_normal_click completed - last_selected_row set to: {clicked_row}")
+        logger.debug(f"🔵 [DEBUG] _handle_normal_press completed - last_selected_row set to: {clicked_row}")
 
     def mousePressEvent(self, event):
         """处理鼠标按下事件，支持多选
@@ -205,13 +206,13 @@ class NoteListWidget(QListWidget):
         # 4. 根据修饰键处理不同的点击逻辑
         if self._is_command_or_ctrl_pressed(modifiers):
             # Command/Ctrl键：跳选（添加/移除单个项）
-            self._handle_command_click(clicked_row)
+            self._handle_command_press(clicked_row)
         elif modifiers & Qt.KeyboardModifier.ShiftModifier:
             # Shift键：范围选择
-            self._handle_shift_click(clicked_row)
+            self._handle_shift_press(clicked_row)
         else:
             # 普通点击：单选或保持多选（用于拖动）
-            self._handle_normal_click(clicked_row, event.pos())
+            self._handle_normal_press(clicked_row, event.pos())
 
         # 5. 调用父类方法以支持拖动功能
         super().mousePressEvent(event)
