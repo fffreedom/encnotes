@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy
 )
 
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QEvent
+from PyQt6.QtCore import Qt, QSize, QTimer, QEvent
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QDesktopServices
 from PyQt6.QtCore import QUrl
 
