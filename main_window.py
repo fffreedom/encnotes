@@ -1548,9 +1548,6 @@ class MainWindow(QMainWindow):
         # 编辑器初始化标志：防止启动时保存空笔记覆盖数据库内容
         self._editor_initialized = False
 
-        # 多选状态
-        self.selected_note_rows = set()  # 当前选中的笔记行号集合
-
         # 文件夹展开/折叠状态（folder_id -> bool），默认展开
         self._folder_expanded = {}
 
@@ -2213,8 +2210,8 @@ class MainWindow(QMainWindow):
         logger.debug(f"[_clear_note_list_widgets] 🧹 开始清除笔记列表widgets")
         
         # 清除多选状态
-        logger.debug(f"[_clear_note_list_widgets] 📋 清除多选状态 - 当前选中行数: {len(self.selected_note_rows)}")
-        self.selected_note_rows.clear()
+        logger.debug(f"[_clear_note_list_widgets] 📋 清除多选状态 - 当前选中行数: {len(self.note_list.selected_rows)}")
+        self.note_list.clear_selection()
         if hasattr(self, 'note_list') and self.note_list:
             logger.debug(f"[_clear_note_list_widgets] 🔄 重置 last_selected_row")
             self.note_list.last_selected_row = None
@@ -2484,7 +2481,7 @@ class MainWindow(QMainWindow):
                         # 这儿会触发on_note_selected事件，从而调用_load_and_display_note加载笔记
                         self.note_list.setCurrentRow(i)
                         self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
-                        self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
+                        self.note_list.selected_rows.add(i)  # 添加到多选集合，支持Command键多选
                         note_selected = True
                         break
         
@@ -2499,7 +2496,7 @@ class MainWindow(QMainWindow):
                     # 这儿会触发on_note_selected事件，从而调用_load_and_display_note加载笔记
                     self.note_list.setCurrentRow(i)
                     self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
-                    self.selected_note_rows.add(i)  # 添加到多选集合，支持Command键多选
+                    self.note_list.selected_rows.add(i)  # 添加到多选集合，支持Command键多选
                     break
     
     def _clear_editor_for_empty_list(self):
@@ -3921,7 +3918,7 @@ class MainWindow(QMainWindow):
                 # calls _select_note_in_list() for the new note.  The stale row causes
                 # _handle_normal_click to treat the old note as "in multi-select" and
                 # refuse to switch to it when the user clicks back on it.
-                self.selected_note_rows = {i}
+                self.note_list.selected_rows = {i}
                 break
 
     def _refresh_folders_and_restore_selection(self):
@@ -4453,8 +4450,8 @@ class MainWindow(QMainWindow):
                     self.note_manager.delete_note(note_id)
             
             # 清除多选状态
-            self.selected_note_rows.clear()
-            
+            self.note_list.selected_rows.clear()
+
             # 重新加载笔记列表
             self.load_notes()
             
@@ -4481,8 +4478,8 @@ class MainWindow(QMainWindow):
             self.note_manager.move_note_to_folder(note_id, target_folder_id)
         
         # 清除多选状态
-        self.selected_note_rows.clear()
-        
+        self.note_list.selected_rows.clear()
+
         # 重新加载笔记列表和文件夹列表
         self.load_notes()
         self.load_folders()
@@ -4507,8 +4504,8 @@ class MainWindow(QMainWindow):
                 self.note_manager.toggle_pin_note(note_id)
         
         # 清除多选状态
-        self.selected_note_rows.clear()
-        
+        self.note_list.selected_rows.clear()
+
         # 重新加载笔记列表
         self.load_notes()
         
@@ -4520,10 +4517,10 @@ class MainWindow(QMainWindow):
         """批量为笔记添加标签"""
         for note_id in note_ids:
             self.note_manager.add_tag_to_note(note_id, tag_id)
-        
+
         # 清除多选状态
-        self.selected_note_rows.clear()
-        
+        self.note_list.selected_rows.clear()
+
         # 重新加载笔记列表和文件夹列表（更新标签数字）
         self.load_notes()
         self.load_folders()
@@ -4543,10 +4540,10 @@ class MainWindow(QMainWindow):
             for note_id in note_ids:
                 self.note_manager.add_tag_to_note(note_id, tag_id)
             action_text = "添加"
-        
+
         # 清除多选状态
-        self.selected_note_rows.clear()
-        
+        self.note_list.selected_rows.clear()
+
         # 重新加载笔记列表和文件夹列表（更新标签数字）
         self.load_notes()
         self.load_folders()
@@ -5191,11 +5188,11 @@ class MainWindow(QMainWindow):
         """单选笔记"""
         logger.debug(f"[select_single_note] ENTER: row={row}, current_note_id={self._get_current_note_id()}")
         # 清除之前的多选状态
-        self._clear_all_selections()
+        self.note_list.clear_selection()
 
         # 选中指定行
-        self.selected_note_rows = {row}
-        self._update_visual_selection()
+        self.note_list.selected_rows = {row}
+        self.note_list.update_visual_selection()
 
         # 加载笔记到编辑器
         item = self.note_list.item(row)
@@ -5218,10 +5215,10 @@ class MainWindow(QMainWindow):
     
     def toggle_note_selection(self, row):
         """切换笔记的选中状态（Command键跳选）"""
-        if row in self.selected_note_rows:
+        if row in self.note_list.selected_rows:
             # 如果已选中，则取消选中
-            self.selected_note_rows.discard(row)
-            if not self.selected_note_rows:
+            self.note_list.selected_rows.discard(row)
+            if not self.note_list.selected_rows:
             # 如果没有选中项了，保存当前笔记，然后清空编辑器
                 if self._get_current_note_id():
                     self.save_current_note()
@@ -5233,7 +5230,7 @@ class MainWindow(QMainWindow):
             if self._get_current_note_id():
                 self.save_current_note()
             
-            self.selected_note_rows.add(row)
+            self.note_list.selected_rows.add(row)
             # 将最后选中的项设为当前项
             item = self.note_list.item(row)
             if item:
@@ -5245,12 +5242,12 @@ class MainWindow(QMainWindow):
                 self._set_current_note_id(note_id)
                 self._load_and_display_note(note_id)
         
-        self._update_visual_selection()
-    
+        self.note_list.update_visual_selection()
+
     def select_note_range(self, start_row, end_row):
         """范围选择笔记（Shift键）"""
         # 清除之前的选择
-        self._clear_all_selections()
+        self.note_list.clear_selection()
         
         # 确定范围
         min_row = min(start_row, end_row)
@@ -5260,10 +5257,10 @@ class MainWindow(QMainWindow):
         for row in range(min_row, max_row + 1):
             item = self.note_list.item(row)
             if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
-                self.selected_note_rows.add(row)
-        
+                self.note_list.selected_rows.add(row)
+
         # 设置最后点击的项为当前项
-        if self.selected_note_rows:
+        if self.note_list.selected_rows:
             item = self.note_list.item(end_row)
             if item:
                 self.note_list.blockSignals(True)
@@ -5278,11 +5275,11 @@ class MainWindow(QMainWindow):
                     self.editor.setHtml(note['content'])
                     self.editor.blockSignals(False)
         
-        self._update_visual_selection()
-    
+        self.note_list.update_visual_selection()
+
     def _clear_all_selections(self):
         """清除所有选中状态的视觉效果"""
-        for row in self.selected_note_rows:
+        for row in self.note_list.selected_rows:
             item = self.note_list.item(row)
             if item:
                 widget = self.note_list.itemWidget(item)
@@ -5291,8 +5288,8 @@ class MainWindow(QMainWindow):
                     widget.style().unpolish(widget)
                     widget.style().polish(widget)
                     widget.update()
-        self.selected_note_rows.clear()
-    
+        self.note_list.selected_rows.clear()
+
     def _update_visual_selection(self):
         """更新所有笔记项的视觉选中状态"""
         for i in range(self.note_list.count()):
@@ -5300,7 +5297,7 @@ class MainWindow(QMainWindow):
             if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
                 widget = self.note_list.itemWidget(item)
                 if widget and widget.objectName() == "note_item_widget":
-                    is_selected = i in self.selected_note_rows
+                    is_selected = i in self.note_list.selected_rows
                     widget.setProperty("selected", is_selected)
                     widget.style().unpolish(widget)
                     widget.style().polish(widget)
