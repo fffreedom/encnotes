@@ -33,6 +33,7 @@ class NoteListWidget(QListWidget):
         self.press_pos = None  # 记录鼠标按下的位置
         self.press_row = None  # 记录鼠标按下时的行号
         self.selected_rows: set[int] = set()  # 当前选中的笔记行号集合
+        self._press_modifiers = Qt.KeyboardModifier.NoModifier  # 记录按下时的修饰键，供 mouseReleaseEvent 使用
 
         # 启用右键菜单
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
@@ -199,8 +200,8 @@ class NoteListWidget(QListWidget):
         super().mousePressEvent(event)
         self.blockSignals(False)
 
-        # 5. 无条件记录按下位置，供 mouseReleaseEvent 判断点击还是拖动
-        self._set_press_info(clicked_row, event.pos())
+        # 5. 无条件记录按下位置和修饰键，供 mouseReleaseEvent 判断点击还是拖动，以及是否需要保留多选
+        self._set_press_info(clicked_row, event.pos(), modifiers)
 
         # 6. 根据修饰键处理不同的点击逻辑
         if self._is_command_or_ctrl_pressed(modifiers):
@@ -230,15 +231,17 @@ class NoteListWidget(QListWidget):
         if self.main_window and self.press_row is not None:
             self.select_single_note(self.press_row)
 
-    def _set_press_info(self, row, pos):
-        """记录鼠标按下时的位置和行号"""
+    def _set_press_info(self, row, pos, modifiers=Qt.KeyboardModifier.NoModifier):
+        """记录鼠标按下时的位置、行号和修饰键"""
         self.press_pos = pos
         self.press_row = row
+        self._press_modifiers = modifiers
 
     def _clear_press_info(self):
         """清除记录的按下信息"""
         self.press_pos = None
         self.press_row = None
+        self._press_modifiers = Qt.KeyboardModifier.NoModifier
 
     def mouseReleaseEvent(self, event):
         """处理鼠标释放事件，如果是点击而非拖动，则取消多选状态
@@ -256,7 +259,15 @@ class NoteListWidget(QListWidget):
         # press_pos 在 mousePressEvent 中无条件设置，此处无需 None 守卫
         if len(self.selected_rows) > 1:
             if self._is_within_click_threshold(event.pos()):
-                self._handle_click_in_multi_select()
+                # 如果本次按下时有 Shift/Cmd/Ctrl 修饰键，说明这次点击本身就是用来建立多选的，
+                # 不应该立即折叠。只有普通点击（无修饰键）才需要折叠多选。
+                is_modifier_press = bool(
+                    self._press_modifiers & Qt.KeyboardModifier.ShiftModifier or
+                    self._press_modifiers & Qt.KeyboardModifier.MetaModifier or
+                    self._press_modifiers & Qt.KeyboardModifier.ControlModifier
+                )
+                if not is_modifier_press:
+                    self._handle_click_in_multi_select()
 
         self._clear_press_info()
 

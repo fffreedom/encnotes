@@ -56,10 +56,16 @@ def _stub_mw(note_list, selected_note_rows):
     """
     Build a minimal stub that has exactly the attributes _select_note_in_list
     and _handle_normal_press (via NoteListWidget) need from MainWindow.
+
+    NOTE: _select_note_in_list updates self.note_list.selected_rows (the
+    NoteListWidget attribute), not a separate mw.selected_note_rows attribute.
+    We seed the initial state on note_list.selected_rows so assertions can
+    check the same attribute that the implementation writes to.
     """
     mw = MagicMock()
     mw.note_list = note_list
-    mw.selected_note_rows = selected_note_rows
+    # Seed initial selected_rows directly on the note_list (matches the real app)
+    note_list.selected_rows = set(selected_note_rows)
     return mw
 
 
@@ -96,10 +102,10 @@ class TestSelectNoteInListUpdatesSelectedNoteRows:
         MainWindow._select_note_in_list(mw, NEW_NOTE_ID)
 
         old_row = row_map[AI_PERSON_ID]
-        assert old_row not in mw.selected_note_rows, (
-            f"selected_note_rows still contains old row {old_row} after "
+        assert old_row not in mw.note_list.selected_rows, (
+            f"note_list.selected_rows still contains old row {old_row} after "
             f"_select_note_in_list selected NEW_NOTE_ID. "
-            f"Actual selected_note_rows={mw.selected_note_rows!r}. "
+            f"Actual selected_rows={mw.note_list.selected_rows!r}. "
             f"This causes _handle_normal_press to treat the old row as "
             f"'in multi-select' and refuse to switch notes."
         )
@@ -119,8 +125,8 @@ class TestSelectNoteInListUpdatesSelectedNoteRows:
         MainWindow._select_note_in_list(mw, NEW_NOTE_ID)
 
         new_row = row_map[NEW_NOTE_ID]  # 1
-        assert new_row in mw.selected_note_rows, (
-            f"selected_note_rows {mw.selected_note_rows!r} does not contain "
+        assert new_row in mw.note_list.selected_rows, (
+            f"note_list.selected_rows {mw.note_list.selected_rows!r} does not contain "
             f"the new note's row {new_row} after _select_note_in_list."
         )
 
@@ -150,13 +156,13 @@ class TestSelectNoteInListUpdatesSelectedNoteRows:
         MainWindow._select_note_in_list(mw, NEW_NOTE_ID)
 
         # Step 2: check whether _is_item_in_multi_select considers the old row
-        # to still be "in multi-select".  It uses mw.selected_note_rows directly.
+        # to still be "in multi-select".  It uses note_list.selected_rows directly.
         old_row = row_map[AI_PERSON_ID]
-        is_multi = old_row in mw.selected_note_rows
+        is_multi = old_row in mw.note_list.selected_rows
 
         assert not is_multi, (
-            f"selected_note_rows still contains old row {old_row} "
-            f"(selected_note_rows={mw.selected_note_rows!r}), so "
+            f"note_list.selected_rows still contains old row {old_row} "
+            f"(selected_rows={mw.note_list.selected_rows!r}), so "
             f"_handle_normal_press would keep multi-select and refuse to switch notes. "
             f"This is the create_new_note click-back bug."
         )
