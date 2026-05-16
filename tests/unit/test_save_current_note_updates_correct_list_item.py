@@ -5,20 +5,20 @@ Unit tests for save_current_note updating the correct note list item.
 
 Bug: save_current_note(note_id=X) saves note X to the DB correctly, but then
 calls _update_note_list_display(title, plain_text) which uses
-_get_current_note_id() to find the list item.  If _get_current_note_id()
+_get_last_note_for_current_view() to find the list item.  If _get_last_note_for_current_view()
 returns a different note Y at that moment (e.g. because a folder change
 has already moved the view), note Y's list item gets updated with X's
 title — visible as a wrong title in the sidebar.
 
 This happens during drag-and-drop: after a drop, _delayed_refresh_note_ui
 triggers load_folders() → on_folder_changed → load_notes, which changes
-_get_current_note_id() to point at the newly-selected note (Y).  Around
+_get_last_note_for_current_view() to point at the newly-selected note (Y).  Around
 the same time, _handle_previous_note_cleanup calls
 save_current_note(note_id=X), which tries to update the display.
-Because _get_current_note_id() now returns Y, the wrong list item is updated.
+Because _get_last_note_for_current_view() now returns Y, the wrong list item is updated.
 
 Fix: _update_note_list_display must accept a note_id parameter and use it
-(rather than calling _get_current_note_id()) when provided.
+(rather than calling _get_last_note_for_current_view()) when provided.
 save_current_note must pass note_id through to _update_note_list_display.
 """
 
@@ -41,14 +41,14 @@ def _make_save_stub(note_id_to_save, current_note_id_at_call_time):
     Build a MainWindow-like stub for testing save_current_note.
 
     note_id_to_save:             the note_id passed explicitly to save_current_note
-    current_note_id_at_call_time: what _get_current_note_id() returns while saving
+    current_note_id_at_call_time: what _get_last_note_for_current_view() returns while saving
                                   (simulates the view having already moved to another note)
     """
     # Use MagicMock without spec so we can attach arbitrary attributes like 'editor'
     stub = MagicMock()
     # Manually restrict the key methods to their real spec for accuracy
     stub._editor_initialized = True
-    stub._get_current_note_id.return_value = current_note_id_at_call_time
+    stub._get_last_note_for_current_view.return_value = current_note_id_at_call_time
 
     # Simulate editor content belonging to note_id_to_save
     stub.editor.toHtml.return_value = "<p>Content of note A</p>"
@@ -69,14 +69,14 @@ def _make_save_stub(note_id_to_save, current_note_id_at_call_time):
 class TestSaveCurrentNoteUpdatesCorrectListItem:
     """
     save_current_note(note_id=X) must pass note_id=X to _update_note_list_display
-    even when _get_current_note_id() returns a different note Y.
+    even when _get_last_note_for_current_view() returns a different note Y.
     """
 
     def test_update_display_called_with_explicit_note_id(self):
         """
         Given:
           - save_current_note called with note_id='note-A'
-          - _get_current_note_id() returns 'note-B' (view has moved)
+          - _get_last_note_for_current_view() returns 'note-B' (view has moved)
         Expect: _update_note_list_display called with note_id='note-A', NOT 'note-B'.
         """
         stub = _make_save_stub(
@@ -102,7 +102,7 @@ class TestSaveCurrentNoteUpdatesCorrectListItem:
 
     def test_update_display_not_called_with_current_note_id_when_different(self):
         """
-        When note_id='note-A' but _get_current_note_id() returns 'note-B',
+        When note_id='note-A' but _get_last_note_for_current_view() returns 'note-B',
         _update_note_list_display must NOT receive 'note-B' as its note_id.
         """
         stub = _make_save_stub(
@@ -124,18 +124,18 @@ class TestSaveCurrentNoteUpdatesCorrectListItem:
 
 
 # ---------------------------------------------------------------------------
-# Test: _update_note_list_display uses provided note_id, not _get_current_note_id
+# Test: _update_note_list_display uses provided note_id, not _get_last_note_for_current_view
 # ---------------------------------------------------------------------------
 
 class TestUpdateNoteListDisplayUsesNoteId:
     """
     _update_note_list_display(title, plain_text, note_id=X) must call
-    _find_note_list_item_by_id(X), not _find_note_list_item_by_id(_get_current_note_id()).
+    _find_note_list_item_by_id(X), not _find_note_list_item_by_id(_get_last_note_for_current_view()).
     """
 
     def _make_display_stub(self, get_current_returns, note_id_arg):
         stub = MagicMock(spec=MainWindow)
-        stub._get_current_note_id.return_value = get_current_returns
+        stub._get_last_note_for_current_view.return_value = get_current_returns
         stub._find_note_list_item_by_id.return_value = (None, None, None)
         return stub
 
@@ -155,7 +155,7 @@ class TestUpdateNoteListDisplayUsesNoteId:
     def test_find_item_not_called_with_current_note_id_when_note_id_provided(self):
         """
         When note_id='note-A' is provided, _find_note_list_item_by_id must NOT
-        be called with 'note-B' (the value from _get_current_note_id).
+        be called with 'note-B' (the value from _get_last_note_for_current_view).
         """
         stub = self._make_display_stub(
             get_current_returns='note-B',
@@ -171,9 +171,9 @@ class TestUpdateNoteListDisplayUsesNoteId:
             f"This means the wrong list item's title would be updated."
         )
 
-    def test_falls_back_to_get_current_note_id_when_note_id_not_provided(self):
+    def test_falls_back_to_get_last_note_for_current_view_when_note_id_not_provided(self):
         """
-        When note_id is not provided (legacy call site), fall back to _get_current_note_id().
+        When note_id is not provided (legacy call site), fall back to _get_last_note_for_current_view().
         """
         stub = self._make_display_stub(
             get_current_returns='note-B',
@@ -210,5 +210,5 @@ class TestUpdateNoteListDisplaySourceAcceptsNoteId:
         assert 'note_id' in src.split('_update_note_list_display')[1].split('\n')[0], (
             "save_current_note must pass note_id to _update_note_list_display. "
             "Current call `self._update_note_list_display(title, plain_text)` does not pass note_id, "
-            "causing the wrong list item to be updated when _get_current_note_id() has changed."
+            "causing the wrong list item to be updated when _get_last_note_for_current_view() has changed."
         )

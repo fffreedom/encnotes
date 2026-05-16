@@ -347,16 +347,16 @@ class PasteImageTextEdit(QTextEdit):
             # 标记失败不应影响编辑器可用性
             pass
 
-    def _get_current_note_id(self):
+    def _get_last_note_for_current_view(self):
         """获取当前笔记ID
         
-        通过调用parent_editor的_get_current_note_id方法来获取当前的笔记id
+        通过调用parent_editor的_get_last_note_for_current_view方法来获取当前的笔记id
         
         Returns:
             int or None: 当前笔记ID，如果没有parent_editor或parent_editor没有该方法则返回None
         """
-        if self.parent_editor and hasattr(self.parent_editor, '_get_current_note_id'):
-            return self.parent_editor._get_current_note_id()
+        if self.parent_editor and hasattr(self.parent_editor, '_get_last_note_for_current_view'):
+            return self.parent_editor._get_last_note_for_current_view()
         return None
 
     def _create_title_format(self):
@@ -728,7 +728,7 @@ class PasteImageTextEdit(QTextEdit):
 
                 # 如果该附件此前被"延迟删除"挪进回收站，这里自动尝试恢复，确保打开不受影响
                 try:
-                    note_id = self._get_current_note_id()
+                    note_id = self._get_last_note_for_current_view()
                     if note_id:
                         attachment_manager.restore_deferred_attachment(attachment_id, note_id)
                 except Exception:
@@ -1373,7 +1373,7 @@ class PasteImageTextEdit(QTextEdit):
         if not (hasattr(self, 'parent_editor') and self.parent_editor):
             return True
         
-        return bool(self._get_current_note_id())
+        return bool(self._get_last_note_for_current_view())
     
     # def _restore_title_format_if_needed(self):
     #     """如果光标在空的第一行，恢复标题格式"""
@@ -1469,7 +1469,7 @@ class PasteImageTextEdit(QTextEdit):
             如果应该忽略返回True，否则返回False
         """
         if hasattr(self, 'parent_editor') and self.parent_editor:
-            if not self._get_current_note_id():
+            if not self._get_last_note_for_current_view():
                 return True
         return False
 
@@ -2367,7 +2367,7 @@ class PasteImageTextEdit(QTextEdit):
             logger.debug("[attachment-delete] extracted_attachment_ids=%s", attachment_ids)
 
             if attachment_ids and self.parent_editor and getattr(self.parent_editor, "note_manager", None):
-                note_id = self._get_current_note_id()
+                note_id = self._get_last_note_for_current_view()
                 am = getattr(self.parent_editor.note_manager, "attachment_manager", None)
                 if note_id and am:
                     for aid in attachment_ids:
@@ -3361,14 +3361,14 @@ class NoteEditor(QWidget):
         self.attachments = {}  # 存储附件 {filename: filepath}
         self.init_ui()
 
-    def _get_current_note_id(self):
+    def _get_last_note_for_current_view(self):
         """从main window获取当前笔记ID
 
         Returns:
             int or None: 当前笔记ID
         """
-        if self.main_window and hasattr(self.main_window, '_get_current_note_id'):
-            return self.main_window._get_current_note_id()
+        if self.main_window and hasattr(self.main_window, '_get_last_note_for_current_view'):
+            return self.main_window._get_last_note_for_current_view()
         return None
 
     def init_ui(self):
@@ -3673,7 +3673,7 @@ class NoteEditor(QWidget):
         try:
             logger.debug(
                 "[attachment-remark] setHtml called note_id=%s html_len=%s plain_len=%s has_attachment_url=%s tag=%s",
-                self._get_current_note_id() if hasattr(self, '_get_current_note_id') else None,
+                self._get_last_note_for_current_view() if hasattr(self, '_get_last_note_for_current_view') else None,
                 len(html_content or ""),
                 len(self.text_edit.toPlainText() or ""),
                 ("attachment://" in (html_content or "")),
@@ -4772,7 +4772,7 @@ class NoteEditor(QWidget):
         返回：(success, attachment_id) 或 (False, None)
         """
         success, message, attachment_id = self.note_manager.attachment_manager.add_attachment(
-            file_path, self._get_current_note_id()
+            file_path, self._get_last_note_for_current_view()
         )
 
         if not success:
@@ -4886,7 +4886,7 @@ class NoteEditor(QWidget):
             import os
 
             # 检查是否有note_manager和当前笔记ID
-            if not self.note_manager or not self._get_current_note_id():
+            if not self.note_manager or not self._get_last_note_for_current_view():
                 QMessageBox.warning(self, "错误", "无法添加附件：笔记未保存")
                 return
 

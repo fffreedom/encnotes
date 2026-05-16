@@ -180,7 +180,7 @@ class MainWindow(QMainWindow):
                 return False
             
             # 只有"选中了某个自定义文件夹 + 当前没有选中笔记 + 当前不在标签视图"才自动创建
-            if self.current_folder_id and self._get_current_note_id() is None and self.current_tag_id is None:
+            if self.current_folder_id and self._get_last_note_for_current_view() is None and self.current_tag_id is None:
                 self.create_note_in_folder(self.current_folder_id, default_title="新笔记")
                 event.accept()
                 return True
@@ -220,7 +220,7 @@ class MainWindow(QMainWindow):
                 self._is_editor_click(obj)
                 and event.type() == QEvent.Type.MouseButtonPress
                 and self.current_tag_id is not None
-                and self._get_current_note_id() is None
+                and self._get_last_note_for_current_view() is None
             ):
                 return False
             
@@ -1081,7 +1081,7 @@ class MainWindow(QMainWindow):
                 self.current_tag_id = tag_id
                 self.current_system_key = None
                 # 新建的标签还没有笔记，所以清空当前的笔记，避免命名完之后显示之前的笔记
-                self._set_current_note_id(None)
+                self._set_last_note_for_current_view(None)
                 self.editor.clear()
                 try:
                     self.editor.text_edit.clearFocus()
@@ -1244,7 +1244,7 @@ class MainWindow(QMainWindow):
     
     def _clear_editor_for_empty_list(self):
         """当笔记列表为空时，清空编辑器并设置为不可编辑状态。"""
-        self._set_current_note_id(None)
+        self._set_last_note_for_current_view(None)
         self.editor.clear()
         try:
             self.editor.text_edit.clearFocus()
@@ -3208,8 +3208,8 @@ class MainWindow(QMainWindow):
                 pass
             
             # 如果删除的包含当前笔记，清空编辑器
-            if self._get_current_note_id() in note_ids:
-                self._set_current_note_id(None)
+            if self._get_last_note_for_current_view() in note_ids:
+                self._set_last_note_for_current_view(None)
                 self.editor.clear()
             
             status_message = f"已永久删除 {count} 条笔记" if self.current_system_key == "deleted" else f"已删除 {count} 条笔记"
@@ -3336,16 +3336,16 @@ class MainWindow(QMainWindow):
                 pass
             
             # 如果删除的是当前笔记，清空编辑器
-            if note_id == self._get_current_note_id():
-                self._set_current_note_id(None)
+            if note_id == self._get_last_note_for_current_view():
+                self._set_last_note_for_current_view(None)
                 self.editor.clear()
     
     def delete_note(self):
         """删除当前笔记（保留用于快捷键）"""
-        if self._get_current_note_id() is None:
+        if self._get_last_note_for_current_view() is None:
             return
         
-        self.delete_note_by_id(self._get_current_note_id())
+        self.delete_note_by_id(self._get_last_note_for_current_view())
             
     def _set_row_widget_selected(self, row_widget: QWidget | None, selected: bool):
         """设置行 widget 的选中状态"""
@@ -3432,7 +3432,7 @@ class MainWindow(QMainWindow):
             # 出错时保守处理，假设有笔记（这样会让 on_note_selected 处理保存）
             return False
     
-    def _get_current_note_id(self):
+    def _get_last_note_for_current_view(self):
         """获取当前视图的笔记ID
         
         Returns:
@@ -3441,7 +3441,7 @@ class MainWindow(QMainWindow):
         view_key = self._get_current_view_key()
         return self._last_note_per_view.get(view_key)
     
-    def _set_current_note_id(self, note_id):
+    def _set_last_note_for_current_view(self, note_id):
         """设置当前视图的笔记ID
         
         Args:
@@ -3581,7 +3581,7 @@ class MainWindow(QMainWindow):
             pass
         
         # 3. 预判目标视图是否会有笔记，决定是否需要在此保存当前笔记
-        current_note_id = self._get_current_note_id()
+        current_note_id = self._get_last_note_for_current_view()
         logger.debug(f"[on_folder_changed] 📝 当前笔记ID: {current_note_id}")
         
         if current_note_id:
@@ -3726,7 +3726,7 @@ class MainWindow(QMainWindow):
             logger.debug(f"[_handle_previous_note_cleanup] ℹ️ 没有之前的笔记项，跳过清理")
             return
         
-        # 从 previous_item 获取之前的笔记ID（而不是从 self._get_current_note_id()）
+        # 从 previous_item 获取之前的笔记ID（而不是从 self._get_last_note_for_current_view()）
         prev_note_id = previous_item.data(Qt.ItemDataRole.UserRole)
         logger.debug(f"[_handle_previous_note_cleanup] 📋 从 previous_item 获取笔记ID: {prev_note_id}")
         
@@ -3737,9 +3737,9 @@ class MainWindow(QMainWindow):
         
         # 保存之前的笔记（包括光标位置）
         # 注意：此时编辑器内容应该还是之前笔记的内容
-        # 直接传递 prev_note_id 给 save_current_note，而不是依赖 _get_current_note_id()
-        # 因为在文件夹切换时，_get_current_note_id() 可能已经返回新文件夹的笔记ID了
-        current_note_id = self._get_current_note_id()
+        # 直接传递 prev_note_id 给 save_current_note，而不是依赖 _get_last_note_for_current_view()
+        # 因为在文件夹切换时，_get_last_note_for_current_view() 可能已经返回新文件夹的笔记ID了
+        current_note_id = self._get_last_note_for_current_view()
         logger.debug(f"[_handle_previous_note_cleanup] 📝 准备保存之前的笔记 - prev_note_id: {prev_note_id}, current_note_id: {current_note_id}")
         
         # 确保 current_note_id 和 prev_note_id 一致，否则编辑器内容属于另一篇笔记
@@ -3750,7 +3750,7 @@ class MainWindow(QMainWindow):
             )
             return  # 编辑器内容已属于 current_note_id，由 on_folder_changed 负责保存，此处不应保存 prev_note_id
 
-        # 直接传递 prev_note_id，避免使用 _get_current_note_id() 导致的时序问题
+        # 直接传递 prev_note_id，避免使用 _get_last_note_for_current_view() 导致的时序问题
         self.save_current_note(note_id=prev_note_id)
         logger.debug(f"[_handle_previous_note_cleanup] ✅ 之前的笔记已保存")
         
@@ -3870,7 +3870,7 @@ class MainWindow(QMainWindow):
 
     def _clear_editor(self):
         """清空编辑器"""
-        self._set_current_note_id(None)
+        self._set_last_note_for_current_view(None)
         self.editor.clear()
         try:
             self.editor.text_edit.clearFocus()
@@ -3903,7 +3903,7 @@ class MainWindow(QMainWindow):
 
             # 设置当前笔记ID
             note_id = current.data(Qt.ItemDataRole.UserRole)
-            self._set_current_note_id(note_id)
+            self._set_last_note_for_current_view(note_id)
 
             # 加载并显示笔记
             self._load_and_display_note(note_id)
@@ -3917,7 +3917,7 @@ class MainWindow(QMainWindow):
     def on_text_changed(self):
         """文本变化事件"""
         logger.debug("[on_text_changed] 文本变化事件触发")
-        if self._get_current_note_id():
+        if self._get_last_note_for_current_view():
             # 自动保存
             self.save_current_note()
 
@@ -4044,7 +4044,7 @@ class MainWindow(QMainWindow):
         logger.debug(f"[_update_note_list_item_preview] 更新预览: title={title}")
         try:
             preview_text = self._extract_preview_text(plain_text, title)
-            time_str = self._get_note_time_string(self._get_current_note_id())
+            time_str = self._get_note_time_string(self._get_last_note_for_current_view())
             info_text = f"{time_str}    {preview_text}"
 
             if layout.count() > 1:
@@ -4079,12 +4079,12 @@ class MainWindow(QMainWindow):
             title: 笔记标题
             plain_text: 笔记的纯文本内容
             note_id: 要更新的笔记ID。如果提供则使用该ID定位列表项，
-                     否则回退到 _get_current_note_id()（保持向后兼容）。
+                     否则回退到 _get_last_note_for_current_view()（保持向后兼容）。
                      应始终传入正在保存的 note_id，避免视图切换期间
-                     _get_current_note_id() 返回不同笔记导致标题错乱。
+                     _get_last_note_for_current_view() 返回不同笔记导致标题错乱。
         """
         logger.debug(f"[_update_note_list_display] 更新列表显示: title={title}")
-        current_id = note_id if note_id is not None else self._get_current_note_id()
+        current_id = note_id if note_id is not None else self._get_last_note_for_current_view()
         item, widget, layout = self._find_note_list_item_by_id(current_id)
         if layout:
             # 更新标题
@@ -4096,7 +4096,7 @@ class MainWindow(QMainWindow):
         """保存当前笔记
         
         Args:
-            note_id: 要保存的笔记ID，如果为None则使用 _get_current_note_id()
+            note_id: 要保存的笔记ID，如果为None则使用 _get_last_note_for_current_view()
                     这个参数用于解决时序问题，例如在切换笔记时需要保存之前的笔记
         """
         logger.debug(f"[save_current_note] 开始执行, note_id={note_id}")
@@ -4107,7 +4107,7 @@ class MainWindow(QMainWindow):
         
         # 如果没有传入 note_id，则使用当前笔记ID
         if note_id is None:
-            note_id = self._get_current_note_id()
+            note_id = self._get_last_note_for_current_view()
         
         if not note_id:
             logger.debug("[save_current_note] 没有笔记ID，跳过保存")
@@ -4144,12 +4144,12 @@ class MainWindow(QMainWindow):
         logger.info(f"[save_current_note] 笔记保存完成: note_id={note_id}")
 
         # 5. 更新列表中的显示（传入 note_id 确保更新正确的列表项，
-        #    避免 _get_current_note_id() 在视图切换后指向不同笔记）
+        #    避免 _get_last_note_for_current_view() 在视图切换后指向不同笔记）
         self._update_note_list_display(title, plain_text, note_id=note_id)
 
     def insert_image(self):
         """插入图片"""
-        if not self._get_current_note_id():
+        if not self._get_last_note_for_current_view():
             QMessageBox.warning(self, "提示", "请先选择或创建一个笔记")
             return
         
@@ -4172,7 +4172,7 @@ class MainWindow(QMainWindow):
     
     def insert_attachment(self):
         """插入附件"""
-        if not self._get_current_note_id():
+        if not self._get_last_note_for_current_view():
             QMessageBox.warning(self, "提示", "请先选择或创建一个笔记")
             return
         
@@ -4190,11 +4190,11 @@ class MainWindow(QMainWindow):
                 
     def export_to_pdf(self):
         """导出当前笔记为PDF"""
-        if not self._get_current_note_id():
+        if not self._get_last_note_for_current_view():
             QMessageBox.warning(self, "提示", "请先选择要导出的笔记")
             return
             
-        note = self.note_manager.get_note(self._get_current_note_id())
+        note = self.note_manager.get_note(self._get_last_note_for_current_view())
         if not note:
             return
             
@@ -4214,11 +4214,11 @@ class MainWindow(QMainWindow):
             
     def export_to_word(self):
         """导出当前笔记为Word"""
-        if not self._get_current_note_id():
+        if not self._get_last_note_for_current_view():
             QMessageBox.warning(self, "提示", "请先选择要导出的笔记")
             return
             
-        note = self.note_manager.get_note(self._get_current_note_id())
+        note = self.note_manager.get_note(self._get_last_note_for_current_view())
         if not note:
             return
             
@@ -4238,11 +4238,11 @@ class MainWindow(QMainWindow):
             
     def export_to_markdown(self):
         """导出当前笔记为Markdown"""
-        if not self._get_current_note_id():
+        if not self._get_last_note_for_current_view():
             QMessageBox.warning(self, "提示", "请先选择要导出的笔记")
             return
             
-        note = self.note_manager.get_note(self._get_current_note_id())
+        note = self.note_manager.get_note(self._get_last_note_for_current_view())
         if not note:
             return
             
@@ -4262,11 +4262,11 @@ class MainWindow(QMainWindow):
             
     def export_to_html(self):
         """导出当前笔记为HTML"""
-        if not self._get_current_note_id():
+        if not self._get_last_note_for_current_view():
             QMessageBox.warning(self, "提示", "请先选择要导出的笔记")
             return
             
-        note = self.note_manager.get_note(self._get_current_note_id())
+        note = self.note_manager.get_note(self._get_last_note_for_current_view())
         if not note:
             return
             
@@ -4491,7 +4491,7 @@ class MainWindow(QMainWindow):
             
             # 清空编辑器
             self.editor.clear()
-            self._set_current_note_id(None)
+            self._set_last_note_for_current_view(None)
             
             # 清空笔记列表
             self.note_list.clear()
@@ -4574,8 +4574,8 @@ class MainWindow(QMainWindow):
         """关闭前的清理工作：清理附件垃圾箱"""
         # 清理当前笔记"已删除但可撤销"的附件
         try:
-            if self._get_current_note_id() and getattr(self.note_manager, 'attachment_manager', None):
-                self.note_manager.attachment_manager.cleanup_note_attachment_trash(self._get_current_note_id())
+            if self._get_last_note_for_current_view() and getattr(self.note_manager, 'attachment_manager', None):
+                self.note_manager.attachment_manager.cleanup_note_attachment_trash(self._get_last_note_for_current_view())
         except Exception:
             pass
     
@@ -4593,7 +4593,7 @@ class MainWindow(QMainWindow):
         Args:
             event: QCloseEvent 关闭事件对象
         """
-        logger.info(f"[closeEvent] 应用程序关闭，开始保存状态: current_note_id={self._get_current_note_id()}")
+        logger.info(f"[closeEvent] 应用程序关闭，开始保存状态: current_note_id={self._get_last_note_for_current_view()}")
         
         # 1. 保存窗口状态
         self._save_window_geometry()
@@ -4602,7 +4602,7 @@ class MainWindow(QMainWindow):
         self._save_current_folder_state()
         
         # 3. 保存当前笔记和状态
-        logger.info(f"[closeEvent] 保存当前笔记: note_id={self._get_current_note_id()}")
+        logger.info(f"[closeEvent] 保存当前笔记: note_id={self._get_last_note_for_current_view()}")
         # 保存当前笔记内容和光标位置到数据库
         self.save_current_note()
         # 保存文件夹和选中笔记的映射到数据库（包括(folder:folder_id note_id)

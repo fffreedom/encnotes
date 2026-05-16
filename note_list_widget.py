@@ -336,7 +336,7 @@ class NoteListWidget(QListWidget):
         item = self.item(row)
         if item:
             # 保存之前的笔记（包括光标位置）
-            if self.main_window._get_current_note_id():
+            if self.main_window._get_last_note_for_current_view():
                 self.main_window.save_current_note()
 
             # 阻止信号，避免触发on_note_selected
@@ -346,7 +346,7 @@ class NoteListWidget(QListWidget):
 
             # 加载新笔记
             note_id = item.data(Qt.ItemDataRole.UserRole)
-            self.main_window._set_current_note_id(note_id)
+            self.main_window._set_last_note_for_current_view(note_id)
             self.main_window._load_and_display_note(note_id)
 
     def toggle_note_selection(self, row):
@@ -356,14 +356,14 @@ class NoteListWidget(QListWidget):
             self.selected_rows.discard(row)
             if not self.selected_rows:
                 # 如果没有选中项了，保存当前笔记，然后清空编辑器
-                if self.main_window._get_current_note_id():
+                if self.main_window._get_last_note_for_current_view():
                     self.main_window.save_current_note()
-                self.main_window._set_current_note_id(None)
+                self.main_window._set_last_note_for_current_view(None)
                 self.main_window.editor.clear()
         else:
             # 如果未选中，则添加到选中集合
             # 先保存当前笔记
-            if self.main_window._get_current_note_id():
+            if self.main_window._get_last_note_for_current_view():
                 self.main_window.save_current_note()
 
             self.selected_rows.add(row)
@@ -375,7 +375,7 @@ class NoteListWidget(QListWidget):
                 self.blockSignals(False)
                 # 加载这个笔记到编辑器
                 note_id = item.data(Qt.ItemDataRole.UserRole)
-                self.main_window._set_current_note_id(note_id)
+                self.main_window._set_last_note_for_current_view(note_id)
                 self.main_window._load_and_display_note(note_id)
 
         self.update_visual_selection()
@@ -404,7 +404,7 @@ class NoteListWidget(QListWidget):
                 self.blockSignals(False)
                 # 加载这个笔记到编辑器
                 note_id = item.data(Qt.ItemDataRole.UserRole)
-                self.main_window._set_current_note_id(note_id)
+                self.main_window._set_last_note_for_current_view(note_id)
                 note = self.main_window.note_manager.get_note(note_id)
                 if note:
                     self.main_window.editor.blockSignals(True)

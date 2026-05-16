@@ -33,7 +33,7 @@ from main_window import MainWindow
 def _make_stub(current_note_id, prev_note_id):
     """
     Build a MainWindow-like stub.
-    current_note_id: what _get_current_note_id() returns (editor's live note)
+    current_note_id: what _get_last_note_for_current_view() returns (editor's live note)
     prev_note_id:    what previous_item.data(UserRole) returns (item being deselected)
     """
     stub = MagicMock(spec=MainWindow)
@@ -42,7 +42,7 @@ def _make_stub(current_note_id, prev_note_id):
     prev_item = MagicMock()
     prev_item.data.return_value = prev_note_id
 
-    stub._get_current_note_id.return_value = current_note_id
+    stub._get_last_note_for_current_view.return_value = current_note_id
     stub._update_item_widget_selection = MagicMock()
     stub.save_current_note = MagicMock()
     stub._cleanup_note_attachment_trash = MagicMock()
