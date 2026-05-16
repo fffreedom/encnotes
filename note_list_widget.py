@@ -106,6 +106,23 @@ class NoteListWidget(QListWidget):
         return bool(modifiers & Qt.KeyboardModifier.ControlModifier or
                    modifiers & Qt.KeyboardModifier.MetaModifier)
 
+    def set_anchor_row(self, row):
+        """设置 Shift 多选锚点行号（last_selected_row）。
+
+        所有需要更新锚点的位置都应通过此方法调用，便于统一加日志、做校验。
+
+        Args:
+            row: int 锚点行号
+        """
+        self.last_selected_row = row
+
+    def clear_anchor_row(self):
+        """清除 Shift 多选锚点行号（重置为 None）。
+
+        典型时机：笔记列表整体被清空/重建时（行号失效）。
+        """
+        self.last_selected_row = None
+
     def _handle_command_press(self, clicked_row):
         """处理 Command/Ctrl 键点击（跳选：添加/移除单个项）
 
@@ -114,7 +131,7 @@ class NoteListWidget(QListWidget):
         """
         if self.main_window:
             self.toggle_note_selection(clicked_row)
-        self.last_selected_row = clicked_row
+        self.set_anchor_row(clicked_row)
 
     def _handle_shift_press(self, clicked_row):
         """处理 Shift 键点击（范围选择）
@@ -162,7 +179,7 @@ class NoteListWidget(QListWidget):
         if not self.main_window:
             return
 
-        # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动）
+        # 如果点击的笔记已经在多选集合中，保持多选状态（用于拖动），这儿判定不了是拖动还是单选，只能等mouseReleaseEvent才能判定，所有这儿先保持多选状态
         is_in_multi_select = self._is_item_in_multi_select(clicked_row)
 
         if is_in_multi_select:
@@ -171,7 +188,7 @@ class NoteListWidget(QListWidget):
             # 点击的是未选中的笔记，执行单选
             self.select_single_note(clicked_row)
 
-        self.last_selected_row = clicked_row
+        self.set_anchor_row(clicked_row)
 
     def mousePressEvent(self, event):
         """处理鼠标按下事件，支持多选
@@ -243,8 +260,32 @@ class NoteListWidget(QListWidget):
         self.press_row = None
         self._press_modifiers = Qt.KeyboardModifier.NoModifier
 
+    def _is_modifier_press(self):
+        """本次按下是否带 Shift/Cmd/Ctrl 修饰键。
+
+        带修饰键的点击本身就是用来建立/扩展多选的，松开时不应折叠多选。
+        """
+        mod = self._press_modifiers
+        return bool(
+            mod & Qt.KeyboardModifier.ShiftModifier or
+            mod & Qt.KeyboardModifier.MetaModifier or
+            mod & Qt.KeyboardModifier.ControlModifier
+        )
+
+    def _should_cancel_multi_select(self, release_pos):
+        """判断当前释放是否应取消多选、收敛为单选。
+
+        条件：处于多选状态、本次为点击（位移小于阈值）而非拖动、且按下时无修饰键。
+        """
+        if len(self.selected_rows) <= 1:
+            return False
+        if not self._is_within_click_threshold(release_pos):
+            return False
+        return not self._is_modifier_press()
+
     def mouseReleaseEvent(self, event):
-        """处理鼠标释放事件，如果是点击而非拖动，则取消多选状态
+        """处理鼠标释放事件，如果是点击而非拖动，则取消多选状态，只有在鼠标放开时才能确定是拖动还是点击，
+        如果是拖动，只需要清理press_pos，如果是点击，需要判断是否需要取消多选
 
         Args:
             event: QMouseEvent 鼠标事件
@@ -255,19 +296,9 @@ class NoteListWidget(QListWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
 
-        # 多选状态下松开鼠标：判断是点击还是拖动
         # press_pos 在 mousePressEvent 中无条件设置，此处无需 None 守卫
-        if len(self.selected_rows) > 1:
-            if self._is_within_click_threshold(event.pos()):
-                # 如果本次按下时有 Shift/Cmd/Ctrl 修饰键，说明这次点击本身就是用来建立多选的，
-                # 不应该立即折叠。只有普通点击（无修饰键）才需要折叠多选。
-                is_modifier_press = bool(
-                    self._press_modifiers & Qt.KeyboardModifier.ShiftModifier or
-                    self._press_modifiers & Qt.KeyboardModifier.MetaModifier or
-                    self._press_modifiers & Qt.KeyboardModifier.ControlModifier
-                )
-                if not is_modifier_press:
-                    self._handle_click_in_multi_select()
+        if self._should_cancel_multi_select(event.pos()):
+            self._handle_click_in_multi_select()
 
         self._clear_press_info()
 

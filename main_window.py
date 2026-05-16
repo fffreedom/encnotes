@@ -957,7 +957,7 @@ class MainWindow(QMainWindow):
         self.note_list.clear_selection()
         if hasattr(self, 'note_list') and self.note_list:
             logger.debug(f"[_clear_note_list_widgets] 🔄 重置 last_selected_row")
-            self.note_list.last_selected_row = None
+            self.note_list.clear_anchor_row()
         
         # 手动删除所有自定义widget
         item_count = self.note_list.count()
@@ -1223,7 +1223,7 @@ class MainWindow(QMainWindow):
                         logger.info(f"[_select_or_default_note_in_list] 找到并选中指定笔记: note_id={select_note_id}, row={i}")
                         # 这儿会触发on_note_selected事件，从而调用_load_and_display_note加载笔记
                         self.note_list.setCurrentRow(i)
-                        self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
+                        self.note_list.set_anchor_row(i)  # 设置last_selected_row以支持Shift多选
                         self.note_list.selected_rows.add(i)  # 添加到多选集合，支持Command键多选
                         note_selected = True
                         break
@@ -1238,7 +1238,7 @@ class MainWindow(QMainWindow):
                     logger.info(f"[_select_or_default_note_in_list] 选中第一个笔记: note_id={first_note_id}, row={i}")
                     # 这儿会触发on_note_selected事件，从而调用_load_and_display_note加载笔记
                     self.note_list.setCurrentRow(i)
-                    self.note_list.last_selected_row = i  # 设置last_selected_row以支持Shift多选
+                    self.note_list.set_anchor_row(i)  # 设置last_selected_row以支持Shift多选
                     self.note_list.selected_rows.add(i)  # 添加到多选集合，支持Command键多选
                     break
     
